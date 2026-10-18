@@ -43,6 +43,19 @@ When no provider is configured:
 - No wizard step needs internet access.
 - Goal: from install to a first working turn **in under a minute** on a machine already running a local server. Detection is also offered from the startup panel's "No providers configured" state, so users don't need to know about `cutoffharness setup`. Detected servers are written as minimal provider files (just `base_url`, plus `api = "ollama"` for Ollama), following [01](01-configuration.md).
 
+### As implemented (2026-10-18)
+
+- `cutoffharness setup` asks one question at a time and reads plain lines, so it can also be scripted through stdin. It offers three choices:
+  1. **Look for servers on this machine.** It probes 127.0.0.1 on ports 11434, 8080, 8000, 1234 and 30000, waiting 1.5 s on each. A server counts only when it answers with a model list.
+  2. **Use a hosted service.** This is any configured provider whose `api_key` comes from an environment variable. If the variable isn't set, the key can go into the OS credential store: the provider file is copied to the user layer with `api_key = { keyring = "<id>" }` and nothing else changed. Otherwise the wizard tells the user how to set the variable.
+  3. **Add a server by URL.** An optional key is stored in the credential store.
+
+  It then lists the provider's models and saves the chosen one as `model.default`.
+- `/setup` in the TUI runs the same local detection and shows one row per server and model. Enter writes the provider file and switches to that model, which becomes `model.default` only if none is set. A server that a configured provider already points at is reused rather than written again. Hosted services and other addresses are pointed to `cutoffharness setup`, so API keys are never typed into the TUI.
+- Files written are minimal: a comment, `base_url`, and `api = "ollama"` for Ollama. If the id is already taken, a number is added (`ollama-2`).
+- The "no providers configured" startup message names `/setup` and `cutoffharness setup`.
+- Code: `cutoffharness-core/src/setup.rs` (shared), `cutoffharness-cli/src/setup.rs` (wizard), `Op::DetectServers` / `Op::AddProvider`.
+
 ## Release artifacts
 
 Built with **cargo-dist** (`dist`):

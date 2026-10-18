@@ -260,7 +260,7 @@ fn line_of(text: &str, byte: usize) -> usize {
 }
 
 impl Tool for StrReplace {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "edit"
     }
 

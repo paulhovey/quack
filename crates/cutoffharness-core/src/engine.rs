@@ -1,8 +1,11 @@
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use cutoffharness_config::settings::PermissionMode;
 use cutoffharness_config::{LayerKind, Loaded};
+use cutoffharness_mcp::McpManager;
 use cutoffharness_protocol::{
     EngineError, EngineErrorKind, Event, InputItem, Op, SessionId, SessionInfo, SessionSummary,
     TurnId, WriteScope,
@@ -114,6 +117,8 @@ pub struct Engine {
     pending_mode: Option<String>,
     /// Told to the model at the start of the next turn, e.g. that the user undid an edit.
     notes: Vec<String>,
+    /// MCP servers, shared by every model the session switches to.
+    mcp: Arc<crate::mcp::Mcp>,
 }
 
 impl Engine {
@@ -151,6 +156,11 @@ impl Engine {
             switch_tx: None,
             pending_mode: None,
             notes: Vec::new(),
+            mcp: crate::mcp::Mcp::new(McpManager::new(
+                Vec::new(),
+                PathBuf::new(),
+                Default::default(),
+            )),
         };
         let task = tokio::spawn(engine.run(ops_rx));
         EngineHandle {
@@ -170,7 +180,12 @@ impl Engine {
         self.emit(Event::SessionConfigured {
             session: self.session.clone(),
         });
-        let mut startup = tokio::spawn(startup::run(self.config.clone(), self.tx.clone()));
+        self.start_mcp().await;
+        let mut startup = tokio::spawn(startup::run(
+            self.config.clone(),
+            self.tx.clone(),
+            self.mcp.clone(),
+        ));
         let (done_tx, mut done_rx) = mpsc::channel::<(TurnId, Vec<Message>)>(8);
         let (switch_tx, mut switch_rx) = mpsc::channel::<Result<Setup, String>>(2);
         self.switch_tx = Some(switch_tx);
@@ -206,7 +221,27 @@ impl Engine {
             cancel.cancel();
         }
         startup.abort();
+        let _ = tokio::time::timeout(Duration::from_secs(3), self.mcp.manager.shutdown()).await;
         self.emit(Event::ShutdownComplete);
+    }
+
+    /// Read `mcp.d` and connect the servers in the background.
+    async fn start_mcp(&mut self) {
+        let config = self.config.clone();
+        let (specs, warnings) = tokio::task::spawn_blocking(move || crate::mcp::load(&config))
+            .await
+            .unwrap_or_default();
+        for w in warnings {
+            self.warn(w);
+        }
+        let manager = McpManager::new(
+            specs,
+            self.config.dirs.workspace_root.clone(),
+            self.config.settings.network.clone(),
+        );
+        manager.start();
+        crate::mcp::report(manager.clone(), self.tx.clone());
+        self.mcp = crate::mcp::Mcp::new(manager);
     }
 
     fn on_started(&mut self, outcome: StartupOutcome) {
@@ -418,7 +453,7 @@ impl Engine {
             );
         }
         let root = &self.config.dirs.workspace_root;
-        let show = |p: &std::path::PathBuf| {
+        let show = |p: &PathBuf| {
             p.strip_prefix(root)
                 .unwrap_or(p)
                 .display()
@@ -486,6 +521,50 @@ impl Engine {
                     message: format!("cannot save {key}: {message}"),
                 },
             }),
+        }
+    }
+
+    /// `/setup`: write the provider file, then switch to the model like `/models` does.
+    fn add_provider(&mut self, id: &str, base_url: &str, api: Option<&str>, model: String) {
+        if self.running.is_some() {
+            return self
+                .warn("wait for the current turn to finish before adding a provider".into());
+        }
+        let comment = "Found on this machine by setup.";
+        let added = match crate::setup::add_provider(&self.config, id, base_url, api, comment) {
+            Ok(a) => a,
+            Err(message) => {
+                return self.emit(Event::Error {
+                    error: EngineError {
+                        kind: EngineErrorKind::Config,
+                        message: format!("cannot add the provider: {message}"),
+                    },
+                });
+            }
+        };
+        self.emit(Event::ProviderAdded {
+            id: added.id.clone(),
+            path: added.path.map(|p| p.display().to_string()),
+        });
+        let reference = format!("{}/{model}", added.id);
+        match crate::setup::default_model_if_unset(&self.config, &reference) {
+            Ok(Some(path)) => self.emit(Event::SettingSaved {
+                key: "model.default".into(),
+                value: serde_json::Value::from(reference).to_string(),
+                path: path.display().to_string(),
+                note: None,
+            }),
+            Ok(None) => {}
+            Err(e) => self.warn(format!("cannot save the default model: {e}")),
+        }
+        if let Some(done) = self.switch_tx.clone() {
+            let config = self.config.clone();
+            let tx = self.tx.clone();
+            let mcp = self.mcp.clone();
+            tokio::spawn(async move {
+                let r = startup::switch(config, tx, mcp, added.id, model).await;
+                let _ = done.send(r).await;
+            });
         }
     }
 
@@ -624,8 +703,9 @@ impl Engine {
                 } else if let Some(done) = self.switch_tx.clone() {
                     let config = self.config.clone();
                     let tx = self.tx.clone();
+                    let mcp = self.mcp.clone();
                     tokio::spawn(async move {
-                        let r = startup::switch(config, tx, provider.0, model.0).await;
+                        let r = startup::switch(config, tx, mcp, provider.0, model.0).await;
                         let _ = done.send(r).await;
                     });
                 }
@@ -658,6 +738,38 @@ impl Engine {
                     let _ = tx.send(Event::DoctorReport { checks });
                 });
             }
+            Op::ListMcp => self.emit(Event::McpServers {
+                servers: self
+                    .mcp
+                    .info(self.convo.as_ref().and_then(|c| c.setup.budget)),
+            }),
+            Op::RestartMcp { id } => {
+                let mcp = self.mcp.clone();
+                let tx = self.tx.clone();
+                let budget = self.convo.as_ref().and_then(|c| c.setup.budget);
+                tokio::spawn(async move {
+                    if let Err(message) = mcp.manager.restart(&id).await {
+                        let _ = tx.send(Event::Warning { message });
+                    }
+                    let _ = tx.send(Event::McpServers {
+                        servers: mcp.info(budget),
+                    });
+                });
+            }
+            Op::DetectServers => {
+                let config = self.config.clone();
+                let tx = self.tx.clone();
+                tokio::spawn(async move {
+                    let servers = crate::setup::detect(config).await;
+                    let _ = tx.send(Event::ServersDetected { servers });
+                });
+            }
+            Op::AddProvider {
+                id,
+                base_url,
+                api,
+                model,
+            } => self.add_provider(&id, &base_url, api.as_deref(), model),
             Op::SetPermissionMode { mode } if !self.started => self.pending_mode = Some(mode),
             Op::SetPermissionMode { mode } => self.set_mode(&mode),
             Op::DeleteMemory { scope, name } => {
@@ -882,6 +994,10 @@ fn op_name(op: &Op) -> &'static str {
         Op::GetContext => "get_context",
         Op::ListMemory => "list_memory",
         Op::RunDoctor => "run_doctor",
+        Op::DetectServers => "detect_servers",
+        Op::ListMcp => "list_mcp",
+        Op::RestartMcp { .. } => "restart_mcp",
+        Op::AddProvider { .. } => "add_provider",
         Op::SetPermissionMode { .. } => "set_permission_mode",
         Op::DeleteMemory { .. } => "delete_memory",
         Op::SetTitle { .. } => "set_title",

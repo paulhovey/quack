@@ -53,7 +53,7 @@ fn read_preview(name: String, args: &Value) -> Result<ApprovalRequest, String> {
 pub struct ListDir;
 
 impl Tool for ListDir {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "list_dir"
     }
     fn kind(&self) -> ToolKind {
@@ -128,7 +128,7 @@ impl Tool for ListDir {
 pub struct Glob;
 
 impl Tool for Glob {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "glob"
     }
     fn kind(&self) -> ToolKind {
@@ -211,7 +211,7 @@ impl Tool for Glob {
 pub struct Grep;
 
 impl Tool for Grep {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "grep"
     }
     fn kind(&self) -> ToolKind {

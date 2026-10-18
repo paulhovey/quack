@@ -21,7 +21,7 @@ pub fn expand(skill: &Skill) -> Result<String, String> {
 }
 
 impl Tool for LoadSkill {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "skill"
     }
 

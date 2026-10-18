@@ -388,6 +388,14 @@ fn insert_header(
     Ok(())
 }
 
+/// An HTTP client with the user's proxy and CA settings, for other HTTP services such as
+/// remote MCP servers.
+pub fn http_client(network: &NetworkSettings, env: Env<'_>) -> Result<reqwest::Client, String> {
+    let file: ProviderFile =
+        serde_json::from_value(serde_json::json!({ "base_url": "" })).map_err(|e| e.to_string())?;
+    build_client(&file, network, env).map_err(|e| e.message)
+}
+
 fn build_client(
     file: &ProviderFile,
     network: &NetworkSettings,

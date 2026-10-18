@@ -164,6 +164,8 @@ pub struct App {
     clipboard: Option<String>,
     /// Installed skills, runnable as `/<name>`.
     skills: Vec<cutoffharness_protocol::SkillInfo>,
+    /// Servers found by the last `/setup`.
+    detected: Vec<cutoffharness_protocol::DetectedServer>,
     frame: u64,
     dirty: bool,
     quit: bool,
@@ -197,6 +199,7 @@ impl App {
             mode_before_plan: String::new(),
             clipboard: None,
             skills: Vec::new(),
+            detected: Vec::new(),
             frame: 0,
             dirty: true,
             quit: false,
@@ -354,6 +357,21 @@ impl App {
                     )));
                 }
             }
+            Event::McpServers { servers } => {
+                if self.modal.as_ref().is_some_and(|m| m.title == "MCP") {
+                    self.modal = Some(modal::mcp(Some(&servers), &self.theme));
+                }
+            }
+            Event::ServersDetected { servers } => {
+                if self.modal.as_ref().is_some_and(|m| m.title == "Setup") {
+                    self.modal = Some(modal::setup(Some(&servers), &self.theme));
+                }
+                self.detected = servers;
+            }
+            Event::ProviderAdded { id, path } => self.note(match path {
+                Some(path) => format!("added provider {id} ({path}); switching…"),
+                None => format!("using the existing provider {id}; switching…"),
+            }),
             Event::DoctorReport { checks } => {
                 if self.modal.as_ref().is_some_and(|m| m.title == "Doctor") {
                     self.modal = Some(modal::doctor(Some(&checks), &self.theme));
@@ -821,6 +839,35 @@ impl App {
                     &self.theme,
                 ));
                 self.ops.push(Op::ListModels);
+            }
+            "mcp" if args.starts_with("restart ") => {
+                let id = args["restart ".len()..].trim().to_owned();
+                self.note(format!("restarting MCP server {id}…"));
+                self.ops.push(Op::RestartMcp { id });
+            }
+            "mcp" => {
+                self.modal = Some(modal::mcp(None, &self.theme));
+                self.ops.push(Op::ListMcp);
+            }
+            "setup" if args.starts_with("use ") => {
+                let mut parts = args["use ".len()..].splitn(2, ' ');
+                let server = parts
+                    .next()
+                    .and_then(|i| i.parse::<usize>().ok())
+                    .and_then(|i| self.detected.get(i));
+                match (server, parts.next()) {
+                    (Some(s), Some(model)) => self.ops.push(Op::AddProvider {
+                        id: s.id.clone(),
+                        base_url: s.base_url.clone(),
+                        api: s.api.clone(),
+                        model: model.to_owned(),
+                    }),
+                    _ => self.note("pick a server and model from /setup".into()),
+                }
+            }
+            "setup" => {
+                self.modal = Some(modal::setup(None, &self.theme));
+                self.ops.push(Op::DetectServers);
             }
             "undo" => self.ops.push(Op::Undo {
                 checkpoint: None,

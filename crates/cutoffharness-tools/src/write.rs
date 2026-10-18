@@ -57,7 +57,7 @@ fn plan(args: &Value, ctx: &ToolCtx) -> Result<Plan, String> {
 }
 
 impl Tool for Write {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "write"
     }
 

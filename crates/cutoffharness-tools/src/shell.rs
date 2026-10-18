@@ -20,7 +20,7 @@ const CMD: &[&str] = &["command", "cmd", "script"];
 pub struct Shell;
 
 impl Tool for Shell {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "shell"
     }
 

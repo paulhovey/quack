@@ -31,6 +31,17 @@ pub enum Subject {
     },
     /// Loading an installed skill's instructions.
     Skill,
+    /// Turning on deferred MCP tools; changes nothing.
+    ToolSearch,
+    /// A tool on an MCP server.
+    Mcp {
+        server: String,
+        tool: String,
+        /// The server marks it read-only (a hint; it still asks unless approved).
+        read_only: bool,
+        /// The server file auto-approves it.
+        auto_approve: bool,
+    },
 }
 
 /// Result of a tool call: what the model sees and what the UI shows.
@@ -121,7 +132,7 @@ pub struct ToolCtx {
 
 pub trait Tool: Send + Sync {
     /// Internal name (docs/plan/04-agent-loop-and-tools.md#internal-tool-registry).
-    fn name(&self) -> &'static str;
+    fn name(&self) -> &str;
     fn kind(&self) -> ToolKind;
     fn description(&self, ctx: &ToolCtx) -> String;
     /// JSON Schema of the arguments.

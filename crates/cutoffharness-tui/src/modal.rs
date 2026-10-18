@@ -1051,6 +1051,183 @@ pub(crate) fn skills(skills: &[cutoffharness_protocol::SkillInfo], theme: &Theme
     )
 }
 
+/// The `/mcp` modal: each server with its state, tools and recent stderr. `None` while
+/// asking the engine.
+pub(crate) fn mcp(
+    servers: Option<&[cutoffharness_protocol::McpServerInfo]>,
+    theme: &Theme,
+) -> Modal {
+    let items = match servers {
+        None => vec![placeholder("checking servers…", "", theme)],
+        Some([]) => vec![placeholder(
+            "no MCP servers",
+            "Add a TOML file to mcp.d in your config folder (`cutoffharness config paths` \
+             shows where), for example\n\ncommand = \"npx\"\nargs = [\"-y\", \"@modelcontextprotocol/server-everything\"]\n\n\
+             or, for a remote server, url = \"https://…/mcp\". The defaults bundle has examples.",
+            theme,
+        )],
+        Some(list) => list
+            .iter()
+            .map(|s| {
+                let style = match s.state.as_str() {
+                    "ready" => theme.ok,
+                    "failed" => theme.error,
+                    _ => theme.warn,
+                };
+                let mut detail = vec![Line::styled(s.id.clone(), style), Line::raw("")];
+                if !s.description.is_empty() {
+                    detail.push(Line::raw(s.description.clone()));
+                    detail.push(Line::raw(""));
+                }
+                detail.push(field(theme, "state", s.state.clone()));
+                if !s.error.is_empty() {
+                    detail.push(Line::styled(s.error.clone(), theme.error));
+                }
+                detail.push(field(theme, s.transport.as_str(), s.target.clone()));
+                if s.state == "ready" {
+                    detail.push(field(
+                        theme,
+                        "tools",
+                        format!(
+                            "{} · ~{} tokens{}",
+                            s.tools.len(),
+                            s.tool_tokens,
+                            if s.deferred {
+                                " · found with tool_search (too large to send every time)"
+                            } else {
+                                ""
+                            }
+                        ),
+                    ));
+                    detail.push(Line::raw(""));
+                    detail.extend(s.tools.iter().map(|t| Line::raw(format!("  {t}"))));
+                }
+                if !s.log.is_empty() {
+                    detail.push(Line::raw(""));
+                    detail.push(Line::styled("recent output", theme.dim));
+                    let skip = s.log.len().saturating_sub(12);
+                    detail.extend(
+                        s.log
+                            .iter()
+                            .skip(skip)
+                            .map(|l| Line::styled(format!("  {l}"), theme.dim)),
+                    );
+                }
+                detail.push(Line::raw(""));
+                detail.push(Line::styled("^s restart this server", theme.dim));
+                ModalItem {
+                    label: s.id.clone(),
+                    hint: if s.state == "ready" {
+                        format!("{} tools", s.tools.len())
+                    } else {
+                        s.state.clone()
+                    },
+                    detail,
+                    action: None,
+                    run: false,
+                    alt: Some(format!("/mcp restart {}", s.id)),
+                }
+            })
+            .collect(),
+    };
+    Modal::new(
+        "MCP",
+        vec![ModalTab {
+            title: "Servers".into(),
+            items,
+        }],
+    )
+    .with_alt("restart")
+}
+
+/// The `/setup` modal: model servers found on this machine, one row per model. `None`
+/// while looking.
+pub(crate) fn setup(
+    servers: Option<&[cutoffharness_protocol::DetectedServer]>,
+    theme: &Theme,
+) -> Modal {
+    const ELSEWHERE: &str = "For a hosted service, or a server on another machine or port, \
+         run `cutoffharness setup` in a terminal.";
+    let items = match servers {
+        None => vec![placeholder(
+            "looking for servers…",
+            "Checking 127.0.0.1 on the default ports of Ollama (11434), llama.cpp (8080), \
+             vLLM (8000), LM Studio (1234) and SGLang (30000). Nothing leaves this machine.",
+            theme,
+        )],
+        Some([]) => vec![ModalItem {
+            label: "no servers found".into(),
+            hint: String::new(),
+            detail: vec![
+                Line::styled(
+                    "Nothing answered on the default ports. Start one, for example \
+                     `ollama serve` or `llama-server --jinja -m <model.gguf>`, then run \
+                     /setup again.",
+                    theme.dim,
+                ),
+                Line::raw(""),
+                Line::styled(ELSEWHERE, theme.dim),
+            ],
+            action: None,
+            run: false,
+            alt: None,
+        }],
+        Some(list) => list
+            .iter()
+            .enumerate()
+            .flat_map(|(i, s)| {
+                s.models.iter().map(move |m| {
+                    let mut detail = vec![
+                        Line::styled(format!("{} · {}", s.name, m.id), theme.accent),
+                        Line::raw(""),
+                        field(theme, "server", s.base_url.clone()),
+                        field(
+                            theme,
+                            "context",
+                            m.context_window
+                                .map_or_else(|| "unknown".into(), |c| format!("{c} tokens")),
+                        ),
+                        Line::raw(""),
+                    ];
+                    detail.push(match &s.configured {
+                        Some(id) => Line::styled(
+                            format!("⏎ use it (already set up as provider `{id}`)"),
+                            theme.dim,
+                        ),
+                        None => Line::styled(
+                            format!(
+                                "⏎ add providers.d/{}.toml to your config folder and use this \
+                                 model; it becomes the default if none is set",
+                                s.id
+                            ),
+                            theme.dim,
+                        ),
+                    });
+                    detail.push(Line::raw(""));
+                    detail.push(Line::styled(ELSEWHERE, theme.dim));
+                    ModalItem {
+                        label: format!("{} · {}", s.name, m.id),
+                        hint: m
+                            .context_window
+                            .map_or_else(String::new, crate::theme::tokens),
+                        detail,
+                        action: Some(format!("/setup use {i} {}", m.id)),
+                        run: true,
+                        alt: None,
+                    }
+                })
+            })
+            .collect(),
+    };
+    Modal::new(
+        "Setup",
+        vec![ModalTab {
+            title: "Servers on this machine".into(),
+            items,
+        }],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

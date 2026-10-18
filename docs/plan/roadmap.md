@@ -125,6 +125,7 @@ Left out on purpose: a hosted marketplace, telemetry-backed features and cloud e
 - AGENTS.md: system and user files, then the chain from the git root down to the cwd (the first configured name wins in each directory), `@` imports (one level, kept inside the workspace), and nested files attached to the first tool result that touches their directory ([08](08-instructions-skills-commands.md#rules))
 - Plan mode: `/plan [task|accept|off]`, Shift-Tab, edits refused and only read-only commands run, the plan request appended to the message ([04](04-agent-loop-and-tools.md#plan-mode))
 - Memory: markdown notes plus an index per scope (global, and project in the data dir or the repo), the index in the prompt via `{{ memory_index }}`, a lenient `memory` tool, `memory.writes = "ask"`, and `/memory` ([07](07-sessions-memory-checkpoints.md#behaviour))
+- `cutoffharness setup` and `/setup`: local server detection (loopback only), hosted services with the key stored in the OS credential store, or any URL, then the default model ([14](14-packaging-and-distribution.md#as-implemented-2026-10-18))
 
 **Exit criteria**
 - [ ] A 50-step task completes inside a 32k window with a current ~30B Qwen coding model on llama.cpp

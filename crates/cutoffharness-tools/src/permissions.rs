@@ -99,13 +99,15 @@ enum Rule {
     Shell(String),
     Edit(globset::GlobMatcher),
     Read(globset::GlobMatcher),
+    /// `mcp:<server>/<tool>` globs, e.g. `mcp:github/get_*`.
+    Mcp(String),
 }
 
 impl Rule {
     fn parse(s: &str) -> Result<Self, String> {
-        let (kind, pattern) = s
-            .split_once(':')
-            .ok_or_else(|| format!("rule `{s}` needs a kind prefix: shell:, edit: or read:"))?;
+        let (kind, pattern) = s.split_once(':').ok_or_else(|| {
+            format!("rule `{s}` needs a kind prefix: shell:, edit:, read: or mcp:")
+        })?;
         let glob = |p: &str| {
             globset::GlobBuilder::new(p.trim())
                 .literal_separator(true)
@@ -118,6 +120,7 @@ impl Rule {
             "shell" | "bash" => Ok(Self::Shell(normalize(pattern))),
             "edit" | "write" => Ok(Self::Edit(glob(pattern)?)),
             "read" => Ok(Self::Read(glob(pattern)?)),
+            "mcp" => Ok(Self::Mcp(pattern.trim().to_owned())),
             other => Err(format!("rule `{s}`: unknown kind `{other}`")),
         }
     }
@@ -131,6 +134,9 @@ impl Rule {
             }
             (Self::Edit(g), Subject::Edit(p)) => g.is_match(rel(p)),
             (Self::Read(g), Subject::Read(p)) => g.is_match(rel(p)),
+            (Self::Mcp(pat), Subject::Mcp { server, tool, .. }) => {
+                glob_match(pat, &format!("{server}/{tool}"))
+            }
             _ => false,
         }
     }
@@ -191,7 +197,7 @@ impl Permissions {
         // Memory is not part of the workspace: reads are free, and writes ask only when
         // configured to (they show in the transcript and are easy to undo).
         // Installed skills are instructions the user put there.
-        if *subject == Subject::Skill {
+        if matches!(subject, Subject::Skill | Subject::ToolSearch) {
             return Decision::Allow;
         }
         if let Subject::Memory { write } = subject {
@@ -229,6 +235,18 @@ impl Permissions {
                 _ => {}
             }
         }
+        // Only tools the server marks read-only run while planning or in read-only mode.
+        if let Subject::Mcp {
+            read_only: false, ..
+        } = subject
+            && (self.plan || self.mode == PermissionMode::ReadOnly)
+        {
+            return Decision::Deny(if self.plan {
+                "plan mode: only MCP tools marked read-only run while planning".into()
+            } else {
+                "read-only mode: this MCP tool may change things".into()
+            });
+        }
         if self.mode == PermissionMode::ReadOnly && matches!(subject, Subject::Edit(_)) {
             return Decision::Deny("read-only mode: file changes are not allowed".into());
         }
@@ -248,6 +266,12 @@ impl Permissions {
                 "read-only mode: only commands matching an allow rule can run".into(),
             ),
             (PermissionMode::AutoEdit, Subject::Edit(p)) if inside(p) => Decision::Allow,
+            (
+                _,
+                Subject::Mcp {
+                    auto_approve: true, ..
+                },
+            ) => Decision::Allow,
             _ => Decision::Ask,
         }
     }
@@ -271,6 +295,40 @@ mod tests {
 
     fn shell(c: &str) -> Subject {
         Subject::Shell(c.into())
+    }
+
+    fn mcp(tool: &str, read_only: bool, auto_approve: bool) -> Subject {
+        Subject::Mcp {
+            server: "gh".into(),
+            tool: tool.into(),
+            read_only,
+            auto_approve,
+        }
+    }
+
+    #[test]
+    fn mcp_tools_follow_rules_modes_and_auto_approve() {
+        let p = perms(PermissionMode::Ask, &["mcp:gh/get_*"], &["mcp:gh/delete_*"]);
+        assert_eq!(p.check(&mcp("get_issue", false, false)), Decision::Allow);
+        assert!(matches!(
+            p.check(&mcp("delete_repo", false, true)),
+            Decision::Deny(_)
+        ));
+        assert_eq!(p.check(&mcp("create_issue", false, false)), Decision::Ask);
+        assert_eq!(p.check(&mcp("create_issue", false, true)), Decision::Allow);
+        let ro = perms(PermissionMode::ReadOnly, &[], &[]);
+        assert!(matches!(
+            ro.check(&mcp("create_issue", false, true)),
+            Decision::Deny(_)
+        ));
+        assert_eq!(ro.check(&mcp("search", true, false)), Decision::Ask);
+        let mut plan = perms(PermissionMode::FullAuto, &[], &[]);
+        plan.plan = true;
+        assert!(matches!(
+            plan.check(&mcp("create_issue", false, false)),
+            Decision::Deny(_)
+        ));
+        assert_eq!(plan.check(&mcp("search", true, false)), Decision::Allow);
     }
 
     #[test]

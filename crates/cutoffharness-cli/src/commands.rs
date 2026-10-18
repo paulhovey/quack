@@ -209,7 +209,7 @@ pub(crate) fn keyring_delete(name: &str) -> i32 {
 }
 
 /// Read one line without echo from a terminal, or all of stdin when piped.
-fn read_secret(prompt: &str) -> std::io::Result<String> {
+pub(crate) fn read_secret(prompt: &str) -> std::io::Result<String> {
     use std::io::IsTerminal;
     if !std::io::stdin().is_terminal() {
         let mut s = String::new();

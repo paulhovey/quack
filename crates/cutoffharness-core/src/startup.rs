@@ -47,12 +47,15 @@ pub(crate) struct Setup {
     pub context: cutoffharness_config::settings::ContextSettings,
     /// Directories whose AGENTS.md is in the system prompt (or that have none).
     pub instruction_dirs: Vec<std::path::PathBuf>,
+    /// MCP servers; their tools join each request as they become ready.
+    pub mcp: Arc<crate::mcp::Mcp>,
 }
 
 /// Files read from the workspace and config folders that shape the prompt.
 pub(crate) struct Files {
     pub instructions: cutoffharness_instructions::agents_md::Loaded,
     pub skills: skills::Found,
+    pub mcp: Arc<crate::mcp::Mcp>,
 }
 
 /// What startup resolved, for the engine's use.
@@ -83,12 +86,17 @@ fn warn(tx: &broadcast::Sender<Event>, message: impl Into<String>) {
     });
 }
 
-pub(crate) async fn run(config: Arc<Loaded>, tx: broadcast::Sender<Event>) -> StartupOutcome {
+pub(crate) async fn run(
+    config: Arc<Loaded>,
+    tx: broadcast::Sender<Event>,
+    mcp: Arc<crate::mcp::Mcp>,
+) -> StartupOutcome {
     let reporter = |subsystem| Reporter {
         tx: tx.clone(),
         subsystem,
     };
-    for s in Subsystem::ALL {
+    // MCP reports its own row from the moment servers start connecting.
+    for s in Subsystem::ALL.into_iter().filter(|s| *s != Subsystem::Mcp) {
         reporter(s).send(LoadState::Pending);
     }
     for warning in &config.warnings {
@@ -115,7 +123,6 @@ pub(crate) async fn run(config: Arc<Loaded>, tx: broadcast::Sender<Event>) -> St
             "looking for other harnesses' files",
             "M2",
         ),
-        (Subsystem::Mcp, "reading mcp.d", "M3"),
         (Subsystem::Lsp, "checking lsp.d binaries", "M4"),
     ] {
         let r = reporter(subsystem);
@@ -214,6 +221,7 @@ pub(crate) async fn run(config: Arc<Loaded>, tx: broadcast::Sender<Event>) -> St
         Files {
             instructions,
             skills,
+            mcp,
         },
         &reporter(Subsystem::Profile),
         &tx,
@@ -233,6 +241,7 @@ pub(crate) async fn run(config: Arc<Loaded>, tx: broadcast::Sender<Event>) -> St
 pub(crate) async fn switch(
     config: Arc<Loaded>,
     tx: broadcast::Sender<Event>,
+    mcp: Arc<crate::mcp::Mcp>,
     pid: String,
     mid: String,
 ) -> Result<Setup, String> {
@@ -285,6 +294,7 @@ pub(crate) async fn switch(
         Files {
             instructions,
             skills,
+            mcp,
         },
         &reporter(Subsystem::Profile),
         &tx,
@@ -380,7 +390,7 @@ async fn resolve_model(
         .filter_map(|i| i.loaded().map(|f| (i, f)))
         .collect();
     if candidates.is_empty() {
-        let msg = "no providers configured · add a file to providers.d/".to_owned();
+        let msg = "no providers configured · /setup (or `cutoffharness setup`) finds servers on this machine".to_owned();
         return Err((
             LoadState::NeedsAttention {
                 detail: msg.clone(),
@@ -518,6 +528,7 @@ async fn build_setup(
     Files {
         instructions,
         skills: found,
+        mcp,
     }: Files,
     rep: &Reporter,
     tx: &broadcast::Sender<Event>,
@@ -644,6 +655,7 @@ async fn build_setup(
         estimator: std::sync::Mutex::default(),
         context: config.settings.context.clone(),
         instruction_dirs: instructions.dirs,
+        mcp,
     })
 }
 

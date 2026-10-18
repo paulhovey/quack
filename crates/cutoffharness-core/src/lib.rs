@@ -7,8 +7,10 @@ mod context;
 pub mod doctor;
 mod engine;
 mod env;
+mod mcp;
 mod models;
 mod session;
+pub mod setup;
 mod startup;
 mod turn;
 

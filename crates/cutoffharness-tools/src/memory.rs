@@ -47,7 +47,7 @@ fn store(ctx: &ToolCtx) -> Result<&MemoryStore, String> {
 }
 
 impl Tool for Memory {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "memory"
     }
 

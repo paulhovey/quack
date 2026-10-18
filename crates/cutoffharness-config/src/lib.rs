@@ -12,6 +12,7 @@ mod items;
 mod keyring;
 mod list;
 mod load;
+pub mod mcp;
 mod merge;
 mod paths;
 pub mod profile;
@@ -28,6 +29,7 @@ pub use load::{
     ConfigError, LayerReport, LayerStatus, LoadOptions, Loaded, Origin, ProjectStatus, load,
     load_with,
 };
+pub use mcp::McpServerFile;
 pub use paths::{Dirs, Env, LayerKind, find_workspace_root};
 pub use provider::ProviderFile;
 pub use secret::{Secret, SecretError, expand_home, keyring_delete, keyring_parts, keyring_set};
@@ -40,6 +42,18 @@ pub const APP_NAME: &str = "cutoffharness";
 pub const ENV_PREFIX: &str = "CUTOFFHARNESS_";
 /// Name of the project-layer directory inside a repository.
 pub const PROJECT_DIR_NAME: &str = ".cutoffharness";
+
+/// Load `mcp.d/*.toml` from every active layer, merged by id. A project's files load
+/// only when the project is trusted.
+pub fn load_mcp(loaded: &Loaded) -> Vec<Item<McpServerFile>> {
+    let mut items = load_items::<McpServerFile>(&loaded.item_layers(), "mcp.d");
+    items::apply_toggles(
+        &mut items,
+        &loaded.settings.mcp.disabled,
+        &loaded.settings.policy.mcp.allowed,
+    );
+    items
+}
 
 /// Load `providers.d/*.toml` from every active layer, merged by id.
 pub fn load_providers(loaded: &Loaded) -> Vec<Item<ProviderFile>> {

@@ -11,7 +11,9 @@ pub mod output;
 use std::io::Write;
 
 use cutoffharness_core::EngineHandle;
-use cutoffharness_protocol::{ApprovalDecision, Event, InputItem, Op, TurnOverrides, Usage};
+use cutoffharness_protocol::{
+    ApprovalDecision, Event, InputItem, LoadState, Op, Subsystem, TurnOverrides, Usage,
+};
 use tokio::sync::broadcast::error::RecvError;
 
 pub use output::OutputFormat;
@@ -30,13 +32,9 @@ Continue without it if you can; otherwise explain what you would run. \
 
 /// Run a single prompt to completion. Returns the process exit code.
 pub async fn run(mut engine: EngineHandle, prompt: String, format: OutputFormat) -> i32 {
-    let op = Op::UserTurn {
-        items: vec![InputItem::text(prompt)],
-        overrides: TurnOverrides::default(),
-    };
-    if !engine.submit(op).await {
-        return exit::AGENT_ERROR;
-    }
+    // A headless run is one turn, so wait for MCP servers to connect (each within its
+    // own startup timeout) and their tools to be there before sending the prompt.
+    let mut prompt = Some(prompt);
     let mut stdout = std::io::stdout().lock();
     let mut stderr = std::io::stderr();
     let mut text = String::new();
@@ -56,6 +54,26 @@ pub async fn run(mut engine: EngineHandle, prompt: String, format: OutputFormat)
             );
         }
         let text_mode = format == OutputFormat::Text;
+        if let Event::StartupProgress {
+            subsystem: Subsystem::Mcp,
+            state,
+        } = &event
+            && !matches!(state, LoadState::Pending | LoadState::Running { .. })
+            && let Some(prompt) = prompt.take()
+        {
+            if let LoadState::NeedsAttention { detail } = state
+                && text_mode
+            {
+                let _ = writeln!(stderr, "warning: MCP: {detail}");
+            }
+            let op = Op::UserTurn {
+                items: vec![InputItem::text(prompt)],
+                overrides: TurnOverrides::default(),
+            };
+            if !engine.submit(op).await {
+                break exit::AGENT_ERROR;
+            }
+        }
         match event {
             Event::SessionConfigured { session } => session_id = Some(session.id.0),
             Event::AssistantDelta { text: delta } => {

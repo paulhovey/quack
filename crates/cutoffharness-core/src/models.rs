@@ -12,12 +12,20 @@ use tokio::task::JoinSet;
 const CATALOG_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) async fn catalog(config: Arc<Loaded>) -> Vec<ProviderModels> {
+    catalog_of(config, None).await
+}
+
+/// The catalogue of every provider, or only of `only`.
+pub(crate) async fn catalog_of(config: Arc<Loaded>, only: Option<&str>) -> Vec<ProviderModels> {
     let cfg = config.clone();
     let items = tokio::task::spawn_blocking(move || load_providers(&cfg))
         .await
         .unwrap_or_default();
     let mut tasks = JoinSet::new();
-    for (order, item) in items.into_iter().enumerate() {
+    let items = items
+        .into_iter()
+        .filter(|i| only.is_none_or(|id| i.id == id));
+    for (order, item) in items.enumerate() {
         let network = config.settings.network.clone();
         tasks.spawn(async move {
             let entry = match item.state {
@@ -98,6 +106,7 @@ async fn probe(
     }
     let available = !models.is_empty();
     let note = match (available, note.is_empty()) {
+        (true, true) if models.len() == 1 => "1 model".to_owned(),
         (true, true) => format!("{} models", models.len()),
         (true, false) => format!("{} declared models; discovery failed: {note}", models.len()),
         (false, true) => "no models listed or discovered".to_owned(),

@@ -6,6 +6,7 @@
 mod cli;
 mod commands;
 mod logging;
+mod setup;
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -72,6 +73,15 @@ fn main() -> ExitCode {
         Cmd::Doctor => block_on(async move {
             let checks = cutoffharness_core::doctor::run(Arc::new(loaded)).await;
             commands::doctor(&checks)
+        }),
+        Cmd::Setup => block_on(async move {
+            let stdin = std::io::stdin();
+            let mut io = setup::Io {
+                input: &mut stdin.lock(),
+                out: &mut std::io::stdout(),
+                secret: &commands::read_secret,
+            };
+            setup::run(Arc::new(loaded), &mut io).await
         }),
         Cmd::Sessions => code(commands::sessions(&loaded)),
         Cmd::Keyring { cmd } => code(match cmd {

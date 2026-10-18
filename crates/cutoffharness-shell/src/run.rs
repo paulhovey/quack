@@ -145,9 +145,10 @@ async fn pump(mut r: impl AsyncRead + Unpin, tx: mpsc::UnboundedSender<Vec<u8>>)
     }
 }
 
-/// The command's process tree: its process group on Unix, its Job Object on Windows.
+/// A child's process tree: its process group on Unix (start the child with
+/// `process_group(0)`), its Job Object on Windows (closing it ends the tree).
 #[derive(Debug)]
-struct Tree {
+pub struct Tree {
     pid: Option<u32>,
     #[cfg(windows)]
     job: Option<crate::job::Job>,
@@ -155,12 +156,12 @@ struct Tree {
 
 impl Tree {
     #[cfg(unix)]
-    fn new(child: &tokio::process::Child) -> Self {
+    pub fn new(child: &tokio::process::Child) -> Self {
         Self { pid: child.id() }
     }
 
     #[cfg(windows)]
-    fn new(child: &tokio::process::Child) -> Self {
+    pub fn new(child: &tokio::process::Child) -> Self {
         // A grandchild started in the instant before assignment escapes the job;
         // `taskkill /T` below still finds it while its parent lives.
         let job =
@@ -175,7 +176,7 @@ impl Tree {
     }
 
     #[cfg(unix)]
-    fn kill(&self) {
+    pub fn kill(&self) {
         use nix::sys::signal::{Signal, killpg};
         use nix::unistd::Pid;
         if let Some(pid) = self.pid.and_then(|p| i32::try_from(p).ok()) {
@@ -185,7 +186,7 @@ impl Tree {
     }
 
     #[cfg(windows)]
-    fn kill(&self) {
+    pub fn kill(&self) {
         if let Some(job) = &self.job {
             return job.kill();
         }

@@ -242,11 +242,9 @@ pub(crate) fn estimate(s: &Setup, history: &[Message]) -> u32 {
 /// Uncorrected estimate of a request's prompt: system prompt, history and tool definitions.
 fn raw_estimate(s: &Setup, history: &[Message]) -> u32 {
     let history = serde_json::to_string(history).unwrap_or_default();
-    let tools: usize = s
-        .surface
-        .tools
+    let tools: usize = tool_specs(s)
         .iter()
-        .map(|t| t.description.len() + t.name.len() + t.schema.to_string().len())
+        .map(|t| t.description.len() + t.name.len() + t.parameters.to_string().len())
         .sum();
     tokens::estimate(&s.system)
         .saturating_add(tokens::estimate(&history))
@@ -266,19 +264,7 @@ pub(crate) fn request(s: &Setup, messages: Vec<Message>, tools: bool) -> ChatReq
     ChatRequest {
         model: s.model.id.clone(),
         messages,
-        tools: if tools {
-            s.surface
-                .tools
-                .iter()
-                .map(|t| ToolSpec {
-                    name: t.name.clone(),
-                    description: t.description.clone(),
-                    parameters: t.schema.clone(),
-                })
-                .collect()
-        } else {
-            Vec::new()
-        },
+        tools: if tools { tool_specs(s) } else { Vec::new() },
         context_window: s.model.context_window,
         max_tokens: s.model.max_output,
         sampling,
@@ -288,6 +274,31 @@ pub(crate) fn request(s: &Setup, messages: Vec<Message>, tools: bool) -> ChatReq
             .and_then(|v| v.as_object().cloned())
             .unwrap_or_default(),
     }
+}
+
+/// The profile's tools, then the MCP tools offered right now.
+fn tool_specs(s: &Setup) -> Vec<ToolSpec> {
+    let mut specs: Vec<ToolSpec> = s
+        .surface
+        .tools
+        .iter()
+        .map(|t| ToolSpec {
+            name: t.name.clone(),
+            description: t.description.clone(),
+            parameters: t.schema.clone(),
+        })
+        .collect();
+    specs.extend(s.mcp.offered(s.budget).into_iter().map(|t| ToolSpec {
+        name: t.name().to_owned(),
+        description: t.description(&s.tool_ctx),
+        parameters: t.schema(),
+    }));
+    specs
+}
+
+/// Every tool name the model may call right now.
+fn tool_names(s: &Setup) -> Vec<String> {
+    tool_specs(s).into_iter().map(|t| t.name).collect()
 }
 
 pub(crate) fn reasoning_format(s: &Setup) -> cutoffharness_config::provider::ReasoningFormat {
@@ -389,7 +400,8 @@ async fn stream_step(
     } = &mut msg
     {
         // Fallback chain: a model that printed its tool call as text still gets it run.
-        let names: Vec<&str> = s.surface.tools.iter().map(|t| t.name.as_str()).collect();
+        let names = tool_names(s);
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
         let promoted = tool_calls.is_empty()
             && toolparse::extract(content, format, &names).is_some_and(|(rest, calls)| {
                 tracing::debug!(count = calls.len(), "promoted text tool calls");
@@ -524,20 +536,25 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
         Ok(a) => a,
         Err(e) => return reject(ctx, call, e),
     };
-    let Some((internal, args)) = s.surface.map_call(&call.name, args) else {
-        let names: Vec<&str> = s.surface.tools.iter().map(|t| t.name.as_str()).collect();
-        return reject(
-            ctx,
-            call,
-            format!(
-                "unknown tool `{}`; available tools: {}",
-                call.name,
-                names.join(", ")
-            ),
-        );
-    };
-    let Some(tool) = s.registry.get(&internal) else {
-        return reject(ctx, call, format!("tool `{internal}` is not available"));
+    let (tool, args) = match s.surface.map_call(&call.name, args.clone()) {
+        Some((internal, args)) => match s.registry.get(&internal) {
+            Some(tool) => (tool, args),
+            None => return reject(ctx, call, format!("tool `{internal}` is not available")),
+        },
+        None => match s.mcp.find(&call.name, s.budget) {
+            Some(tool) => (tool, args),
+            None => {
+                return reject(
+                    ctx,
+                    call,
+                    format!(
+                        "unknown tool `{}`; available tools: {}",
+                        call.name,
+                        tool_names(s).join(", ")
+                    ),
+                );
+            }
+        },
     };
 
     let mut tctx = s.tool_ctx.clone();

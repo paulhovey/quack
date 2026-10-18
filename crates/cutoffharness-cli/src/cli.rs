@@ -77,6 +77,9 @@ pub(crate) enum Cmd {
     Sessions,
     /// Check the environment: config, directories, terminal.
     Doctor,
+    /// Add a provider (a server on this machine, a hosted service, or a URL) and pick the
+    /// default model.
+    Setup,
     /// Store or remove API keys in the OS credential store, for `api_key = { keyring = "…" }`.
     Keyring {
         #[command(subcommand)]

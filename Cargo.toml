@@ -42,6 +42,8 @@ apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
 miette = { version = "7.6", features = ["fancy"] }
 nucleo-matcher = "0.3.1"
 regex = "1.13.1"
+# Pinned: MCP 2026-07-28 support is new (docs/plan/09-mcp.md#implementation).
+rmcp = { version = "=3.5.1", default-features = false, features = ["client", "transport-async-rw", "transport-streamable-http-client-reqwest"] }
 ratatui = "0.30"
 schemars = "1.2"
 serde = { version = "1.0.229", features = ["derive"] }

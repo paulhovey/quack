@@ -60,6 +60,24 @@ pub enum Op {
     },
     /// Run the environment checks; answered with `Event::DoctorReport`.
     RunDoctor,
+    /// Ask for the MCP servers' state; answered with `Event::McpServers`.
+    ListMcp,
+    /// Stop and start an MCP server again.
+    RestartMcp {
+        id: String,
+    },
+    /// Look for model servers on this machine (loopback ports only); answered with
+    /// `Event::ServersDetected`.
+    DetectServers,
+    /// Write `providers.d/<id>.toml` to the user layer (unless a provider with this
+    /// `base_url` exists), then switch to `model`. It becomes `model.default` when none is set.
+    AddProvider {
+        id: String,
+        base_url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        api: Option<String>,
+        model: String,
+    },
     /// Ask for the memory notes; answered with `Event::MemoryNotes`.
     ListMemory,
     /// Delete a memory note. `scope` is `global` or `project`.
@@ -191,6 +209,18 @@ pub enum Event {
     DoctorReport {
         checks: Vec<DoctorCheck>,
     },
+    McpServers {
+        servers: Vec<McpServerInfo>,
+    },
+    ServersDetected {
+        servers: Vec<DetectedServer>,
+    },
+    /// A provider file was written (`path`), or an existing one reused (`path` is `None`).
+    ProviderAdded {
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
     /// Skills the model can load, and the user can run as `/<name> [args]`.
     Skills {
         skills: Vec<SkillInfo>,
@@ -293,6 +323,45 @@ pub struct ProviderModels {
     /// Why it is unavailable, or a short status.
     pub note: String,
     pub models: Vec<ModelInfo>,
+}
+
+/// An MCP server from `mcp.d/` and its state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpServerInfo {
+    pub id: String,
+    /// `stdio` or `http`.
+    pub transport: String,
+    /// The command line or the URL.
+    pub target: String,
+    pub description: String,
+    /// `starting`, `ready`, `failed` or `stopped`.
+    pub state: String,
+    /// Why it failed.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub error: String,
+    pub tools: Vec<String>,
+    /// Whether its tools are behind `tool_search` to save context.
+    pub deferred: bool,
+    /// Estimated tokens of its tool definitions.
+    pub tool_tokens: u32,
+    /// Last stderr lines.
+    pub log: Vec<String>,
+}
+
+/// A model server found on this machine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetectedServer {
+    /// Suggested provider id, e.g. `ollama`.
+    pub id: String,
+    /// Human name, e.g. `Ollama`.
+    pub name: String,
+    pub base_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api: Option<String>,
+    pub models: Vec<ModelInfo>,
+    /// The configured provider that already points here, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configured: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

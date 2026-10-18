@@ -10,4 +10,14 @@ mod job;
 mod run;
 
 pub use detect::ShellKind;
-pub use run::{RunOptions, RunResult, run};
+pub use run::{RunOptions, RunResult, Tree, run};
+
+/// Find a program on `PATH` (`search`), the way a shell would: on Windows `npx` finds
+/// `npx.cmd` through `PATHEXT`. Paths with a directory part are resolved against `cwd`.
+pub fn resolve_program(
+    program: &str,
+    search: Option<&std::ffi::OsStr>,
+    cwd: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    which::which_in(program, search, cwd).map_err(|e| format!("`{program}`: {e}"))
+}

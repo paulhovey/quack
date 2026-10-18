@@ -48,6 +48,13 @@ pub(crate) const COMMANDS: &[Command] = &[
         None,
     ),
     c(
+        "setup",
+        &[],
+        "",
+        "Find model servers on this machine and add one as a provider",
+        None,
+    ),
+    c(
         "profiles",
         &["profile"],
         "",
@@ -142,9 +149,9 @@ pub(crate) const COMMANDS: &[Command] = &[
     c(
         "mcp",
         &[],
-        "",
-        "MCP servers: state, tools, token cost, logs",
-        Some("M3"),
+        "[restart <id>]",
+        "MCP servers: state, tools, token cost, logs; ^s restarts one",
+        None,
     ),
     c(
         "lsp",

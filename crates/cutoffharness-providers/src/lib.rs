@@ -17,7 +17,8 @@ pub mod toolparse;
 mod types;
 
 pub use error::{ErrorKind, ProviderError};
-pub use provider::Provider;
+pub use provider::{Provider, http_client};
+pub use reqwest;
 pub use types::{
     ChatRequest, DiscoveredModel, FinishReason, Message, ResponseBuilder, StreamEvent, ToolCall,
     ToolSpec,

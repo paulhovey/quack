@@ -16,7 +16,7 @@ const PATH: &[&str] = &["path", "file_path", "filename", "file"];
 pub struct Read;
 
 impl Tool for Read {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "read"
     }
 

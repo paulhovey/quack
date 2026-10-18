@@ -1,6 +1,5 @@
 ---
 source: crates/cutoffharness-tui/src/ui.rs
-assertion_line: 610
 expression: "render(&app, 80, 24)"
 ---
 " cutoffharness 0.1.0 · ~/src/project                                            "
