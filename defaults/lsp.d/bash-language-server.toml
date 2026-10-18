@@ -1,0 +1,6 @@
+#:schema ../schemas/lsp.json
+# Bash and sh scripts. Install: npm install -g bash-language-server
+command = "bash-language-server"
+args = ["start"]
+extensions = ["sh", "bash"]
+language_ids = { sh = "shellscript", bash = "shellscript" }

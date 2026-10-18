@@ -56,6 +56,10 @@ pub struct McpServerFile {
     #[serde(default)]
     pub headers: BTreeMap<String, Secret>,
 
+    /// Run a local server inside the OS sandbox (see `[sandbox]` in config.toml).
+    #[serde(default)]
+    pub sandbox: Option<bool>,
+
     #[serde(default = "startup_timeout")]
     pub startup_timeout_secs: u64,
     #[serde(default = "call_timeout")]

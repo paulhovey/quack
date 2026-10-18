@@ -122,3 +122,50 @@ async fn bad_servers_fail_without_blocking_others() {
     assert!(out.text.contains("not running"), "{out:?}");
     m.shutdown().await;
 }
+
+/// A server with `sandbox = true` runs under the sandbox policy, and won't start
+/// without one.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[tokio::test]
+async fn sandboxed_server() {
+    if quack_sandbox::available().is_err() {
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let spec = || ServerSpec {
+        id: "fx".into(),
+        file: fixture("sandbox = true\n"),
+    };
+    let policy = quack_sandbox::Policy {
+        writable: vec![tmp.path().to_path_buf()],
+        network: false,
+    };
+    let m = McpManager::with_sandbox(
+        vec![spec()],
+        tmp.path().to_path_buf(),
+        Default::default(),
+        Some(Arc::new(policy)),
+    );
+    m.start();
+    ready(&m, "fx").await;
+    let out = m
+        .call("fx", "echo", serde_json::json!({"text": "boxed"}), &CancellationToken::new())
+        .await;
+    assert_eq!(out.text, "echo: boxed");
+    m.shutdown().await;
+
+    let m = McpManager::new(vec![spec()], tmp.path().to_path_buf(), Default::default());
+    m.start();
+    let mut rx = m.subscribe();
+    let failed = loop {
+        if let ServerState::Failed(e) = &m.status()[0].state {
+            break e.clone();
+        }
+        tokio::time::timeout(Duration::from_secs(10), rx.changed())
+            .await
+            .expect("state change")
+            .expect("open");
+    };
+    assert!(failed.contains("sandbox"), "{failed}");
+    m.shutdown().await;
+}

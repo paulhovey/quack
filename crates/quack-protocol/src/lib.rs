@@ -66,6 +66,8 @@ pub enum Op {
     RestartMcp {
         id: String,
     },
+    /// Ask for the language servers' state; answered with `Event::LspServers`.
+    ListLsp,
     /// Look for model servers on this machine (loopback ports only); answered with
     /// `Event::ServersDetected`.
     DetectServers,
@@ -241,6 +243,9 @@ pub enum Event {
     McpServers {
         servers: Vec<McpServerInfo>,
     },
+    LspServers {
+        servers: Vec<LspServerInfo>,
+    },
     ServersDetected {
         servers: Vec<DetectedServer>,
     },
@@ -332,7 +337,13 @@ pub enum ApprovalDecision {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ApprovalRequest {
-    Shell { command: String, cwd: String },
+    Shell {
+        command: String,
+        cwd: String,
+        /// The sandbox is on, but this command would run outside it.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        outside_sandbox: bool,
+    },
     Edit { path: String, diff: String },
     Tool { name: String, arguments: String },
 }
@@ -366,6 +377,27 @@ pub struct ProviderModels {
     /// offer (a key not set, a server not running), not a problem.
     #[serde(default)]
     pub bundled: bool,
+}
+
+/// A language server from `lsp.d/` and its state (one per project folder it serves).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LspServerInfo {
+    pub id: String,
+    /// The command line.
+    pub command: String,
+    pub extensions: Vec<String>,
+    /// `not installed`, `idle`, `starting`, `ready`, `indexing`, `failed` or `exited`.
+    pub state: String,
+    /// The program's path, what it is working on, or why it failed.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub detail: String,
+    /// The project folder it serves, relative to the workspace.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub root: String,
+    pub errors: u32,
+    pub warnings: u32,
+    /// Last stderr lines.
+    pub log: Vec<String>,
 }
 
 /// An MCP server from `mcp.d/` and its state.

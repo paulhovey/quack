@@ -19,6 +19,7 @@ doc = false
 quack-config.workspace = true
 quack-providers.workspace = true
 quack-shell.workspace = true
+quack-sandbox.workspace = true
 rmcp.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["process", "io-util"] }

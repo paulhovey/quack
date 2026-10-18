@@ -158,7 +158,7 @@ pub(crate) const COMMANDS: &[Command] = &[
         &[],
         "",
         "Language servers: state, indexing, diagnostics",
-        Some("M4"),
+        None,
     ),
     c(
         "skills",
@@ -218,7 +218,7 @@ pub(crate) const COMMANDS: &[Command] = &[
         "reload",
         &[],
         "",
-        "Read config, providers, MCP and skills again",
+        "Read config, providers, MCP, language servers and skills again",
         None,
     ),
     c(

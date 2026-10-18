@@ -5,6 +5,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 
+use quack_config::settings::SandboxMode;
 use quack_config::{Loaded, ProjectStatus};
 use quack_protocol::{CheckStatus, DoctorCheck};
 use quack_shell::ShellKind;
@@ -142,6 +143,7 @@ fn local(config: &Loaded) -> Vec<DoctorCheck> {
     ));
 
     out.push(mcp_check(config));
+    out.push(lsp_check(config));
 
     let instructions = crate::env::instructions(config);
     out.push(check(
@@ -176,6 +178,7 @@ fn local(config: &Loaded) -> Vec<DoctorCheck> {
             format!("{} does not run; set [tools] shell", program.display()),
         )
     });
+    out.push(sandbox_check(config));
     out.push(if runs(Path::new("git"), &["--version"]) {
         check("git", CheckStatus::Ok, "found")
     } else {
@@ -230,6 +233,56 @@ fn local(config: &Loaded) -> Vec<DoctorCheck> {
         ),
     ));
     out
+}
+
+fn lsp_check(config: &Loaded) -> DoctorCheck {
+    let (specs, warnings) = crate::lsp::load(config);
+    if !warnings.is_empty() {
+        return check("lsp", CheckStatus::Fail, warnings.join("\n"));
+    }
+    if specs.is_empty() {
+        return check("lsp", CheckStatus::Info, "no servers in lsp.d");
+    }
+    let installed: Vec<&str> = specs
+        .iter()
+        .filter(|s| s.installed())
+        .map(|s| s.id.as_str())
+        .collect();
+    if installed.is_empty() {
+        return check(
+            "lsp",
+            CheckStatus::Info,
+            format!(
+                "none of {} servers installed; each lsp.d file says how to install it",
+                specs.len()
+            ),
+        );
+    }
+    check(
+        "lsp",
+        CheckStatus::Ok,
+        format!("{} of {} installed: {}", installed.len(), specs.len(), installed.join(", ")),
+    )
+}
+
+fn sandbox_check(config: &Loaded) -> DoctorCheck {
+    let mode = config.settings.sandbox.mode;
+    match (mode, quack_sandbox::available()) {
+        (SandboxMode::Off, Ok(how)) => check(
+            "sandbox",
+            CheckStatus::Info,
+            format!("off ({how} available: set [sandbox] mode = \"workspace-write\")"),
+        ),
+        (SandboxMode::Off, Err(why)) => {
+            check("sandbox", CheckStatus::Info, format!("off · unavailable: {why}"))
+        }
+        (m, Ok(how)) => check("sandbox", CheckStatus::Ok, format!("{} · {how}", m.label())),
+        (m, Err(why)) => check(
+            "sandbox",
+            CheckStatus::Warn,
+            format!("{} configured, but {why}; every shell command asks first", m.label()),
+        ),
+    }
 }
 
 fn version_flag(shell: &ShellKind) -> &'static str {

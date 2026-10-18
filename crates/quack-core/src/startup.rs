@@ -56,6 +56,7 @@ pub(crate) struct Files {
     pub instructions: quack_instructions::agents_md::Loaded,
     pub skills: skills::Found,
     pub mcp: Arc<crate::mcp::Mcp>,
+    pub lsp: Arc<quack_lsp::LspManager>,
 }
 
 /// What startup resolved, for the engine's use.
@@ -92,18 +93,25 @@ pub(crate) async fn run(
     config: Arc<Loaded>,
     tx: broadcast::Sender<Event>,
     mcp: Arc<crate::mcp::Mcp>,
+    lsp: Arc<quack_lsp::LspManager>,
     keep: Option<(String, String)>,
 ) -> StartupOutcome {
     let reporter = |subsystem| Reporter {
         tx: tx.clone(),
         subsystem,
     };
-    // MCP reports its own row from the moment servers start connecting.
-    for s in Subsystem::ALL.into_iter().filter(|s| *s != Subsystem::Mcp) {
+    // MCP and LSP report their own rows.
+    for s in Subsystem::ALL
+        .into_iter()
+        .filter(|s| !matches!(s, Subsystem::Mcp | Subsystem::Lsp))
+    {
         reporter(s).send(LoadState::Pending);
     }
     for warning in &config.warnings {
         warn(&tx, warning.clone());
+    }
+    if let Some(w) = crate::sandbox::warning(&config) {
+        warn(&tx, w);
     }
     reporter(Subsystem::Project).send(project_state(&config));
     if matches!(
@@ -130,25 +138,16 @@ pub(crate) async fn run(
     });
 
     let mut placeholders = JoinSet::new();
-    for (subsystem, work, milestone) in [
-        (
-            Subsystem::Compat,
-            "looking for other harnesses' files",
-            "M2",
-        ),
-        (Subsystem::Lsp, "checking lsp.d binaries", "M4"),
-    ] {
-        let r = reporter(subsystem);
-        placeholders.spawn(async move {
-            r.send(LoadState::Running {
-                detail: work.into(),
-            });
-            tokio::time::sleep(Duration::from_millis(60)).await;
-            r.send(LoadState::Disabled {
-                reason: format!("not implemented yet ({milestone})"),
-            });
+    let compat = reporter(Subsystem::Compat);
+    placeholders.spawn(async move {
+        compat.send(LoadState::Running {
+            detail: "looking for other harnesses' files".into(),
         });
-    }
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        compat.send(LoadState::Disabled {
+            reason: "not implemented yet (M2)".into(),
+        });
+    });
 
     // Instructions (AGENTS.md) are cheap; read them while providers load.
     let instr = reporter(Subsystem::Instructions);
@@ -248,6 +247,7 @@ pub(crate) async fn run(
             instructions,
             skills,
             mcp,
+            lsp,
         },
         &reporter(Subsystem::Profile),
         &tx,
@@ -268,6 +268,7 @@ pub(crate) async fn switch(
     config: Arc<Loaded>,
     tx: broadcast::Sender<Event>,
     mcp: Arc<crate::mcp::Mcp>,
+    lsp: Arc<quack_lsp::LspManager>,
     pid: String,
     mid: String,
 ) -> Result<Setup, String> {
@@ -321,6 +322,7 @@ pub(crate) async fn switch(
             instructions,
             skills,
             mcp,
+            lsp,
         },
         &reporter(Subsystem::Profile),
         &tx,
@@ -574,6 +576,7 @@ async fn build_setup(
         instructions,
         skills: found,
         mcp,
+        lsp,
     }: Files,
     rep: &Reporter,
     tx: &broadcast::Sender<Event>,
@@ -614,6 +617,8 @@ async fn build_setup(
         reads: Arc::new(ReadTracker::default()),
         memory: Some(Arc::new(env::memory_store(config))),
         skills: Arc::new(found.skills),
+        lsp: Some(lsp),
+        sandbox: crate::sandbox::state(config),
     };
     let registry = Arc::new(Registry::builtin());
     let internal: Vec<InternalTool> = registry

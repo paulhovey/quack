@@ -403,11 +403,16 @@ fn draw_approval(f: &mut Frame<'_>, app: &App, above: Rect) {
     };
     let t = &app.theme;
     let (title, body): (String, Vec<Line<'_>>) = match &approval.request {
-        ApprovalRequest::Shell { command, cwd } => (
-            if cwd == "." {
-                " Run this command? ".to_owned()
-            } else {
-                format!(" Run this command in {cwd}? ")
+        ApprovalRequest::Shell {
+            command,
+            cwd,
+            outside_sandbox,
+        } => (
+            match (cwd.as_str(), outside_sandbox) {
+                (".", false) => " Run this command? ".to_owned(),
+                (".", true) => " Run this command outside the sandbox? ".to_owned(),
+                (_, false) => format!(" Run this command in {cwd}? "),
+                (_, true) => format!(" Run this command in {cwd}, outside the sandbox? "),
             },
             command
                 .lines()
@@ -669,6 +674,7 @@ mod tests {
             request: ApprovalRequest::Shell {
                 command: "cargo test".into(),
                 cwd: ".".into(),
+                outside_sandbox: false,
             },
         });
         app.context = Some((12_345, 104_000));

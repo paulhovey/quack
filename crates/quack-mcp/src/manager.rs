@@ -107,6 +107,8 @@ pub struct McpManager {
     servers: Vec<Arc<Server>>,
     root: PathBuf,
     network: NetworkSettings,
+    /// For local servers whose file sets `sandbox = true`.
+    sandbox: Option<Arc<quack_sandbox::Policy>>,
     cancel: CancellationToken,
     shutting_down: AtomicBool,
     seq: AtomicU64,
@@ -124,6 +126,17 @@ impl std::fmt::Debug for McpManager {
 impl McpManager {
     /// A manager for `specs`; nothing starts until [`Self::start`].
     pub fn new(specs: Vec<ServerSpec>, root: PathBuf, network: NetworkSettings) -> Arc<Self> {
+        Self::with_sandbox(specs, root, network, None)
+    }
+
+    /// Like [`Self::new`]; servers whose file sets `sandbox = true` run under `sandbox`,
+    /// and refuse to start without it.
+    pub fn with_sandbox(
+        specs: Vec<ServerSpec>,
+        root: PathBuf,
+        network: NetworkSettings,
+        sandbox: Option<Arc<quack_sandbox::Policy>>,
+    ) -> Arc<Self> {
         let servers = specs
             .into_iter()
             .map(|spec| {
@@ -146,6 +159,7 @@ impl McpManager {
             servers,
             root,
             network,
+            sandbox,
             cancel: CancellationToken::new(),
             shutting_down: AtomicBool::new(false),
             seq: AtomicU64::new(1),
@@ -368,7 +382,14 @@ impl McpManager {
                 let prepared = tokio::task::spawn_blocking(move || spawn::prepare(&f, &root))
                     .await
                     .map_err(|e| e.to_string())??;
-                let sp = spawn::spawn(prepared, server.log.clone())?;
+                let sandbox = match (file.sandbox, &self.sandbox) {
+                    (Some(true), Some(p)) => Some(p.clone()),
+                    (Some(true), None) => {
+                        return Err("the file sets `sandbox = true`, but the sandbox is not available".into());
+                    }
+                    _ => None,
+                };
+                let sp = spawn::spawn(prepared, sandbox.as_deref(), server.log.clone())?;
                 let served = serve_client_with_lifecycle_and_ct(
                     handler,
                     (sp.stdout, sp.stdin),

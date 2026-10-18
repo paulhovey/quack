@@ -1,0 +1,6 @@
+#:schema ../schemas/lsp.json
+# YAML. Install: npm install -g yaml-language-server
+command = "yaml-language-server"
+args = ["--stdio"]
+extensions = ["yaml", "yml"]
+language_ids = { yml = "yaml" }

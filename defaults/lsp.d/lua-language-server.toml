@@ -1,0 +1,5 @@
+#:schema ../schemas/lsp.json
+# Lua. Install: your package manager's lua-language-server
+command = "lua-language-server"
+extensions = ["lua"]
+root_markers = [".luarc.json", ".luarc.jsonc"]

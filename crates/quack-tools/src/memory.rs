@@ -244,6 +244,8 @@ mod tests {
             reads: Default::default(),
             memory: Some(Arc::new(MemoryStore::new(dir.join("g"), dir.join("p")))),
             skills: Default::default(),
+            lsp: None,
+            sandbox: Default::default(),
         }
     }
 

@@ -2103,10 +2103,12 @@ dependencies = [
  "quack-config",
  "quack-context",
  "quack-instructions",
+ "quack-lsp",
  "quack-mcp",
  "quack-profiles",
  "quack-protocol",
  "quack-providers",
+ "quack-sandbox",
  "quack-shell",
  "quack-store",
  "quack-tools",
@@ -2142,8 +2144,15 @@ dependencies = [
 name = "quack-lsp"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "quack-config",
- "quack-protocol",
+ "quack-shell",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -2152,6 +2161,7 @@ version = "0.1.0"
 dependencies = [
  "quack-config",
  "quack-providers",
+ "quack-sandbox",
  "quack-shell",
  "rmcp",
  "serde_json",
@@ -2204,7 +2214,9 @@ dependencies = [
 name = "quack-sandbox"
 version = "0.1.0"
 dependencies = [
- "quack-protocol",
+ "libc",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -2212,6 +2224,7 @@ name = "quack-shell"
 version = "0.1.0"
 dependencies = [
  "nix 0.31.3",
+ "quack-sandbox",
  "tokio",
  "tokio-util",
  "tracing",

@@ -2,6 +2,7 @@
 //! See docs/plan/04-agent-loop-and-tools.md and 11-security.md.
 
 mod edit;
+mod lsp;
 mod memory;
 pub mod paths;
 pub mod permissions;
@@ -15,5 +16,7 @@ mod text;
 mod write;
 
 pub use permissions::{Decision, Permissions};
-pub use registry::{ReadTracker, Registry, Subject, Tool, ToolCtx, ToolKind, ToolOutput};
+pub use registry::{
+    ReadTracker, Registry, SandboxState, Subject, Tool, ToolCtx, ToolKind, ToolOutput,
+};
 pub use skill::expand as expand_skill;

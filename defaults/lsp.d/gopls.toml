@@ -1,0 +1,5 @@
+#:schema ../schemas/lsp.json
+# Go. Install: go install golang.org/x/tools/gopls@latest
+command = "gopls"
+extensions = ["go"]
+root_markers = ["go.work", "go.mod"]

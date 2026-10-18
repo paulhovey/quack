@@ -648,6 +648,12 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
         },
         _ => None,
     };
+    // Diagnostics before an edit, to report only what the edit changed.
+    let lsp = tctx.lsp.clone();
+    let lsp_before = match (&subject, &lsp) {
+        (Subject::Edit(p), Some(m)) => m.before_edit(p).await,
+        _ => None,
+    };
     let mut out = tool.run(args, &tctx).await;
     drop(tctx);
     let _ = forward.await;
@@ -655,6 +661,36 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
         && let Err(e) = cp.after(seq, p, out.ok)
     {
         tracing::warn!(error = %e, "could not record the edit for undo");
+    }
+    if out.ok
+        && let Some(m) = &lsp
+    {
+        match (&subject, lsp_before) {
+            (Subject::Read(p), _) => m.touch(p),
+            (Subject::Edit(p), Some(before)) => {
+                let root = ctx.setup.tool_ctx.root.clone();
+                let display = move |f: &std::path::Path| quack_tools::paths::display(&root, f);
+                let report = tokio::select! {
+                    r = m.after_edit(p, &before, &display) => r,
+                    () = ctx.cancel.cancelled() => None,
+                };
+                if let Some(text) = report {
+                    if let Some(n) = text
+                        .strip_prefix("diagnostics (")
+                        .and_then(|t| t.split(' ').next())
+                    {
+                        out.summary.push_str(&format!(" · {n} new diagnostic(s)"));
+                    }
+                    out.model.push_str("\n\n");
+                    out.model.push_str(&text);
+                    out.detail = Some(match out.detail.take() {
+                        Some(d) => format!("{d}\n{text}"),
+                        None => text,
+                    });
+                }
+            }
+            _ => {}
+        }
     }
     // AGENTS.md files below the root arrive with the first result that touches them.
     if out.ok

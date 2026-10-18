@@ -1,0 +1,11 @@
+#:schema ../schemas/lsp.json
+# TypeScript and JavaScript, with TypeScript 7's built-in language server.
+# Install: npm install -g typescript (version 7 or later)
+# For TypeScript 6 and earlier, use typescript-language-server instead:
+#   command = "typescript-language-server"
+#   args = ["--stdio"]
+command = "tsc"
+args = ["--lsp", "--stdio"]
+extensions = ["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"]
+root_markers = ["tsconfig.json", "jsconfig.json", "package.json"]
+language_ids = { ts = "typescript", mts = "typescript", cts = "typescript", tsx = "typescriptreact", js = "javascript", mjs = "javascript", cjs = "javascript", jsx = "javascriptreact" }

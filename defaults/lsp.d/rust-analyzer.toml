@@ -1,0 +1,7 @@
+#:schema ../schemas/lsp.json
+# Rust. Install: rustup component add rust-analyzer
+# It runs `cargo check`, which builds the project's build scripts and proc macros.
+command = "rust-analyzer"
+extensions = ["rs"]
+root_markers = ["Cargo.toml", "rust-project.json"]
+language_ids = { rs = "rust" }

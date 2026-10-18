@@ -1,0 +1,6 @@
+#:schema ../schemas/lsp.json
+# C#. Install: dotnet tool install --global csharp-ls
+command = "csharp-ls"
+extensions = ["cs"]
+root_markers = ["*.sln", "*.csproj"]
+language_ids = { cs = "csharp" }

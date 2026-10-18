@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -20,6 +21,8 @@ pub struct RunOptions {
     pub cancel: CancellationToken,
     /// Receives output chunks as they arrive (for live display).
     pub on_output: Option<mpsc::UnboundedSender<String>>,
+    /// Run inside the OS sandbox with this policy.
+    pub sandbox: Option<Arc<quack_sandbox::Policy>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,9 +37,20 @@ pub struct RunResult {
 }
 
 pub async fn run(shell: &ShellKind, script: &str, opts: RunOptions) -> std::io::Result<RunResult> {
-    let mut cmd = tokio::process::Command::new(shell.program());
-    cmd.args(shell.args(script))
-        .current_dir(&opts.cwd)
+    let mut cmd = match &opts.sandbox {
+        Some(policy) => quack_sandbox::command(
+            policy,
+            shell.program().as_os_str(),
+            shell.args(script),
+        )
+        .map_err(std::io::Error::other)?,
+        None => {
+            let mut c = tokio::process::Command::new(shell.program());
+            c.args(shell.args(script));
+            c
+        }
+    };
+    cmd.current_dir(&opts.cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -210,6 +224,7 @@ mod tests {
             timeout: Duration::from_millis(timeout_ms),
             cancel: CancellationToken::new(),
             on_output: None,
+            sandbox: None,
         }
     }
 

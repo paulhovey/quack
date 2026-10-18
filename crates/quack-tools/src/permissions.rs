@@ -257,7 +257,7 @@ impl Permissions {
             return if ask { Decision::Ask } else { Decision::Allow };
         }
         let shell = match subject {
-            Subject::Shell(cmd) => Some(ShellLine::new(cmd)),
+            Subject::Shell(cmd) | Subject::ShellOutsideSandbox(cmd) => Some(ShellLine::new(cmd)),
             _ => None,
         };
         if let Some(line) = &shell
@@ -277,6 +277,19 @@ impl Permissions {
         };
         if hit(&self.deny) {
             return Decision::Deny("denied by a [permissions] deny rule".into());
+        }
+        // Leaving the sandbox is the user's call in every mode, allow rules included.
+        if let (Subject::ShellOutsideSandbox(_), Some(line)) = (subject, &shell) {
+            if (self.plan || self.mode == PermissionMode::ReadOnly) && !line.read_only() {
+                return Decision::Deny(
+                    "only read-only commands run outside the sandbox in this mode".into(),
+                );
+            }
+            return if self.session.contains(subject) {
+                Decision::Allow
+            } else {
+                Decision::Ask
+            };
         }
         if self.plan {
             match (subject, &shell) {
@@ -386,6 +399,21 @@ mod tests {
             Decision::Deny(_)
         ));
         assert_eq!(plan.check(&mcp("search", true, false)), Decision::Allow);
+    }
+
+    #[test]
+    fn leaving_the_sandbox_always_asks() {
+        let out = |c: &str| Subject::ShellOutsideSandbox(c.into());
+        let mut p = perms(PermissionMode::FullAuto, &["shell:cargo *"], &["shell:curl *"]);
+        assert_eq!(p.check(&out("cargo build")), Decision::Ask);
+        assert!(matches!(p.check(&out("curl x")), Decision::Deny(_)));
+        assert!(matches!(p.check(&out("rm -rf /")), Decision::Deny(_)));
+        p.allow_session(out("cargo build"));
+        assert_eq!(p.check(&out("cargo build")), Decision::Allow);
+        assert_eq!(p.check(&out("cargo test")), Decision::Ask);
+        p.plan = true;
+        assert!(matches!(p.check(&out("cargo test")), Decision::Deny(_)));
+        assert_eq!(p.check(&out("ls")), Decision::Ask);
     }
 
     #[test]

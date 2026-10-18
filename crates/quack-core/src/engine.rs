@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use quack_config::settings::PermissionMode;
 use quack_config::{LayerKind, Loaded};
+use quack_lsp::LspManager;
 use quack_mcp::McpManager;
 use quack_protocol::{
     EngineError, EngineErrorKind, Event, InputItem, Op, SessionId, SessionInfo, SessionSummary,
@@ -130,6 +131,8 @@ pub struct Engine {
     notes: Vec<String>,
     /// MCP servers, shared by every model the session switches to.
     mcp: Arc<crate::mcp::Mcp>,
+    /// Language servers, likewise.
+    lsp: Arc<LspManager>,
 }
 
 impl Engine {
@@ -175,6 +178,7 @@ impl Engine {
                 PathBuf::new(),
                 Default::default(),
             )),
+            lsp: LspManager::empty(),
         };
         let task = tokio::spawn(engine.run(ops_rx));
         EngineHandle {
@@ -196,10 +200,12 @@ impl Engine {
             session: self.session.clone(),
         });
         self.start_mcp().await;
+        self.start_lsp().await;
         let mut startup = tokio::spawn(startup::run(
             self.config.clone(),
             self.tx.clone(),
             self.mcp.clone(),
+            self.lsp.clone(),
             None,
         ));
         let (done_tx, mut done_rx) = mpsc::channel::<(TurnId, Vec<Message>)>(8);
@@ -249,8 +255,25 @@ impl Engine {
             cancel.cancel();
         }
         startup.abort();
-        let _ = tokio::time::timeout(Duration::from_secs(3), self.mcp.manager.shutdown()).await;
+        let _ = tokio::time::timeout(
+            Duration::from_secs(3),
+            futures::future::join(self.mcp.manager.shutdown(), self.lsp.shutdown()),
+        )
+        .await;
         self.emit(Event::ShutdownComplete);
+    }
+
+    /// Read `lsp.d` and find the servers' programs; they start when a file is opened.
+    async fn start_lsp(&mut self) {
+        let config = self.config.clone();
+        let (specs, warnings) = tokio::task::spawn_blocking(move || crate::lsp::load(&config))
+            .await
+            .unwrap_or_default();
+        for w in warnings {
+            self.warn(w);
+        }
+        self.lsp = crate::lsp::manager(&self.config, specs);
+        crate::lsp::report(self.lsp.clone(), self.tx.clone());
     }
 
     /// Read `mcp.d` and connect the servers in the background.
@@ -262,10 +285,11 @@ impl Engine {
         for w in warnings {
             self.warn(w);
         }
-        let manager = McpManager::new(
+        let manager = McpManager::with_sandbox(
             specs,
             self.config.dirs.workspace_root.clone(),
             self.config.settings.network.clone(),
+            crate::sandbox::server_policy(&self.config),
         );
         manager.start();
         crate::mcp::report(manager.clone(), self.tx.clone());
@@ -723,8 +747,9 @@ impl Engine {
             let config = self.config.clone();
             let tx = self.tx.clone();
             let mcp = self.mcp.clone();
+            let lsp = self.lsp.clone();
             tokio::spawn(async move {
-                let r = startup::switch(config, tx, mcp, added.id, model).await;
+                let r = startup::switch(config, tx, mcp, lsp, added.id, model).await;
                 let _ = done.send(r).await;
             });
         }
@@ -876,8 +901,9 @@ impl Engine {
                     let config = self.config.clone();
                     let tx = self.tx.clone();
                     let mcp = self.mcp.clone();
+                    let lsp = self.lsp.clone();
                     tokio::spawn(async move {
-                        let r = startup::switch(config, tx, mcp, provider.0, model.0).await;
+                        let r = startup::switch(config, tx, mcp, lsp, provider.0, model.0).await;
                         let _ = done.send(r).await;
                     });
                 }
@@ -920,6 +946,9 @@ impl Engine {
                     let _ = tx.send(Event::DoctorReport { checks });
                 });
             }
+            Op::ListLsp => self.emit(Event::LspServers {
+                servers: crate::lsp::info(&self.lsp),
+            }),
             Op::ListMcp => self.emit(Event::McpServers {
                 servers: self
                     .mcp
@@ -1074,8 +1103,13 @@ impl Engine {
         };
         self.config = config.clone();
         self.config_tx.send_replace(config.clone());
-        let _ = tokio::time::timeout(Duration::from_secs(3), self.mcp.manager.shutdown()).await;
+        let _ = tokio::time::timeout(
+            Duration::from_secs(3),
+            futures::future::join(self.mcp.manager.shutdown(), self.lsp.shutdown()),
+        )
+        .await;
         self.start_mcp().await;
+        self.start_lsp().await;
         self.emit(Event::ConfigReloaded);
         let keep = self
             .convo
@@ -1083,9 +1117,10 @@ impl Engine {
             .map(|c| (c.setup.provider.id.clone(), c.setup.model.id.clone()));
         let tx = self.tx.clone();
         let mcp = self.mcp.clone();
+        let lsp = self.lsp.clone();
         let reload = reload.clone();
         tokio::spawn(async move {
-            let outcome = startup::run(config, tx, mcp, keep).await;
+            let outcome = startup::run(config, tx, mcp, lsp, keep).await;
             let _ = reload.send(Reload::Ready(Box::new(outcome))).await;
         });
     }
@@ -1325,6 +1360,7 @@ fn op_name(op: &Op) -> &'static str {
         Op::RunDoctor => "run_doctor",
         Op::DetectServers => "detect_servers",
         Op::ListMcp => "list_mcp",
+        Op::ListLsp => "list_lsp",
         Op::RestartMcp { .. } => "restart_mcp",
         Op::AddProvider { .. } => "add_provider",
         Op::SetPermissionMode { .. } => "set_permission_mode",

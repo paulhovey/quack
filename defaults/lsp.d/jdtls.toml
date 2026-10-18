@@ -1,0 +1,5 @@
+#:schema ../schemas/lsp.json
+# Java. Install: your package manager's jdtls (Eclipse JDT Language Server)
+command = "jdtls"
+extensions = ["java"]
+root_markers = ["pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle"]

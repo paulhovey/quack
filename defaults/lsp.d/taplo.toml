@@ -1,0 +1,5 @@
+#:schema ../schemas/lsp.json
+# TOML. Install: cargo install taplo-cli --locked --features lsp
+command = "taplo"
+args = ["lsp", "stdio"]
+extensions = ["toml"]

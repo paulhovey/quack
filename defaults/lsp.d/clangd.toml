@@ -1,0 +1,6 @@
+#:schema ../schemas/lsp.json
+# C and C++. Install: your package manager's clangd (or LLVM from llvm.org)
+command = "clangd"
+extensions = ["c", "h", "cc", "cpp", "cxx", "hpp", "hh", "hxx"]
+root_markers = ["compile_commands.json", "compile_flags.txt", ".clangd", "CMakeLists.txt"]
+language_ids = { h = "c", cc = "cpp", cxx = "cpp", hpp = "cpp", hh = "cpp", hxx = "cpp" }

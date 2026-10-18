@@ -82,7 +82,7 @@ rm -rf defaults/providers.d/* defaults/mcp.d/*
 cp ~/corp/providers/corp-vllm.toml defaults/providers.d/
 cargo vendor > .cargo/config.toml           # air-gapped builds
 cargo build --release --locked --offline \
-  --no-default-features --features proto-openai-chat,lang-common,sandbox,tokenizers-hf
+  --no-default-features --features proto-openai-chat,lang-common,tokenizers-hf
 ```
 
 - A system `config.toml` with `[policy]` locks (offline, allowed providers and provider hosts, max permission mode, audit path), distributed through MDM/GPO/Ansible. `[policy.providers] hosts = ["llm.corp.example"]` guarantees no other model server is contacted, even if the bundle's files are left in place.

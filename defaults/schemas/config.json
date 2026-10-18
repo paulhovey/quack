@@ -298,6 +298,46 @@
       ],
       "type": "string"
     },
+    "SandboxMode": {
+      "oneOf": [
+        {
+          "const": "off",
+          "description": "Commands run without a sandbox.",
+          "type": "string"
+        },
+        {
+          "const": "workspace-write",
+          "description": "Commands may write only in the workspace and temp folders, with no network.",
+          "type": "string"
+        },
+        {
+          "const": "workspace-write-net",
+          "description": "Like `workspace-write`, with network access.",
+          "type": "string"
+        },
+        {
+          "const": "read-only",
+          "description": "Commands may not write anywhere, and have no network.",
+          "type": "string"
+        }
+      ]
+    },
+    "SandboxSettings": {
+      "additionalProperties": false,
+      "description": "The OS sandbox for shell commands (docs/plan/11-security.md#os-sandboxing).",
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/SandboxMode",
+          "default": "off"
+        },
+        "writable": {
+          "$ref": "#/$defs/ListOrAppend",
+          "default": [],
+          "description": "More folders commands may write to, besides the workspace and temp folders\n(e.g. `[\"~/.cargo\", \"~/.cache\"]`)."
+        }
+      },
+      "type": "object"
+    },
     "SessionSettings": {
       "additionalProperties": false,
       "properties": {
@@ -533,6 +573,13 @@
         "disabled": []
       },
       "description": "Disable provider files from lower layers without deleting them."
+    },
+    "sandbox": {
+      "$ref": "#/$defs/SandboxSettings",
+      "default": {
+        "mode": "off",
+        "writable": []
+      }
     },
     "sessions": {
       "$ref": "#/$defs/SessionSettings",

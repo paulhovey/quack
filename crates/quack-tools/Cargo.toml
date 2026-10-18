@@ -16,7 +16,7 @@ quack-shell.workspace = true
 quack-lsp.workspace = true
 quack-store.workspace = true
 quack-instructions.workspace = true
-quack-sandbox = { workspace = true, optional = true }
+quack-sandbox.workspace = true
 futures.workspace = true
 globset = "0.4.20"
 ignore = "0.4.33"
@@ -30,9 +30,6 @@ tracing.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-
-[features]
-sandbox = ["dep:quack-sandbox"]
 
 [lints]
 workspace = true

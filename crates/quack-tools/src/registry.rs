@@ -25,6 +25,9 @@ pub enum Subject {
     Read(PathBuf),
     Edit(PathBuf),
     Shell(String),
+    /// A command run outside the OS sandbox while the sandbox is on (or when it is on but
+    /// unavailable on this machine). Always asks, whatever the mode.
+    ShellOutsideSandbox(String),
     /// Memory notes, outside the workspace.
     Memory {
         write: bool,
@@ -128,6 +131,19 @@ pub struct ToolCtx {
     pub memory: Option<Arc<quack_store::memory::MemoryStore>>,
     /// Skills the `skill` tool can load; empty hides it.
     pub skills: Arc<Vec<quack_instructions::skills::Skill>>,
+    /// Language servers; `None` (or none installed) hides the `lsp` tool.
+    pub lsp: Option<Arc<quack_lsp::LspManager>>,
+    pub sandbox: SandboxState,
+}
+
+/// Whether shell commands run in the OS sandbox.
+#[derive(Debug, Clone, Default)]
+pub enum SandboxState {
+    #[default]
+    Off,
+    On(Arc<quack_sandbox::Policy>),
+    /// Configured, but this machine can't provide it (the reason). Commands ask first.
+    Unavailable(String),
 }
 
 pub trait Tool: Send + Sync {
@@ -173,6 +189,7 @@ impl Registry {
             Arc::new(crate::shell::Shell),
             Arc::new(crate::memory::Memory),
             Arc::new(crate::skill::LoadSkill),
+            Arc::new(crate::lsp::Lsp),
         ];
         Self { tools }
     }

@@ -37,14 +37,13 @@ tracing-subscriber.workspace = true
 
 [features]
 default = ["proto-openai-chat", "proto-openai-responses", "proto-anthropic", "proto-ollama",
-           "lang-common", "tokenizers-hf", "sandbox", "acp", "keyring"]
+           "lang-common", "tokenizers-hf", "acp", "keyring"]
 proto-openai-chat = ["quack-providers/proto-openai-chat"]
 proto-openai-responses = ["quack-providers/proto-openai-responses"]
 proto-anthropic = ["quack-providers/proto-anthropic"]
 proto-ollama = ["quack-providers/proto-ollama"]
 lang-common = ["quack-context/lang-common"]
 tokenizers-hf = ["quack-providers/tokenizers"]
-sandbox = ["quack-tools/sandbox"]
 acp = ["dep:quack-acp"]
 keyring = ["quack-config/keyring"]
 

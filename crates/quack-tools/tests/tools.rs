@@ -19,6 +19,8 @@ fn ctx(root: &std::path::Path) -> ToolCtx {
         reads: Arc::new(ReadTracker::default()),
         memory: None,
         skills: Default::default(),
+        lsp: None,
+        sandbox: Default::default(),
     }
 }
 

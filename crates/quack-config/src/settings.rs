@@ -16,6 +16,7 @@ pub struct Settings {
     pub context: ContextSettings,
     pub tools: ToolSettings,
     pub permissions: PermissionSettings,
+    pub sandbox: SandboxSettings,
     pub memory: MemorySettings,
     pub sessions: SessionSettings,
     pub network: NetworkSettings,
@@ -177,6 +178,43 @@ impl PermissionMode {
             Self::Ask => "ask",
             Self::AutoEdit => "auto-edit",
             Self::FullAuto => "full-auto",
+        }
+    }
+}
+
+/// The OS sandbox for shell commands (docs/plan/11-security.md#os-sandboxing).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct SandboxSettings {
+    pub mode: SandboxMode,
+    /// More folders commands may write to, besides the workspace and temp folders
+    /// (e.g. `["~/.cargo", "~/.cache"]`).
+    #[serde(deserialize_with = "list::de")]
+    #[schemars(with = "ListOrAppend")]
+    pub writable: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SandboxMode {
+    /// Commands run without a sandbox.
+    #[default]
+    Off,
+    /// Commands may write only in the workspace and temp folders, with no network.
+    WorkspaceWrite,
+    /// Like `workspace-write`, with network access.
+    WorkspaceWriteNet,
+    /// Commands may not write anywhere, and have no network.
+    ReadOnly,
+}
+
+impl SandboxMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::WorkspaceWrite => "workspace-write",
+            Self::WorkspaceWriteNet => "workspace-write-net",
+            Self::ReadOnly => "read-only",
         }
     }
 }

@@ -5,11 +5,13 @@
 //! nothing outlives the command, or the harness; `taskkill /T` is the fallback.
 
 mod detect;
+mod env;
 #[cfg(windows)]
 mod job;
 mod run;
 
 pub use detect::ShellKind;
+pub use env::inherited_env;
 pub use run::{RunOptions, RunResult, Tree, run};
 
 /// Find a program on `PATH` (`search`), the way a shell would: on Windows `npx` finds

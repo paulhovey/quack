@@ -1,6 +1,6 @@
 [package]
 name = "quack-sandbox"
-description = "OS sandboxing: Landlock + seccomp, Seatbelt, Windows restricted token"
+description = "OS sandboxing: Landlock + seccomp on Linux, Seatbelt on macOS"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,7 +10,15 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
-quack-protocol.workspace = true
+tokio = { workspace = true, features = ["process"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Already in the tree (through nix, tokio and others).
+libc = "0.2.191"
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util", "net"] }
 
 [lints]
 workspace = true

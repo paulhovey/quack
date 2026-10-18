@@ -15,59 +15,6 @@ use tokio::process::{Child, ChildStdin, ChildStdout};
 /// Lines of stderr kept for `/mcp` and failure messages.
 pub(crate) const LOG_LINES: usize = 60;
 
-/// Variables a server gets from the harness's environment unless `inherit_env` says
-/// otherwise: enough to find programs, write temp files and reach a proxy.
-const INHERIT: &[&str] = &[
-    "PATH",
-    "HOME",
-    "USER",
-    "LOGNAME",
-    "SHELL",
-    "LANG",
-    "LC_ALL",
-    "LC_CTYPE",
-    "TERM",
-    "TMPDIR",
-    "XDG_RUNTIME_DIR",
-    "XDG_CONFIG_HOME",
-    "XDG_DATA_HOME",
-    "XDG_CACHE_HOME",
-    "SSL_CERT_FILE",
-    "SSL_CERT_DIR",
-    "HTTPS_PROXY",
-    "HTTP_PROXY",
-    "NO_PROXY",
-    "https_proxy",
-    "http_proxy",
-    "no_proxy",
-];
-
-/// What many Node and Python servers fail without on Windows.
-#[cfg(windows)]
-const INHERIT_WINDOWS: &[&str] = &[
-    "SYSTEMROOT",
-    "SYSTEMDRIVE",
-    "WINDIR",
-    "TEMP",
-    "TMP",
-    "APPDATA",
-    "LOCALAPPDATA",
-    "USERPROFILE",
-    "USERNAME",
-    "HOMEDRIVE",
-    "HOMEPATH",
-    "PATHEXT",
-    "COMSPEC",
-    "PROGRAMFILES",
-    "PROGRAMFILES(X86)",
-    "PROGRAMDATA",
-    "NUMBER_OF_PROCESSORS",
-    "PROCESSOR_ARCHITECTURE",
-];
-
-#[cfg(not(windows))]
-const INHERIT_WINDOWS: &[&str] = &[];
-
 pub(crate) type Log = Arc<Mutex<VecDeque<String>>>;
 
 pub(crate) fn push_log(log: &Log, line: String) {
@@ -101,14 +48,7 @@ pub(crate) fn prepare(file: &McpServerFile, root: &Path) -> Result<Prepared, Str
         "" => root.to_path_buf(),
         c => root.join(quack_config::expand_home(c, &get)),
     };
-    let names: Vec<&str> = match &file.inherit_env {
-        Some(list) => list.iter().map(String::as_str).collect(),
-        None => INHERIT.iter().chain(INHERIT_WINDOWS).copied().collect(),
-    };
-    let mut env: BTreeMap<String, OsString> = names
-        .into_iter()
-        .filter_map(|k| get(k).map(|v| (k.to_owned(), v)))
-        .collect();
+    let mut env = quack_shell::inherited_env(file.inherit_env.as_deref());
     for (k, secret) in &file.env {
         let v = secret
             .resolve(&get)
@@ -138,10 +78,20 @@ pub(crate) fn prepare(file: &McpServerFile, root: &Path) -> Result<Prepared, Str
     })
 }
 
-pub(crate) fn spawn(p: Prepared, log: Log) -> Result<Spawned, String> {
-    let mut cmd = tokio::process::Command::new(&p.program);
-    cmd.args(&p.args)
-        .current_dir(&p.cwd)
+pub(crate) fn spawn(
+    p: Prepared,
+    sandbox: Option<&quack_sandbox::Policy>,
+    log: Log,
+) -> Result<Spawned, String> {
+    let mut cmd = match sandbox {
+        Some(policy) => quack_sandbox::command(policy, p.program.as_os_str(), &p.args)?,
+        None => {
+            let mut c = tokio::process::Command::new(&p.program);
+            c.args(&p.args);
+            c
+        }
+    };
+    cmd.current_dir(&p.cwd)
         .env_clear()
         .envs(&p.env)
         .stdin(Stdio::piped())

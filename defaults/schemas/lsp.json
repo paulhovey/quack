@@ -1,6 +1,199 @@
 {
+  "$defs": {
+    "LspDiagnostics": {
+      "additionalProperties": false,
+      "properties": {
+        "max_items": {
+          "default": 20,
+          "description": "Diagnostics per file in a tool result.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_wait_ms": {
+          "default": 5000,
+          "description": "Never wait longer than this for diagnostics after an edit.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min_severity": {
+          "default": "warning",
+          "description": "`error`, `warning`, `info` or `hint`.",
+          "type": "string"
+        },
+        "settle_ms": {
+          "default": 800,
+          "description": "After an edit, wait until the server has been quiet this long.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "Secret": {
+      "anyOf": [
+        {
+          "description": "Plain value. Allowed, but warns when the file is world-readable or inside a repo.",
+          "type": "string"
+        },
+        {
+          "properties": {
+            "env": {
+              "type": "string"
+            },
+            "format": {
+              "description": "Format string with `{}` for the value, e.g. `\"Bearer {}\"`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "env"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Command whose trimmed stdout is the secret. Only honoured from system, user or trusted project layers.",
+          "properties": {
+            "cmd": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "OS credential store entry `\"<service>/<user>\"`, or `\"<user>\"` under the\n`quack` service. Store one with `quack keyring set <name>`.",
+          "properties": {
+            "keyring": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "keyring"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "file": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "file"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "A secret value. Secrets never have to be written into TOML in plain text."
+    }
+  },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Stub: the full schema is generated once this file kind is implemented (M4).",
-  "title": "LSP server (lsp.d/<id>.toml)",
+  "additionalProperties": false,
+  "properties": {
+    "args": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "command": {
+      "description": "Program to start. Found on `PATH`, including `.cmd` files on Windows.",
+      "type": "string"
+    },
+    "description": {
+      "default": "",
+      "description": "Shown in `/lsp`.",
+      "type": "string"
+    },
+    "diagnostics": {
+      "$ref": "#/$defs/LspDiagnostics",
+      "default": {
+        "max_items": 20,
+        "max_wait_ms": 5000,
+        "min_severity": "warning",
+        "settle_ms": 800
+      }
+    },
+    "enabled": {
+      "default": true,
+      "type": "boolean"
+    },
+    "env": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Secret"
+      },
+      "default": {},
+      "description": "Extra environment variables; values may be secrets.",
+      "type": "object"
+    },
+    "extensions": {
+      "description": "File extensions this server covers, without the dot.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "id": {
+      "default": null,
+      "description": "Defaults to the file stem.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "initialization_options": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Sent with `initialize`.",
+      "type": "object"
+    },
+    "language_ids": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "LSP language id per extension, when it is not the extension itself\n(e.g. `{ rs = \"rust\", py = \"python\" }`).",
+      "type": "object"
+    },
+    "root_markers": {
+      "default": [],
+      "description": "Files that mark a project root; the nearest folder holding one is the server's\nworkspace. Default: the workspace root.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "sandbox": {
+      "default": null,
+      "description": "Run the server inside the OS sandbox (see `[sandbox]` in config.toml).",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "settings": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Answers to `workspace/configuration`, as a nested table (e.g. `[settings.python]`).",
+      "type": "object"
+    }
+  },
+  "required": [
+    "command",
+    "extensions"
+  ],
+  "title": "LspServerFile",
   "type": "object"
 }

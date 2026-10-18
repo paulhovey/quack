@@ -172,6 +172,14 @@
       "minimum": 0,
       "type": "integer"
     },
+    "sandbox": {
+      "default": null,
+      "description": "Run a local server inside the OS sandbox (see `[sandbox]` in config.toml).",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
     "startup_timeout_secs": {
       "default": 20,
       "format": "uint64",

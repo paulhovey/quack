@@ -1,0 +1,7 @@
+#:schema ../schemas/lsp.json
+# Python. Install: npm install -g pyright (or pip install pyright)
+command = "pyright-langserver"
+args = ["--stdio"]
+extensions = ["py", "pyi"]
+root_markers = ["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "pyrightconfig.json"]
+language_ids = { py = "python", pyi = "python" }

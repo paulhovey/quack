@@ -34,7 +34,7 @@ jobs:
       - run: cargo test --workspace --locked
       - name: minimal enterprise feature set builds
         if: matrix.name == 'linux-x64'
-        run: cargo build -p quack-cli --locked --no-default-features --features proto-openai-chat,lang-common,sandbox
+        run: cargo build -p quack-cli --locked --no-default-features --features proto-openai-chat,lang-common
       - name: no-egress invariant (network namespace + connect() trace)
         if: matrix.name == 'linux-x64'
         run: |

@@ -1309,6 +1309,93 @@ pub(crate) fn mcp(
     .with_alt("restart")
 }
 
+/// The `/lsp` modal: each language server with its state and diagnostics. `None` while
+/// asking the engine.
+pub(crate) fn lsp(servers: Option<&[quack_protocol::LspServerInfo]>, theme: &Theme) -> Modal {
+    let items = match servers {
+        None => vec![placeholder("checking servers…", "", theme)],
+        Some([]) => vec![placeholder(
+            "no language servers",
+            "Add a TOML file to lsp.d in your config folder (`quack config paths` shows \
+             where), for example\n\ncommand = \"gopls\"\nextensions = [\"go\"]\n\nThe defaults \
+             bundle has files for the main languages. quack never installs a server.",
+            theme,
+        )],
+        Some(list) => list
+            .iter()
+            .map(|s| {
+                let style = match s.state.as_str() {
+                    "ready" | "idle" => theme.ok,
+                    "failed" | "exited" => theme.error,
+                    "not installed" => theme.dim,
+                    _ => theme.warn,
+                };
+                let mut detail = vec![Line::styled(s.id.clone(), style), Line::raw("")];
+                detail.push(field(theme, "state", s.state.clone()));
+                if !s.detail.is_empty() {
+                    let st = if s.state == "failed" { theme.error } else { theme.dim };
+                    detail.push(Line::styled(s.detail.clone(), st));
+                }
+                detail.push(field(theme, "command", s.command.clone()));
+                detail.push(field(theme, "files", format!(".{}", s.extensions.join(" ."))));
+                if !s.root.is_empty() {
+                    detail.push(field(theme, "project", s.root.clone()));
+                }
+                if matches!(s.state.as_str(), "ready" | "indexing") {
+                    detail.push(field(
+                        theme,
+                        "problems",
+                        format!("{} errors · {} warnings", s.errors, s.warnings),
+                    ));
+                }
+                if s.state == "idle" {
+                    detail.push(Line::raw(""));
+                    detail.push(Line::styled(
+                        "Starts when the agent reads or edits a file it covers.",
+                        theme.dim,
+                    ));
+                }
+                if !s.log.is_empty() {
+                    detail.push(Line::raw(""));
+                    detail.push(Line::styled("recent output", theme.dim));
+                    let skip = s.log.len().saturating_sub(12);
+                    detail.extend(
+                        s.log
+                            .iter()
+                            .skip(skip)
+                            .map(|l| Line::styled(format!("  {l}"), theme.dim)),
+                    );
+                }
+                let label = if s.root.is_empty() || s.root == "." {
+                    s.id.clone()
+                } else {
+                    format!("{} · {}", s.id, s.root)
+                };
+                ModalItem {
+                    label,
+                    hint: match s.state.as_str() {
+                        "ready" if s.errors + s.warnings > 0 => {
+                            format!("✗{} ⚠{}", s.errors, s.warnings)
+                        }
+                        other => other.to_owned(),
+                    },
+                    detail,
+                    action: None,
+                    run: false,
+                    alt: None,
+                }
+            })
+            .collect(),
+    };
+    Modal::new(
+        "LSP",
+        vec![ModalTab {
+            title: "Servers".into(),
+            items,
+        }],
+    )
+}
+
 /// The `/setup` modal: model servers found on this machine, one row per model. `None`
 /// while looking.
 pub(crate) fn setup(

@@ -12,6 +12,7 @@ mod items;
 mod keyring;
 mod list;
 mod load;
+pub mod lsp;
 pub mod mcp;
 mod merge;
 mod paths;
@@ -30,6 +31,7 @@ pub use load::{
     ConfigError, LayerReport, LayerStatus, LoadOptions, Loaded, Origin, ProjectStatus, load,
     load_with,
 };
+pub use lsp::LspServerFile;
 pub use mcp::McpServerFile;
 pub use paths::{Dirs, Env, LayerKind, find_workspace_root};
 pub use provider::ProviderFile;
@@ -53,6 +55,19 @@ pub fn load_mcp(loaded: &Loaded) -> Vec<Item<McpServerFile>> {
         &loaded.settings.mcp.disabled,
         &loaded.settings.policy.mcp,
         |f| (!f.url.is_empty()).then_some(f.url.as_str()),
+    );
+    items
+}
+
+/// Load `lsp.d/*.toml` from every active layer, merged by id. A project's files load
+/// only when the project is trusted.
+pub fn load_lsp(loaded: &Loaded) -> Vec<Item<LspServerFile>> {
+    let mut items = load_items::<LspServerFile>(&loaded.item_layers(), "lsp.d");
+    items::apply_toggles(
+        &mut items,
+        &loaded.settings.lsp.disabled,
+        &settings::AllowList::default(),
+        |_| None,
     );
     items
 }

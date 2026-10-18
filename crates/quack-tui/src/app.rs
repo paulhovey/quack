@@ -415,6 +415,11 @@ impl App {
                     self.modal = Some(modal::mcp(Some(&servers), &self.theme));
                 }
             }
+            Event::LspServers { servers } => {
+                if self.modal.as_ref().is_some_and(|m| m.title == "LSP") {
+                    self.modal = Some(modal::lsp(Some(&servers), &self.theme));
+                }
+            }
             Event::ServersDetected { servers } => {
                 if self.modal.as_ref().is_some_and(|m| m.title == "Setup") {
                     self.modal = Some(modal::setup(Some(&servers), &self.theme));
@@ -911,6 +916,10 @@ impl App {
             "mcp" => {
                 self.modal = Some(modal::mcp(None, &self.theme));
                 self.ops.push(Op::ListMcp);
+            }
+            "lsp" => {
+                self.modal = Some(modal::lsp(None, &self.theme));
+                self.ops.push(Op::ListLsp);
             }
             "setup" if args.starts_with("use ") => {
                 let mut parts = args["use ".len()..].splitn(2, ' ');
