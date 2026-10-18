@@ -1,0 +1,81 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+default-members = ["crates/cutoffharness-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license = "Apache-2.0"
+repository = "https://github.com/paulhovey/cutoffharness"
+authors = ["Paul Hovey <paul@paulhovey.org>"]
+publish = false
+
+[workspace.dependencies]
+# internal
+cutoffharness-protocol = { path = "crates/cutoffharness-protocol" }
+cutoffharness-config = { path = "crates/cutoffharness-config" }
+cutoffharness-providers = { path = "crates/cutoffharness-providers" }
+cutoffharness-profiles = { path = "crates/cutoffharness-profiles" }
+cutoffharness-context = { path = "crates/cutoffharness-context" }
+cutoffharness-tools = { path = "crates/cutoffharness-tools" }
+cutoffharness-shell = { path = "crates/cutoffharness-shell" }
+cutoffharness-sandbox = { path = "crates/cutoffharness-sandbox" }
+cutoffharness-mcp = { path = "crates/cutoffharness-mcp" }
+cutoffharness-lsp = { path = "crates/cutoffharness-lsp" }
+cutoffharness-store = { path = "crates/cutoffharness-store" }
+cutoffharness-instructions = { path = "crates/cutoffharness-instructions" }
+cutoffharness-core = { path = "crates/cutoffharness-core" }
+cutoffharness-tui = { path = "crates/cutoffharness-tui" }
+cutoffharness-exec = { path = "crates/cutoffharness-exec" }
+cutoffharness-acp = { path = "crates/cutoffharness-acp" }
+
+# external
+anyhow = "1.0.104"
+clap = { version = "4.6", features = ["derive", "env"] }
+crossterm = { version = "0.29", features = ["event-stream"] }
+futures = "0.3.34"
+miette = { version = "7.6", features = ["fancy"] }
+nucleo-matcher = "0.3.1"
+ratatui = "0.30"
+schemars = "1.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1"
+thiserror = "2.0"
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
+tokio-util = "0.7.20"
+toml = "1.1"
+tracing = "0.1.44"
+tracing-appender = "0.2.5"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+unicode-width = "0.2"
+
+# dev
+insta = "1.49"
+tempfile = "3.27"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 1

@@ -1,0 +1,29 @@
+#:schema schemas/compat.json
+# Other harnesses' files: detected and offered at startup, never loaded silently
+# (docs/plan/08-instructions-skills-commands.md#other-harnesses-files).
+# Delete entries, or this whole file, to stop detecting them.
+
+[instructions]
+project = [
+    "CLAUDE.md",
+    "GEMINI.md",
+    ".cursorrules",
+    ".cursor/rules/",
+    ".github/copilot-instructions.md",
+    "CONVENTIONS.md",
+    ".windsurfrules",
+]
+user = ["~/.claude/CLAUDE.md", "~/.gemini/GEMINI.md"]
+
+[skills]
+project = [".claude/skills/", ".codex/skills/", ".goose/skills/", ".maki/skills/"]
+user = ["~/.claude/skills/", "~/.codex/skills/", "~/.goose/skills/", "~/.maki/skills/"]
+
+[commands]
+project = [".claude/commands/"]
+user = ["~/.claude/commands/"]
+
+# Reported only, with an offer to convert into mcp.d/*.toml. Never executed in place.
+[mcp_configs]
+project = [".mcp.json", ".cursor/mcp.json", ".vscode/mcp.json"]
+user = ["~/.claude.json"]

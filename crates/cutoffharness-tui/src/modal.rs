@@ -1,0 +1,361 @@
+//! Shared modal framework (docs/plan/06-tui.md#modal-framework): title, optional tabs,
+//! an always-focused filter line, a list pane, a details pane and a key footer.
+//! Every configuration command (`/models`, `/resume`, `/config`, …) is built on this.
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::Frame;
+use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::style::Modifier;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Padding, Paragraph, Tabs, Wrap};
+
+use crate::commands::{COMMANDS, KEYS};
+use crate::fuzzy;
+use crate::theme::{Glyphs, Theme};
+
+/// Below this size the modal goes full-screen with a single column.
+const MIN_SPLIT: (u16, u16) = (80, 24);
+
+#[derive(Debug, Clone)]
+pub(crate) struct ModalItem {
+    pub label: String,
+    /// Short right-aligned text in the list (state, milestone, size).
+    pub hint: String,
+    pub detail: Vec<Line<'static>>,
+    /// Text inserted into the input when the item is activated, if any.
+    pub action: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ModalTab {
+    pub title: String,
+    pub items: Vec<ModalItem>,
+}
+
+#[derive(Debug)]
+pub(crate) struct Modal {
+    pub title: String,
+    tabs: Vec<ModalTab>,
+    tab: usize,
+    filter: String,
+    filtered: Vec<usize>,
+    selected: usize,
+    footer: Vec<(&'static str, &'static str)>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ModalOutcome {
+    None,
+    Close,
+    /// Close and put this text in the input.
+    Insert(String),
+}
+
+impl Modal {
+    pub fn new(title: impl Into<String>, tabs: Vec<ModalTab>) -> Self {
+        let mut m = Self {
+            title: title.into(),
+            tabs,
+            tab: 0,
+            filter: String::new(),
+            filtered: Vec::new(),
+            selected: 0,
+            footer: vec![
+                ("↑↓", "move"),
+                ("tab", "switch tab"),
+                ("⏎", "use"),
+                ("esc", "close"),
+            ],
+        };
+        m.refilter();
+        m
+    }
+
+    fn items(&self) -> &[ModalItem] {
+        self.tabs.get(self.tab).map_or(&[], |t| t.items.as_slice())
+    }
+
+    fn refilter(&mut self) {
+        self.filtered = fuzzy::filter(&self.filter, self.items().iter().map(|i| i.label.as_str()));
+        self.selected = self.selected.min(self.filtered.len().saturating_sub(1));
+    }
+
+    pub fn selected_item(&self) -> Option<&ModalItem> {
+        self.filtered
+            .get(self.selected)
+            .and_then(|i| self.items().get(*i))
+    }
+
+    pub fn paste(&mut self, text: &str) {
+        self.filter
+            .push_str(text.lines().next().unwrap_or_default());
+        self.refilter();
+    }
+
+    pub fn on_key(&mut self, key: KeyEvent) -> ModalOutcome {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc if !self.filter.is_empty() => {
+                self.filter.clear();
+                self.refilter();
+            }
+            KeyCode::Esc => return ModalOutcome::Close,
+            KeyCode::Up => self.selected = self.selected.saturating_sub(1),
+            KeyCode::Char('p') if ctrl => self.selected = self.selected.saturating_sub(1),
+            KeyCode::Down => self.move_down(),
+            KeyCode::Char('n') if ctrl => self.move_down(),
+            KeyCode::PageUp => self.selected = self.selected.saturating_sub(10),
+            KeyCode::PageDown => {
+                self.selected = (self.selected + 10).min(self.filtered.len().saturating_sub(1));
+            }
+            KeyCode::Tab | KeyCode::BackTab if self.tabs.len() > 1 => {
+                let n = self.tabs.len();
+                self.tab = if key.code == KeyCode::Tab {
+                    (self.tab + 1) % n
+                } else {
+                    (self.tab + n - 1) % n
+                };
+                self.selected = 0;
+                self.refilter();
+            }
+            KeyCode::Enter => {
+                return match self.selected_item().and_then(|i| i.action.clone()) {
+                    Some(text) => ModalOutcome::Insert(text),
+                    None => ModalOutcome::None,
+                };
+            }
+            KeyCode::Backspace => {
+                self.filter.pop();
+                self.refilter();
+            }
+            KeyCode::Char(c) if !ctrl => {
+                self.filter.push(c);
+                self.selected = 0;
+                self.refilter();
+            }
+            _ => {}
+        }
+        ModalOutcome::None
+    }
+
+    fn move_down(&mut self) {
+        self.selected = (self.selected + 1).min(self.filtered.len().saturating_sub(1));
+    }
+
+    pub fn draw(&self, f: &mut Frame<'_>, theme: &Theme, glyphs: &Glyphs) {
+        let screen = f.area();
+        let narrow = screen.width < MIN_SPLIT.0 || screen.height < MIN_SPLIT.1;
+        let area = if narrow {
+            screen
+        } else {
+            centered(screen, 90, 85)
+        };
+        f.render_widget(Clear, area);
+        let block = Block::bordered()
+            .border_set(glyphs.border)
+            .border_style(theme.border)
+            .title(Span::styled(format!(" {} ", self.title), theme.accent));
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+
+        let tabs_h = u16::from(self.tabs.len() > 1);
+        let [tabs_area, filter_area, body, footer] = Layout::vertical([
+            Constraint::Length(tabs_h),
+            Constraint::Length(1),
+            Constraint::Min(3),
+            Constraint::Length(1),
+        ])
+        .areas(inner);
+
+        if tabs_h > 0 {
+            let titles: Vec<String> = self.tabs.iter().map(|t| t.title.clone()).collect();
+            f.render_widget(
+                Tabs::new(titles)
+                    .select(self.tab)
+                    .style(theme.dim)
+                    .highlight_style(theme.accent.add_modifier(Modifier::BOLD)),
+                tabs_area,
+            );
+        }
+        let filter_line = Line::from(vec![
+            Span::styled(" filter: ", theme.dim),
+            Span::raw(self.filter.clone()),
+        ]);
+        f.render_widget(Paragraph::new(filter_line), filter_area);
+        let cursor_x = filter_area.x + 9 + u16::try_from(self.filter.chars().count()).unwrap_or(0);
+        f.set_cursor_position((
+            cursor_x.min(filter_area.right().saturating_sub(1)),
+            filter_area.y,
+        ));
+
+        let (list_area, detail_area) = if narrow {
+            let [l, d] = Layout::vertical([Constraint::Percentage(60), Constraint::Percentage(40)])
+                .areas(body);
+            (l, d)
+        } else {
+            let [l, d] =
+                Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)])
+                    .areas(body);
+            (l, d)
+        };
+        self.draw_list(f, list_area, theme, glyphs);
+        self.draw_details(f, detail_area, theme, glyphs);
+
+        let mut spans = vec![Span::raw(" ")];
+        for (key, what) in &self.footer {
+            spans.push(Span::styled(*key, theme.accent));
+            spans.push(Span::styled(format!(" {what}   "), theme.dim));
+        }
+        f.render_widget(Paragraph::new(Line::from(spans)), footer);
+    }
+
+    fn draw_list(&self, f: &mut Frame<'_>, area: Rect, theme: &Theme, glyphs: &Glyphs) {
+        let block = Block::bordered()
+            .border_set(glyphs.border)
+            .border_style(theme.border);
+        let width = usize::from(block.inner(area).width);
+        let rows: Vec<ListItem<'_>> = self
+            .filtered
+            .iter()
+            .filter_map(|i| self.items().get(*i))
+            .map(|item| {
+                let used = item.label.chars().count() + item.hint.chars().count() + 1;
+                let pad = " ".repeat(width.saturating_sub(used + 1));
+                ListItem::new(Line::from(vec![
+                    Span::raw(format!(" {}", item.label)),
+                    Span::raw(pad),
+                    Span::styled(item.hint.clone(), theme.dim),
+                ]))
+            })
+            .collect();
+        let empty = rows.is_empty();
+        let list = List::new(rows).block(block).highlight_style(theme.selected);
+        let mut state = ListState::default().with_selected((!empty).then_some(self.selected));
+        f.render_stateful_widget(list, area, &mut state);
+    }
+
+    fn draw_details(&self, f: &mut Frame<'_>, area: Rect, theme: &Theme, glyphs: &Glyphs) {
+        let block = Block::bordered()
+            .border_set(glyphs.border)
+            .border_style(theme.border)
+            .padding(Padding::horizontal(1));
+        let lines = self.selected_item().map_or_else(
+            || vec![Line::styled("no matches", theme.dim)],
+            |i| i.detail.clone(),
+        );
+        f.render_widget(
+            Paragraph::new(lines)
+                .block(block)
+                .wrap(Wrap { trim: false }),
+            area,
+        );
+    }
+}
+
+pub(crate) fn centered(area: Rect, pct_w: u16, pct_h: u16) -> Rect {
+    let w = area.width * pct_w / 100;
+    let h = area.height * pct_h / 100;
+    Rect {
+        x: area.x + (area.width - w) / 2,
+        y: area.y + (area.height - h) / 2,
+        width: w,
+        height: h,
+    }
+}
+
+/// The `/help` modal: commands and keys.
+pub(crate) fn help(theme: &Theme) -> Modal {
+    let field = |k: &str, v: String| {
+        Line::from(vec![
+            Span::styled(format!("{k:<10}"), theme.dim),
+            Span::raw(v),
+        ])
+    };
+    let commands = COMMANDS
+        .iter()
+        .map(|c| {
+            let mut detail = vec![
+                Line::styled(format!("/{} {}", c.name, c.args), theme.accent),
+                Line::raw(""),
+                Line::raw(c.description),
+                Line::raw(""),
+            ];
+            if !c.aliases.is_empty() {
+                let aliases: Vec<String> = c.aliases.iter().map(|a| format!("/{a}")).collect();
+                detail.push(field("aliases", aliases.join(", ")));
+            }
+            detail.push(field(
+                "status",
+                c.pending
+                    .map_or_else(|| "available".into(), |m| format!("planned for {m}")),
+            ));
+            ModalItem {
+                label: format!("/{}", c.name),
+                hint: c.pending.unwrap_or_default().to_owned(),
+                detail,
+                action: Some(format!(
+                    "/{}{}",
+                    c.name,
+                    if c.args.is_empty() { "" } else { " " }
+                )),
+            }
+        })
+        .collect();
+    let keys = KEYS
+        .iter()
+        .map(|(k, what)| ModalItem {
+            label: (*k).to_owned(),
+            hint: String::new(),
+            detail: vec![
+                Line::styled(*k, theme.accent),
+                Line::raw(""),
+                Line::raw(*what),
+            ],
+            action: None,
+        })
+        .collect();
+    Modal::new(
+        "Help",
+        vec![
+            ModalTab {
+                title: "Commands".into(),
+                items: commands,
+            },
+            ModalTab {
+                title: "Keys".into(),
+                items: keys,
+            },
+        ],
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::KeyEventKind;
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new_with_kind(code, KeyModifiers::NONE, KeyEventKind::Press)
+    }
+
+    #[test]
+    fn filter_tabs_and_activation() {
+        let mut m = help(&Theme::resolve("dark", false));
+        for c in "resu".chars() {
+            m.on_key(key(KeyCode::Char(c)));
+        }
+        assert_eq!(m.selected_item().map(|i| i.label.as_str()), Some("/resume"));
+        assert_eq!(
+            m.on_key(key(KeyCode::Enter)),
+            ModalOutcome::Insert("/resume".into())
+        );
+        assert_eq!(
+            m.on_key(key(KeyCode::Esc)),
+            ModalOutcome::None,
+            "first esc clears filter"
+        );
+        m.on_key(key(KeyCode::Tab));
+        assert_eq!(m.selected_item().map(|i| i.label.as_str()), Some("Enter"));
+        assert_eq!(m.on_key(key(KeyCode::Esc)), ModalOutcome::Close);
+    }
+}

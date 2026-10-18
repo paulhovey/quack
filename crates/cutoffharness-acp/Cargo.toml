@@ -1,0 +1,17 @@
+[package]
+name = "cutoffharness-acp"
+description = "Zed Agent Client Protocol server, feature-gated"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+cutoffharness-protocol.workspace = true
+cutoffharness-core.workspace = true
+
+[lints]
+workspace = true

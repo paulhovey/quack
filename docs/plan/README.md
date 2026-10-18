@@ -54,13 +54,15 @@ A fast, context-efficient coding agent for **self-hosted and open-weight models*
 | 2026-10-17 | Primary test target: hosted open-model services | Local servers covered by CPU-only CI containers; see [roadmap](roadmap.md) |
 | 2026-10-17 | First scaffold: full workspace, M1 crates real | See [roadmap](roadmap.md#scaffold-m1-kickoff) |
 | 2026-10-17 | Model profiles (prompt + tool surface per model family) are data, not code | Inspired by Open Interpreter's per-model harnesses, which are compiled in |
+| 2026-10-17 | Edition 2024; toolchain pinned to 1.99.1; MSRV = pinned minus two releases (1.97) | `rust-toolchain.toml`; CI runs a separate MSRV check |
+| 2026-10-17 | Scaffold landed | Workspace compiles on Linux, macOS and Windows targets; see [roadmap](roadmap.md#scaffold-m1-kickoff) |
 
 ## Open decisions
 
 Each document ends with its own open questions. The cross-cutting ones are:
 
 - **Product name.** Affects the config directory, binary name and crate prefix.
-- **MSRV policy.** Proposed: latest stable minus two releases.
+- **Repository URL.** `Cargo.toml` assumes `github.com/paulhovey/cutoffharness`; confirm before CI and the docs reference it publicly.
 
 ## Reference projects
 

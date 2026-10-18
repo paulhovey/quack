@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Stub: the full schema is generated once this file kind is implemented (M4).",
+  "title": "LSP server (lsp.d/<id>.toml)",
+  "type": "object"
+}

@@ -1,0 +1,95 @@
+use std::path::PathBuf;
+
+use clap::{Args, Parser, Subcommand, ValueEnum};
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "cutoffharness",
+    version,
+    about = "A coding agent for open-weight models"
+)]
+pub(crate) struct Cli {
+    #[command(subcommand)]
+    pub command: Option<Cmd>,
+    #[command(flatten)]
+    pub global: Global,
+    /// Run one prompt headless and print the answer (same as `exec`).
+    #[arg(short = 'p', long = "print", value_name = "PROMPT")]
+    pub print: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct Global {
+    /// Run as if started in this directory.
+    #[arg(short = 'C', long = "cd", global = true, value_name = "DIR")]
+    pub cd: Option<PathBuf>,
+    /// Model as <provider>/<model>; overrides [model].default.
+    #[arg(short = 'm', long, global = true)]
+    pub model: Option<String>,
+    /// Override a setting, e.g. -c ui.ascii=true. Repeatable.
+    #[arg(short = 'c', long = "config", global = true, value_name = "KEY=VALUE")]
+    pub overrides: Vec<String>,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum Cmd {
+    /// Full-screen terminal UI (the default).
+    Tui,
+    /// Run one prompt headless.
+    Exec(ExecArgs),
+    /// Inspect and validate configuration.
+    Config {
+        #[command(subcommand)]
+        cmd: ConfigCmd,
+    },
+    /// Check the environment: config, directories, terminal.
+    Doctor,
+    /// Run as a Zed Agent Client Protocol agent on stdio.
+    #[cfg(feature = "acp")]
+    Acp,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ExecArgs {
+    /// The prompt; `-` reads it from stdin.
+    pub prompt: String,
+    #[arg(long, value_enum, default_value_t = Format::Text)]
+    pub output_format: Format,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum Format {
+    Text,
+    Json,
+    StreamJson,
+}
+
+impl From<Format> for cutoffharness_exec::OutputFormat {
+    fn from(f: Format) -> Self {
+        match f {
+            Format::Text => Self::Text,
+            Format::Json => Self::Json,
+            Format::StreamJson => Self::StreamJson,
+        }
+    }
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum ConfigCmd {
+    /// Validate every layer and item file; non-zero exit on errors.
+    Check,
+    /// Print the effective settings.
+    Show {
+        /// Annotate each value with the layer it came from.
+        #[arg(long)]
+        origin: bool,
+    },
+    /// Write JSON Schema files for editor completion.
+    Schema {
+        /// Target directory (default: <user config>/schemas).
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
+    /// Print the resolved directories.
+    Paths,
+}

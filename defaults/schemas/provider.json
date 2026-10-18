@@ -1,0 +1,536 @@
+{
+  "$defs": {
+    "Cost": {
+      "additionalProperties": false,
+      "description": "Per million tokens.",
+      "properties": {
+        "cached_input": {
+          "default": 0.0,
+          "format": "double",
+          "type": "number"
+        },
+        "input": {
+          "default": 0.0,
+          "format": "double",
+          "type": "number"
+        },
+        "output": {
+          "default": 0.0,
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "Discovery": {
+      "additionalProperties": false,
+      "properties": {
+        "default_profile": {
+          "default": "auto",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Query the models endpoint at startup (async) and merge with `[[models]]`.",
+          "type": "boolean"
+        },
+        "include": {
+          "default": [],
+          "description": "Model id globs to keep.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Http": {
+      "additionalProperties": false,
+      "properties": {
+        "max_retries": {
+          "default": 3,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "proxy": {
+          "default": "",
+          "description": "Overrides `[network].proxy`.",
+          "type": "string"
+        },
+        "timeout_connect_secs": {
+          "default": 10,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "timeout_idle_secs": {
+          "default": 300,
+          "description": "Long prefill on big contexts can be slow.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "ModelEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "alias": {
+          "default": null,
+          "description": "Short name shown in the UI and accepted in `<provider>/<alias>`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "context_window": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Cost"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "extra_body": {
+          "additionalProperties": true,
+          "default": {},
+          "description": "Merged verbatim into the request JSON.",
+          "type": "object"
+        },
+        "id": {
+          "type": "string"
+        },
+        "max_output": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "profile": {
+          "default": "auto",
+          "description": "`auto` or a profile id.",
+          "type": "string"
+        },
+        "reasoning": {
+          "$ref": "#/$defs/Reasoning",
+          "default": {
+            "effort": "",
+            "format": "none",
+            "preserve_in_history": null
+          }
+        },
+        "sampling": {
+          "$ref": "#/$defs/Sampling",
+          "default": {
+            "min_p": null,
+            "repetition_penalty": null,
+            "temperature": null,
+            "top_k": null,
+            "top_p": null
+          }
+        },
+        "serving": {
+          "$ref": "#/$defs/Serving",
+          "default": {
+            "prefill_tps": null,
+            "prefix_cache": true
+          }
+        },
+        "tokenizer": {
+          "$ref": "#/$defs/Tokenizer",
+          "default": {
+            "encoding": "",
+            "path": "",
+            "source": "estimate"
+          }
+        },
+        "tool_calling": {
+          "$ref": "#/$defs/ToolCalling",
+          "default": {
+            "mode": "native",
+            "parallel": true,
+            "text_format": "auto"
+          }
+        },
+        "vision": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "Reasoning": {
+      "additionalProperties": false,
+      "properties": {
+        "effort": {
+          "default": "",
+          "type": "string"
+        },
+        "format": {
+          "$ref": "#/$defs/ReasoningFormat",
+          "default": "none"
+        },
+        "preserve_in_history": {
+          "default": null,
+          "description": "Default comes from the profile.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ReasoningFormat": {
+      "enum": [
+        "none",
+        "reasoning_content",
+        "reasoning",
+        "think-tags"
+      ],
+      "type": "string"
+    },
+    "Sampling": {
+      "additionalProperties": false,
+      "properties": {
+        "min_p": {
+          "default": null,
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "repetition_penalty": {
+          "default": null,
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "temperature": {
+          "default": null,
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "top_k": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "top_p": {
+          "default": null,
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Secret": {
+      "anyOf": [
+        {
+          "description": "Plain value. Allowed, but warns when the file is world-readable or inside a repo.",
+          "type": "string"
+        },
+        {
+          "properties": {
+            "env": {
+              "type": "string"
+            },
+            "format": {
+              "description": "Format string with `{}` for the value, e.g. `\"Bearer {}\"`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "env"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Command whose trimmed stdout is the secret. Only honoured from system, user or trusted project layers.",
+          "properties": {
+            "cmd": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "keyring": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "keyring"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "file": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "file"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "A secret value. Secrets never have to be written into TOML in plain text.\nResolution (running `cmd`, reading the keyring) lands with the providers in M1."
+    },
+    "Serving": {
+      "additionalProperties": false,
+      "properties": {
+        "prefill_tps": {
+          "default": null,
+          "description": "Prefill tokens/second hint for cache-aware pruning. Unset: measure.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "prefix_cache": {
+          "default": true,
+          "description": "Does the server reuse the KV prefix?",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "Tls": {
+      "additionalProperties": false,
+      "properties": {
+        "ca_file": {
+          "default": null,
+          "description": "Extra CA, in addition to the OS store.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "client_cert": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "client_key": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "insecure_skip_verify": {
+          "default": false,
+          "description": "Warns loudly; can be blocked by policy.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "Tokenizer": {
+      "additionalProperties": false,
+      "properties": {
+        "encoding": {
+          "default": "",
+          "description": "For `tiktoken`, e.g. `o200k_base`.",
+          "type": "string"
+        },
+        "path": {
+          "default": "",
+          "description": "For `hf-file`: relative to the provider file's directory, or absolute.",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/TokenizerSource",
+          "default": "estimate"
+        }
+      },
+      "type": "object"
+    },
+    "TokenizerSource": {
+      "enum": [
+        "hf-file",
+        "tiktoken",
+        "server",
+        "estimate"
+      ],
+      "type": "string"
+    },
+    "ToolCallMode": {
+      "enum": [
+        "native",
+        "text",
+        "grammar"
+      ],
+      "type": "string"
+    },
+    "ToolCalling": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/ToolCallMode",
+          "default": "native"
+        },
+        "parallel": {
+          "default": true,
+          "type": "boolean"
+        },
+        "text_format": {
+          "default": "auto",
+          "description": "`auto`, `hermes`, `qwen3-xml`, `mistral`, `glm`, `json-block`, `deepseek`, `kimi`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "api": {
+      "description": "Wire protocol: `openai-chat`, `openai-responses`, `anthropic-messages`, `ollama`.",
+      "type": "string"
+    },
+    "api_key": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Secret"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "auth_header": {
+      "default": null,
+      "description": "Default `Authorization`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "auth_scheme": {
+      "default": null,
+      "description": "Default `Bearer`; empty sends the raw key.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "base_url": {
+      "type": "string"
+    },
+    "discovery": {
+      "$ref": "#/$defs/Discovery",
+      "default": {
+        "default_profile": "auto",
+        "enabled": false,
+        "include": []
+      }
+    },
+    "enabled": {
+      "default": true,
+      "type": "boolean"
+    },
+    "headers": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Secret"
+      },
+      "default": {},
+      "type": "object"
+    },
+    "http": {
+      "$ref": "#/$defs/Http",
+      "default": {
+        "max_retries": 3,
+        "proxy": "",
+        "timeout_connect_secs": 10,
+        "timeout_idle_secs": 300
+      }
+    },
+    "id": {
+      "default": null,
+      "description": "Defaults to the file stem.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "models": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ModelEntry"
+      },
+      "type": "array"
+    },
+    "name": {
+      "default": "",
+      "type": "string"
+    },
+    "tls": {
+      "$ref": "#/$defs/Tls",
+      "default": {
+        "ca_file": null,
+        "client_cert": null,
+        "client_key": null,
+        "insecure_skip_verify": false
+      }
+    }
+  },
+  "required": [
+    "api",
+    "base_url"
+  ],
+  "title": "ProviderFile",
+  "type": "object"
+}

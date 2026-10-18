@@ -1,0 +1,12 @@
+cutoffharness
+Copyright 2026 Paul Hovey
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Code ported or adapted from other projects is listed below with its origin and
+licence, as each port lands:
+
+  - (none yet)
+
+Planned sources, per docs/plan/README.md: openai/codex (Apache-2.0),
+aaif-goose/goose (Apache-2.0), maki (MIT).

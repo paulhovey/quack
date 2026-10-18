@@ -78,9 +78,12 @@ pub enum Op {
 pub enum Event {
     // lifecycle
     StartupProgress { subsystem: Subsystem, state: LoadState },   // drives the startup panel
+    StartupComplete,                                              // queued turns start after this
     SessionConfigured { session: SessionInfo },
+    ShutdownComplete,
     // turn
     TurnStarted { turn: TurnId },
+    TurnQueued { waiting_for: String },                           // submitted before startup finished
     AssistantDelta { text: String },
     ReasoningDelta { text: String },
     ToolCallBegin { call: ToolCallInfo },
@@ -88,6 +91,7 @@ pub enum Event {
     ToolCallEnd { call_id: CallId, result: ToolResultSummary },
     ApprovalRequest { call_id: CallId, request: ApprovalRequest },
     TurnComplete { turn: TurnId, usage: Usage },
+    TurnAborted { turn: TurnId, reason: String },
     // context
     ContextUpdate { used: u32, budget: u32, cache_hit_tokens: Option<u32> },
     ContextPruned { report: PruneReport },
@@ -97,7 +101,16 @@ pub enum Event {
     Error { error: EngineError },
 }
 
-pub enum LoadState { Pending, Running { detail: String }, Ready { detail: String }, Failed { error: String }, Disabled }
+pub enum LoadState {
+    Pending,
+    Running { detail: String },
+    Ready { detail: String },
+    NeedsAttention { detail: String },   // waiting on a user decision (trust, compat); never blocks input
+    Failed { error: String },
+    Disabled { reason: String },         // shown dimmed, e.g. "disabled (offline)"
+}
+
+pub enum Subsystem { Config, Project, Provider, Profile, Tokenizer, Instructions, Compat, Memory, Mcp, Lsp }
 ```
 
 The engine runs as a tokio task. A client holds an `EngineHandle { ops: mpsc::Sender<Op>, events: broadcast::Receiver<Event> }`. In headless and ACP mode the same handle is used in-process. A daemon/socket mode is a possible later addition and needs no protocol change.

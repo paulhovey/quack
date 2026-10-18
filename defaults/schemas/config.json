@@ -1,0 +1,511 @@
+{
+  "$defs": {
+    "AllowList": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed": {
+          "$ref": "#/$defs/ListOrAppend",
+          "default": [],
+          "description": "Id globs. Empty allows everything."
+        }
+      },
+      "type": "object"
+    },
+    "CacheStrategy": {
+      "enum": [
+        "preserve",
+        "aggressive",
+        "auto"
+      ],
+      "type": "string"
+    },
+    "ContextSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "budget_ratio": {
+          "default": 0.85,
+          "description": "Fraction of the model's context window we plan to use.",
+          "format": "double",
+          "type": "number"
+        },
+        "cache_strategy": {
+          "$ref": "#/$defs/CacheStrategy",
+          "default": "auto"
+        },
+        "compaction_threshold": {
+          "default": 0.8,
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "DefaultsSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "dir": {
+          "default": "",
+          "description": "Override the defaults bundle location; `none` disables it.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "EditFormat": {
+      "enum": [
+        "auto",
+        "str_replace",
+        "apply_patch",
+        "whole_file"
+      ],
+      "type": "string"
+    },
+    "InstructionSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "$ref": "#/$defs/ListOrAppend",
+          "default": [
+            "AGENTS.md"
+          ],
+          "description": "Instruction file names. Other harnesses' files are detected and offered, never loaded silently."
+        },
+        "max_bytes": {
+          "default": 32768,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "ItemToggles": {
+      "additionalProperties": false,
+      "properties": {
+        "disabled": {
+          "$ref": "#/$defs/ListOrAppend",
+          "default": []
+        }
+      },
+      "type": "object"
+    },
+    "ListOrAppend": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "properties": {
+            "append": {
+              "description": "Appended to the list from lower layers.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "append"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "Schema-only mirror of the accepted shapes."
+    },
+    "MemoryScope": {
+      "oneOf": [
+        {
+          "enum": [
+            "data-dir"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "repo",
+          "description": "Store project memory under `.cutoffharness/memory` so it can be committed.",
+          "type": "string"
+        }
+      ]
+    },
+    "MemorySettings": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "default": "",
+          "description": "Where memory notes live. Empty: `<user data>/memory`.",
+          "type": "string"
+        },
+        "project_scope": {
+          "$ref": "#/$defs/MemoryScope",
+          "default": "data-dir"
+        }
+      },
+      "type": "object"
+    },
+    "ModelSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "default": "",
+          "description": "`<provider-id>/<model-id>` or `<provider-id>/<alias>`. Empty: pick with `/models`.",
+          "type": "string"
+        },
+        "small": {
+          "default": "",
+          "description": "Model for titles, summaries and cheap subtasks. Empty: use `default`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "NetworkSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "ca_bundle": {
+          "default": "",
+          "description": "Extra PEM roots, in addition to the OS store.",
+          "type": "string"
+        },
+        "egress_allow": {
+          "$ref": "#/$defs/ListOrAppend",
+          "default": []
+        },
+        "offline": {
+          "default": false,
+          "description": "Block all egress except provider base URLs and `egress_allow`.",
+          "type": "boolean"
+        },
+        "proxy": {
+          "default": "",
+          "description": "Empty: `HTTPS_PROXY` / system.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "PermissionMode": {
+      "description": "Ordered from least to most permissive, so policy can cap with `min`.",
+      "enum": [
+        "read-only",
+        "ask",
+        "auto-edit",
+        "full-auto"
+      ],
+      "type": "string"
+    },
+    "PermissionSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "allow": {
+          "$ref": "#/$defs/ListOrAppend",
+          "default": []
+        },
+        "ask": {
+          "$ref": "#/$defs/ListOrAppend",
+          "default": []
+        },
+        "deny": {
+          "$ref": "#/$defs/ListOrAppend",
+          "default": []
+        },
+        "mode": {
+          "$ref": "#/$defs/PermissionMode",
+          "default": "ask"
+        }
+      },
+      "type": "object"
+    },
+    "Policy": {
+      "additionalProperties": false,
+      "properties": {
+        "locked": {
+          "$ref": "#/$defs/ListOrAppend",
+          "default": [],
+          "description": "Dotted settings keys that lower-precedence layers cannot change."
+        },
+        "max_permission_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "mcp": {
+          "$ref": "#/$defs/AllowList",
+          "default": {
+            "allowed": []
+          }
+        },
+        "project_config": {
+          "$ref": "#/$defs/ProjectConfigPolicy",
+          "default": "trusted-only"
+        },
+        "providers": {
+          "$ref": "#/$defs/AllowList",
+          "default": {
+            "allowed": []
+          }
+        }
+      },
+      "type": "object"
+    },
+    "ProjectConfigPolicy": {
+      "enum": [
+        "trusted-only",
+        "never",
+        "always"
+      ],
+      "type": "string"
+    },
+    "SessionSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "default": "",
+          "description": "Empty: `<user data>/sessions`.",
+          "type": "string"
+        },
+        "retention_days": {
+          "default": 0,
+          "description": "0 keeps sessions forever.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "ShowReasoning": {
+      "enum": [
+        "hidden",
+        "collapsed",
+        "expanded"
+      ],
+      "type": "string"
+    },
+    "StartupPanel": {
+      "oneOf": [
+        {
+          "enum": [
+            "always",
+            "never"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "auto",
+          "description": "Collapse to the status bar once everything is ready.",
+          "type": "string"
+        }
+      ]
+    },
+    "TelemetrySettings": {
+      "additionalProperties": false,
+      "properties": {
+        "otel_endpoint": {
+          "default": "",
+          "description": "Empty disables telemetry. Never enabled implicitly.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ToolSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "default_timeout_secs": {
+          "default": 120,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "edit_format": {
+          "$ref": "#/$defs/EditFormat",
+          "default": "auto"
+        },
+        "shell": {
+          "default": "auto",
+          "description": "`auto`, `bash`, `zsh`, `pwsh`, `powershell`, `cmd`, or a path.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "UiSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "ascii": {
+          "default": false,
+          "description": "Use ASCII instead of box-drawing and spinner glyphs.",
+          "type": "boolean"
+        },
+        "mouse": {
+          "default": false,
+          "description": "Capture the mouse. Off by default because it breaks native text selection.",
+          "type": "boolean"
+        },
+        "reduced_motion": {
+          "default": false,
+          "description": "Replace spinners with static indicators.",
+          "type": "boolean"
+        },
+        "show_reasoning": {
+          "$ref": "#/$defs/ShowReasoning",
+          "default": "collapsed"
+        },
+        "startup_panel": {
+          "$ref": "#/$defs/StartupPanel",
+          "default": "auto"
+        },
+        "theme": {
+          "default": "auto",
+          "description": "`auto`, `dark`, `light`, or a theme name from `themes/`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "context": {
+      "$ref": "#/$defs/ContextSettings",
+      "default": {
+        "budget_ratio": 0.85,
+        "cache_strategy": "auto",
+        "compaction_threshold": 0.8
+      }
+    },
+    "defaults": {
+      "$ref": "#/$defs/DefaultsSettings",
+      "default": {
+        "dir": ""
+      }
+    },
+    "instructions": {
+      "$ref": "#/$defs/InstructionSettings",
+      "default": {
+        "files": [
+          "AGENTS.md"
+        ],
+        "max_bytes": 32768
+      }
+    },
+    "keys": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Keybinding overrides: action name → key chord.",
+      "type": "object"
+    },
+    "lsp": {
+      "$ref": "#/$defs/ItemToggles",
+      "default": {
+        "disabled": []
+      }
+    },
+    "mcp": {
+      "$ref": "#/$defs/ItemToggles",
+      "default": {
+        "disabled": []
+      }
+    },
+    "memory": {
+      "$ref": "#/$defs/MemorySettings",
+      "default": {
+        "path": "",
+        "project_scope": "data-dir"
+      }
+    },
+    "model": {
+      "$ref": "#/$defs/ModelSettings",
+      "default": {
+        "default": "",
+        "small": ""
+      }
+    },
+    "network": {
+      "$ref": "#/$defs/NetworkSettings",
+      "default": {
+        "ca_bundle": "",
+        "egress_allow": [],
+        "offline": false,
+        "proxy": ""
+      }
+    },
+    "permissions": {
+      "$ref": "#/$defs/PermissionSettings",
+      "default": {
+        "allow": [],
+        "ask": [],
+        "deny": [],
+        "mode": "ask"
+      }
+    },
+    "policy": {
+      "$ref": "#/$defs/Policy",
+      "default": {
+        "locked": [],
+        "max_permission_mode": null,
+        "mcp": {
+          "allowed": []
+        },
+        "project_config": "trusted-only",
+        "providers": {
+          "allowed": []
+        }
+      },
+      "description": "Only honoured in the system layer."
+    },
+    "providers": {
+      "$ref": "#/$defs/ItemToggles",
+      "default": {
+        "disabled": []
+      },
+      "description": "Disable provider files from lower layers without deleting them."
+    },
+    "sessions": {
+      "$ref": "#/$defs/SessionSettings",
+      "default": {
+        "path": "",
+        "retention_days": 0
+      }
+    },
+    "telemetry": {
+      "$ref": "#/$defs/TelemetrySettings",
+      "default": {
+        "otel_endpoint": ""
+      }
+    },
+    "tools": {
+      "$ref": "#/$defs/ToolSettings",
+      "default": {
+        "default_timeout_secs": 120,
+        "edit_format": "auto",
+        "shell": "auto"
+      }
+    },
+    "ui": {
+      "$ref": "#/$defs/UiSettings",
+      "default": {
+        "ascii": false,
+        "mouse": false,
+        "reduced_motion": false,
+        "show_reasoning": "collapsed",
+        "startup_panel": "auto",
+        "theme": "auto"
+      }
+    }
+  },
+  "title": "Settings",
+  "type": "object"
+}

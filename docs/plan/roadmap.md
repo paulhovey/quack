@@ -2,7 +2,9 @@
 
 Milestones are ordered by dependency and value. Each has **exit criteria** that must pass on **Linux, macOS and Windows** in CI before moving on. Dates are left out on purpose; scope is what's fixed.
 
-## Scaffold (M1 kickoff)
+## Scaffold (M1 kickoff) — done 2026-10-17
+
+Status: landed. `cargo test --workspace` passes (29 tests) and clippy is clean with `-D warnings` on Linux, plus `cargo clippy` cross-checks for `x86_64-pc-windows-msvc` and `aarch64-apple-darwin`. The TUI was exercised in a real PTY: first output in about 7 ms (debug build), `/help` modal, a stub turn, and clean double Ctrl-C exit. Not yet run: CI itself, `cargo deny`, and the MSRV check, which all need the GitHub remote.
 
 Decided 2026-10-17: the first scaffold creates the **full workspace**. All 17 crates exist, with their dependency edges and placeholder modules, so the architecture can be seen and compiles from day one. Only the M1 crates get real skeletons:
 

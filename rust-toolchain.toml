@@ -1,0 +1,5 @@
+# Pinned for reproducible CI. MSRV (workspace `rust-version`) is two releases older
+# and checked separately in CI.
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]

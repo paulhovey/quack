@@ -10,7 +10,7 @@
 
 ## Directory layout
 
-The directory is resolved per OS. `CUTOFFHARNESS_CONFIG_DIR` overrides the user layer, and `CUTOFFHARNESS_SYSTEM_DIR` overrides the system layer (useful for testing and portable installs).
+The directory is resolved per OS. Environment overrides, useful for testing and portable installs: `CUTOFFHARNESS_CONFIG_DIR` (user layer), `CUTOFFHARNESS_SYSTEM_DIR` (system layer), `CUTOFFHARNESS_DATA_DIR`, `CUTOFFHARNESS_CACHE_DIR`, and `CUTOFFHARNESS_DEFAULTS_DIR` (`none` disables the defaults bundle). `cutoffharness config paths` prints the resolved directories.
 
 | Layer | Linux | macOS | Windows |
 |---|---|---|---|
@@ -143,7 +143,7 @@ api_key = "sk-..."                                        # allowed, but warns i
 
 - `cutoffharness config check` validates every layer and prints miette diagnostics. Exits non-zero on errors, so it can run in CI or from an enterprise image build.
 - `cutoffharness config show [--layer] [--origin]` prints the effective config, with the source file of each value.
-- `cutoffharness config schema --write` writes JSON Schema files (via `schemars`) for config, providers, profiles, MCP and LSP into `<layer>/schemas/`. Default TOML files carry a **relative** `#:schema ../schemas/<kind>.json` line, so taplo and VS Code offer completion without fetching anything from the network. The defaults bundle ships the schema files too.
+- `cutoffharness config schema [--dir DIR]` writes JSON Schema files (via `schemars`) for config, providers, profiles, MCP, LSP, hooks and `compat.toml` into `<user config>/schemas/` (or `DIR`). Kinds not yet implemented get permissive stubs. Default TOML files carry a **relative** `#:schema ../schemas/<kind>.json` line, so taplo and VS Code offer completion without fetching anything from the network. The defaults bundle ships the schema files too.
 - `cutoffharness doctor` checks config, provider reachability, tokenizer availability, MCP/LSP binaries on PATH, terminal capabilities, and Windows-specific items (VT support, PowerShell version, long paths).
 
 ## Hot reload
