@@ -115,6 +115,8 @@ fn local(config: &Loaded) -> Vec<DoctorCheck> {
         format!("{project} · {}", d.workspace_root.display()),
     ));
 
+    out.push(mcp_check(config));
+
     let instructions = crate::env::instructions(config);
     out.push(check(
         "instructions",
@@ -228,4 +230,47 @@ fn writable(dir: &Path) -> std::io::Result<()> {
     let probe = dir.join(".doctor-probe");
     std::fs::write(&probe, b"")?;
     std::fs::remove_file(probe)
+}
+
+/// MCP files: each one parses, names a transport, and a local server's program is on
+/// `PATH`. Nothing is started; `/mcp` shows whether servers connect.
+fn mcp_check(config: &Loaded) -> DoctorCheck {
+    let items = cutoffharness_config::load_mcp(config);
+    let mut lines = Vec::new();
+    let mut worst = CheckStatus::Ok;
+    let mut enabled = 0;
+    for item in &items {
+        let problem = match &item.state {
+            cutoffharness_config::ItemState::Loaded(f) => {
+                enabled += 1;
+                match f.transport() {
+                    Err(e) => Some(e),
+                    Ok("stdio") => {
+                        let path = std::env::var_os("PATH");
+                        cutoffharness_shell::resolve_program(
+                            &f.command,
+                            path.as_deref(),
+                            &config.dirs.workspace_root,
+                        )
+                        .err()
+                        .map(|e| format!("cannot find {e}"))
+                    }
+                    Ok(_) => None,
+                }
+            }
+            cutoffharness_config::ItemState::Disabled(_) => continue,
+            cutoffharness_config::ItemState::Failed(d) => Some(d.one_line()),
+        };
+        if let Some(p) = problem {
+            worst = CheckStatus::Warn;
+            lines.push(format!("{}: {p}", item.id));
+        }
+    }
+    let summary = match enabled {
+        0 => return check("mcp", CheckStatus::Info, "no servers in mcp.d"),
+        1 => "1 server".to_owned(),
+        n => format!("{n} servers"),
+    };
+    lines.insert(0, summary);
+    check("mcp", worst, lines.join("\n"))
 }

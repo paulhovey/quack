@@ -1,0 +1,9 @@
+#:schema ../schemas/mcp.json
+# Files under the listed folders. cutoffharness already has file tools for the workspace;
+# this is for folders outside it. Needs Node.js.
+enabled = false
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "~/notes"]
+startup_timeout_secs = 60
+[tools]
+auto_approve = ["read_*", "list_*", "search_*", "get_*"]

@@ -1,0 +1,8 @@
+#:schema ../schemas/mcp.json
+# GitHub's hosted MCP server (issues, pull requests, code search). Needs a token in
+# GITHUB_TOKEN. This sends requests to api.githubcopilot.com.
+enabled = false
+url = "https://api.githubcopilot.com/mcp/"
+headers = { Authorization = { env = "GITHUB_TOKEN", format = "Bearer {}" } }
+[tools]
+auto_approve = ["get_*", "list_*", "search_*"]

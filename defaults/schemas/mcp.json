@@ -1,6 +1,197 @@
 {
+  "$defs": {
+    "McpTools": {
+      "additionalProperties": false,
+      "properties": {
+        "allow": {
+          "default": [],
+          "description": "Only these tools (globs on the tool name). Empty: all.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "auto_approve": {
+          "default": [],
+          "description": "Run these without asking (globs; `[\"*\"]` for all). Others ask, unless the permission\nmode or an `mcp:` allow rule says otherwise.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "deny": {
+          "default": [],
+          "description": "Never these tools (globs).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Secret": {
+      "anyOf": [
+        {
+          "description": "Plain value. Allowed, but warns when the file is world-readable or inside a repo.",
+          "type": "string"
+        },
+        {
+          "properties": {
+            "env": {
+              "type": "string"
+            },
+            "format": {
+              "description": "Format string with `{}` for the value, e.g. `\"Bearer {}\"`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "env"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Command whose trimmed stdout is the secret. Only honoured from system, user or trusted project layers.",
+          "properties": {
+            "cmd": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "OS credential store entry `\"<service>/<user>\"`, or `\"<user>\"` under the\n`cutoffharness` service. Store one with `cutoffharness keyring set <name>`.",
+          "properties": {
+            "keyring": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "keyring"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "file": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "file"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "A secret value. Secrets never have to be written into TOML in plain text."
+    }
+  },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Stub: the full schema is generated once this file kind is implemented (M3).",
-  "title": "MCP server (mcp.d/<id>.toml)",
+  "additionalProperties": false,
+  "properties": {
+    "args": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "call_timeout_secs": {
+      "default": 120,
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "command": {
+      "default": "",
+      "description": "Program to start (a server on this machine, over stdio). Found on `PATH`, including\n`.cmd` files on Windows.",
+      "type": "string"
+    },
+    "cwd": {
+      "default": "",
+      "description": "Working directory; default: the workspace root.",
+      "type": "string"
+    },
+    "description": {
+      "default": "",
+      "description": "Shown in `/mcp`.",
+      "type": "string"
+    },
+    "enabled": {
+      "default": true,
+      "type": "boolean"
+    },
+    "env": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Secret"
+      },
+      "default": {},
+      "description": "Extra environment variables for the server; values may be secrets.",
+      "type": "object"
+    },
+    "headers": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Secret"
+      },
+      "default": {},
+      "type": "object"
+    },
+    "id": {
+      "default": null,
+      "description": "Defaults to the file stem.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "inherit_env": {
+      "default": null,
+      "description": "Variables passed through from the harness's own environment. Default: a minimal set\n(`PATH`, `HOME`, temp and locale variables, and what Windows needs).",
+      "items": {
+        "type": "string"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "max_output_tokens": {
+      "default": 8000,
+      "description": "Longer results are cut, keeping the start and the end.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "startup_timeout_secs": {
+      "default": 20,
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "tools": {
+      "$ref": "#/$defs/McpTools",
+      "default": {
+        "allow": [],
+        "auto_approve": [],
+        "deny": []
+      }
+    },
+    "url": {
+      "default": "",
+      "description": "Streamable HTTP endpoint of a remote server (instead of `command`).",
+      "type": "string"
+    }
+  },
+  "title": "McpServerFile",
   "type": "object"
 }

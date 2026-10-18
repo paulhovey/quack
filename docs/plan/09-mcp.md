@@ -21,42 +21,34 @@ Built on [`rmcp`](https://github.com/modelcontextprotocol/rust-sdk), the officia
 
 ## Server file schema
 
+A local server needs only `command` (and usually `args`); a remote one needs only `url`. The transport follows from which of the two is set.
+
 ```toml
 #:schema ../schemas/mcp.json
-id = "github"                          # default: file stem
+command = "npx"                        # found on PATH (+PATHEXT on Windows); `~/` in args is the home folder
+args = ["-y", "@modelcontextprotocol/server-everything", "stdio"]
+
+# Everything below is optional.
 enabled = true
-description = "GitHub issues/PRs"
-
-transport = "stdio"                    # stdio | http
-command = "github-mcp-server"          # resolved via PATH (+PATHEXT on Windows)
-args = ["stdio"]
-cwd = ""                               # default: workspace root
+description = "GitHub issues/PRs"      # shown in /mcp and in tool_search
 env = { GITHUB_TOKEN = { env = "GITHUB_TOKEN" } }   # secret forms from 01-configuration
-inherit_env = ["PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "TEMP", "TMP"]  # minimal by default
+cwd = ""                               # default: workspace root
+inherit_env = ["PATH", "HOME"]         # default: a minimal set (PATH, HOME, temp, locale, proxy, and what Windows needs)
 
-# transport = "http"
-# url = "https://mcp.corp.internal/github"
+# url = "https://mcp.corp.internal/github"          # instead of command
 # headers = { Authorization = { env = "CORP_MCP_TOKEN", format = "Bearer {}" } }
-# oauth = true                         # M5: OAuth 2.1 + PKCE, tokens in OS keyring
 
 startup_timeout_secs = 20
 call_timeout_secs = 120
-max_output_tokens = 8000               # results above this are truncated, full output saved
+max_output_tokens = 8000               # longer results keep their start and end
 
 [tools]
-allow = ["search_*", "get_*", "list_*"]   # glob; default all
+allow = ["search_*", "get_*"]          # globs on tool names; default all
 deny  = ["delete_*"]
-defer = "auto"                         # auto | always | never   (see Deferred tools)
-approval = "ask"                       # ask | auto  (per-tool overrides below)
-[tools.overrides]
-"get_issue" = { approval = "auto" }
-
-[prompts]
-expose_as_commands = true              # /mcp:github:<prompt>
-
-[resources]
-expose = true                          # @mcp:github:<uri> mentions in input
+auto_approve = ["get_*"]               # run without asking; ["*"] for all
 ```
+
+Not built yet: `oauth` (M5), `[prompts]` and `[resources]` (see below), and a per-server `defer` override.
 
 ### Windows
 
@@ -104,6 +96,24 @@ Large MCP servers can carry 20–100 tools and over 10k tokens of schemas, which
 ## Default MCP files (shipped separately)
 
 `defaults/mcp.d/` contains **examples only**, and all are disabled (`enabled = false`): `filesystem.example.toml`, `github.example.toml`, `postgres.example.toml`, `playwright.example.toml`. We don't enable any third-party server by default.
+
+## As implemented (2026-10-18)
+
+M3 MCP landed early, with these parts:
+
+- **Crate.** `cutoffharness-mcp` uses rmcp `=3.5.1` with only `client`, `transport-async-rw` and the reqwest streamable-HTTP client. Stdio servers are started by our own code (`cutoffharness-shell`'s program lookup and process tree: process group on Unix, Job Object on Windows), not rmcp's `transport-child-process`. That keeps out `process-wrap` and the `windows` crates: rmcp adds 5 crates on every OS (rmcp, chrono, num-traits, sse-stream, tokio-stream).
+- **Protocol.** rmcp's `Auto` lifecycle: `server/discover` (2026-07-28) first, then the `initialize` handshake at 2025-11-25 for servers that answer "method not found" or don't answer in 10 s. Roots and logging are not offered; both are deprecated in 2026-07-28, and stdio servers start in the workspace root.
+- **Startup.** The engine reads `mcp.d` and connects every server in the background before provider startup; the MCP startup row updates as servers connect (`2 of 3 ready · 15 tools · connecting github`). A turn never waits. Each request offers the tools of the servers that are ready at that moment, in the order servers became ready. `cutoffharness exec` is the exception: a headless run is one turn, so it waits until the MCP row settles (bounded by each server's `startup_timeout_secs`) before sending the prompt.
+- **Tool names.** `mcp__<server>__<tool>`, with other characters replaced by `_` and cut to 64. MCP tools bypass the profile's tool surface.
+- **Deferred tools.** When the MCP tool definitions are over a tenth of the context budget (32k when the window is unknown), only `tool_search` is offered. Its description lists the ready servers; a search scores tools by words in the name (×3) and description, returns up to 8, and turns them on for the rest of the session.
+- **Permissions.** `Subject::Mcp { server, tool, read_only, auto_approve }`. Rules `mcp:<server>/<tool>` (globs) work in `[permissions] allow/ask/deny`. Plan mode and `read-only` mode refuse tools the server doesn't mark `readOnlyHint`; marked tools still ask unless allowed. `tools.auto_approve` and `full-auto` allow without asking. `tool_search` is always allowed.
+- **Results.** Text content verbatim; images and audio replaced by a note (no vision yet); embedded text resources inlined; links shown as `[link: uri name]`; `structuredContent` used when there is no content. `isError` marks the call failed. Output over `max_output_tokens × 4` characters keeps 60 % head and 40 % tail.
+- **Failures.** A server that fails to start is shown with the reason and its last stderr line; others are unaffected. A stdio server that exits is restarted after 2, 4 and 8 s, then left failed until `/mcp restart <id>` (or Ctrl-S in `/mcp`). `list_changed` re-lists that server's tools.
+- **Offline.** With `network.offline`, `url` servers must be on loopback or match `network.egress_allow`.
+- **UI.** `/mcp` lists servers with state, error, command or URL, tools, estimated tool tokens, whether tools are deferred, and the last 12 stderr lines. `cutoffharness doctor` has an `mcp` row: files parse, name a transport, and local programs are found on `PATH` (nothing is started).
+- **Defaults.** `defaults/mcp.d/` ships `everything`, `filesystem`, `time` and `github`, all `enabled = false`.
+- **Tests.** A fixture stdio server (`mcp-fixture-server`, a bin in the MCP crate) covers listing, calls, error results, a crash mid-call with restart, and a missing program. An in-process HTTP server in the engine tests covers offering and calling tools and `tool_search`. Checked live with `@modelcontextprotocol/server-everything` (Node) and `mcp-server-time` (Python) and Qwen3.5-0.8B on llama.cpp: `tool_search` → `echo` → `get_current_time`.
+- **Not yet.** Prompts as commands, resources and `read_mcp_resource`, sampling, elicitation, progress display, OAuth, saving full output to a file, a Windows run of `.cmd` servers.
 
 ## Open questions
 

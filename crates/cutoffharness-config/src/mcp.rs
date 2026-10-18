@@ -130,4 +130,22 @@ mod tests {
         assert!(f.transport().is_err());
         assert!(toml::from_str::<McpServerFile>("comand = \"x\"").is_err());
     }
+
+    #[test]
+    fn shipped_examples_parse() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../defaults/mcp.d");
+        let mut n = 0;
+        for e in std::fs::read_dir(&dir).expect("defaults/mcp.d") {
+            let path = e.expect("entry").path();
+            if path.extension().is_some_and(|x| x == "toml") {
+                let text = std::fs::read_to_string(&path).expect("read");
+                let f: McpServerFile =
+                    toml::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+                assert!(f.transport().is_ok(), "{}", path.display());
+                assert!(!f.enabled, "{} must ship disabled", path.display());
+                n += 1;
+            }
+        }
+        assert!(n >= 4);
+    }
 }

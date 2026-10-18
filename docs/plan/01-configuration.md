@@ -85,8 +85,8 @@ default_timeout_secs = 120
 
 [permissions]
 mode = "ask"                   # ask | auto-edit | full-auto | read-only
-allow = ["shell:git status*", "shell:cargo check*", "edit:src/**"]
-deny  = ["shell:rm -rf /*"]
+allow = ["shell:git status*", "shell:cargo check*", "edit:src/**", "mcp:github/get_*"]
+deny  = ["shell:rm -rf /*", "mcp:github/delete_*"]   # kinds: shell, edit, read, mcp (<server>/<tool>)
 
 [memory]
 path = "~/notes/cutoffharness-memory"   # default: <user data>/memory

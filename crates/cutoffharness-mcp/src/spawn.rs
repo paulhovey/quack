@@ -119,7 +119,20 @@ pub(crate) fn prepare(file: &McpServerFile, root: &Path) -> Result<Prepared, Str
     let program = cutoffharness_shell::resolve_program(&file.command, search.as_deref(), &cwd)?;
     Ok(Prepared {
         program,
-        args: file.args.clone(),
+        // `~/notes` means the home folder, as it would in a shell.
+        args: file
+            .args
+            .iter()
+            .map(|a| {
+                if a.starts_with("~/") || a.starts_with("~\\") {
+                    cutoffharness_config::expand_home(a, &get)
+                        .display()
+                        .to_string()
+                } else {
+                    a.clone()
+                }
+            })
+            .collect(),
         cwd,
         env,
     })

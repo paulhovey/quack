@@ -1,0 +1,8 @@
+#:schema ../schemas/mcp.json
+# Current time and time zone conversion. Needs uv (`uvx`).
+enabled = false
+command = "uvx"
+args = ["mcp-server-time"]
+startup_timeout_secs = 60
+[tools]
+auto_approve = ["*"]

@@ -1,0 +1,8 @@
+#:schema ../schemas/mcp.json
+# The MCP reference test server: echo, sums, sample resources. Handy for checking that
+# MCP works at all. Needs Node.js (npx downloads the server on first use).
+# To use it, copy this file to mcp.d in your config folder and delete `enabled = false`.
+enabled = false
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-everything", "stdio"]
+startup_timeout_secs = 60

@@ -136,6 +136,7 @@ Left out on purpose: a hosted marketplace, telemetry-backed features and cloud e
 ## M3 — Ecosystem: "it plugs into everything, safely"
 
 - MCP via rmcp, targeting spec 2026-07-28 with fallback to older revisions: stdio + streamable HTTP, `mcp.d`, deferred tools + `tool_search`, prompts as commands, resources, sampling (gated), elicitation, `/mcp`
+  - Landed early (2026-10-18): stdio + streamable HTTP, `mcp.d`, deferred tools + `tool_search`, `mcp:` permission rules, restarts, `/mcp`, doctor row ([09](09-mcp.md#as-implemented-2026-10-18)). Still open: prompts, resources, sampling, elicitation, OAuth
 - Skills (all discovery paths, progressive disclosure, `/skill` invocation); custom commands
 - Permission engine v2: tree-sitter-bash / PowerShell analysis, "always allow" writes to config
 - Project trust flow

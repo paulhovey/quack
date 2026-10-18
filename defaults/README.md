@@ -16,7 +16,7 @@ CUTOFFHARNESS_DEFAULTS_DIR=defaults cargo run
 |---|---|---|
 | `providers.d/` | One provider per file | M1: novita, fireworks, together, openrouter, deepinfra; llama-cpp, ollama, vllm, lmstudio, sglang |
 | `profiles.d/` | Model profiles: `<id>/profile.toml` + prompt templates | M1 (`generic`), M2 (the rest) |
-| `mcp.d/` | Example MCP servers, all `enabled = false` | M3 |
+| `mcp.d/` | Example MCP servers, all `enabled = false`: everything, filesystem, time, github | M3 (landed early) |
 | `lsp.d/` | Language server files; never auto-installed | M4 |
 | `grammars/` | tree-sitter query files (`tags.scm`, …) | M2 |
 | `themes/` | Extra themes (dark and light are compiled in) | M3 |
