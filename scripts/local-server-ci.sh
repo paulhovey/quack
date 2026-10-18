@@ -3,8 +3,8 @@
 # against it (docs/plan/13-testing-and-evals.md#ci).
 #
 # Usage: scripts/local-server-ci.sh <llama-cpp|ollama>
-# Env:   DOCKER (default docker; podman works), MODELS_DIR (default ~/.cache/cutoffharness-ci),
-#        CUTOFFHARNESS_BIN (default target/debug/cutoffharness, built if missing)
+# Env:   DOCKER (default docker; podman works), MODELS_DIR (default ~/.cache/quack-ci),
+#        QUACK_BIN (default target/debug/quack, built if missing)
 #
 # The model is the newest small Qwen at the time of writing: tiny enough for a CPU runner,
 # and it uses the same chat template and tool-call format as the larger Qwen models.
@@ -17,12 +17,12 @@ OLLAMA_MODEL=qwen3.5:0.8b
 
 kind=$1
 docker=${DOCKER:-docker}
-models=${MODELS_DIR:-$HOME/.cache/cutoffharness-ci}
-name="cutoffharness-ci-$kind"
+models=${MODELS_DIR:-$HOME/.cache/quack-ci}
+name="quack-ci-$kind"
 mkdir -p "$models"
 
-if [ ! -x "${CUTOFFHARNESS_BIN:-target/debug/cutoffharness}" ]; then
-    cargo build --locked -p cutoffharness-cli
+if [ ! -x "${QUACK_BIN:-target/debug/quack}" ]; then
+    cargo build --locked -p quack-cli
 fi
 
 wait_for() {

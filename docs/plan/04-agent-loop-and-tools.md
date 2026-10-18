@@ -85,7 +85,7 @@ Internal tools have stable internal names and schemas. Profiles map onto them ([
 | `web_fetch` | ReadOnly | **Disabled by default.** Unavailable when `offline = true` |
 | `task` | Mutating | Sub-agent with its own context. M3 ([roadmap](roadmap.md)) |
 
-Each tool lives in `cutoffharness-tools/src/<tool>.rs` and implements:
+Each tool lives in `quack-tools/src/<tool>.rs` and implements:
 
 ```rust
 #[async_trait]
@@ -124,7 +124,7 @@ These are the main source of failures with open models, so they get the most har
 - **Timeouts**: per-call `timeout` parameter, clamped to a configured maximum. On timeout, the whole process tree is killed.
 - **Output**: stdout and stderr are interleaved with order preserved and streamed to the UI. The model sees head and tail trimmed to the budget, with the full output saved to `<session dir>/outputs/<call>.log` and a note telling the model how to read more (`read` on that path, or `grep`).
 - **Interactive commands**: no stdin by default (`/dev/null` or `NUL`). Commands known to page or prompt get env overrides: `GIT_PAGER=cat`, `PAGER=cat`, `GIT_TERMINAL_PROMPT=0`, `DEBIAN_FRONTEND=noninteractive`. PTY mode is opt-in per call, for tools that need a TTY.
-- **Process trees**: Unix uses `setsid` + `killpg`. Windows assigns every child to a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so closing the job kills the whole tree. This also prevents orphaned processes when cutoffharness exits or crashes.
+- **Process trees**: Unix uses `setsid` + `killpg`. Windows assigns every child to a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so closing the job kills the whole tree. This also prevents orphaned processes when quack exits or crashes.
 
 ### User shell escape
 

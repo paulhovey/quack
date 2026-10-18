@@ -1,0 +1,39 @@
+[package]
+name = "quack-config"
+description = "TOML loading, layering, schema, policy and trust"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[features]
+# Secrets from the OS store: Credential Manager, Keychain, or the Secret Service through
+# `secret-tool` (no extra crates on Linux).
+keyring = ["dep:keyring-core", "dep:windows-native-keyring-store", "dep:apple-native-keyring-store"]
+
+[dependencies]
+quack-protocol.workspace = true
+miette.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+toml_edit.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
+
+[target.'cfg(windows)'.dependencies]
+keyring-core = { workspace = true, optional = true }
+windows-native-keyring-store = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring-core = { workspace = true, optional = true }
+apple-native-keyring-store = { workspace = true, optional = true }

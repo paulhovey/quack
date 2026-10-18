@@ -1,6 +1,6 @@
 #:schema ../schemas/provider.json
 # Mistral's API. Vibe plan keys and pay-as-you-go keys both work here.
-# Not contacted until MISTRAL_API_KEY is set or `cutoffharness setup` stores a key.
+# Not contacted until MISTRAL_API_KEY is set or `quack setup` stores a key.
 name = "Mistral (API or Vibe plan)"
 group = "From the model makers"
 base_url = "https://api.mistral.ai/v1"

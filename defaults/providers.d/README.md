@@ -7,11 +7,11 @@ server address, so deleting a file here removes that provider completely.
 | Files | Contacted when |
 |---|---|
 | `ollama`, `llama-cpp`, `vllm`, `lmstudio`, `sglang` (127.0.0.1) | Listing models, `doctor`, or startup with no default model. Only this machine |
-| Open-model services: `openrouter`, `synthetic`, `charm-hyper`, `together`, `fireworks`, `deepinfra`, `novita` | Only once the key is set (the variable in the file, or `cutoffharness setup` stores one) |
+| Open-model services: `openrouter`, `synthetic`, `charm-hyper`, `together`, `fireworks`, `deepinfra`, `novita` | Only once the key is set (the variable in the file, or `quack setup` stores one) |
 | Model makers: `mistral`, `kimi-code`, `moonshot`, `zai-coding`, `zai`, `deepseek` | Same |
 
 A hosted service from this folder is never picked by itself, even with its key set. The
-user picks a model in `/models` or `cutoffharness setup`, since it may cost money.
+user picks a model in `/models` or `quack setup`, since it may cost money.
 
 A file is short:
 
@@ -42,6 +42,6 @@ endpoint. Every other option has a working default; the full list is in
   ```
 
   Any provider whose `base_url` host doesn't match is disabled, including one a user
-  writes later under an allowed id. `cutoffharness setup` refuses to add one.
-  `[policy.mcp] hosts` does the same for remote MCP servers. `cutoffharness doctor`
+  writes later under an allowed id. `quack setup` refuses to add one.
+  `[policy.mcp] hosts` does the same for remote MCP servers. `quack doctor`
   lists every host the configuration can reach on its `network` line.

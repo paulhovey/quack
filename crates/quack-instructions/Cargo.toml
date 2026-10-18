@@ -1,0 +1,20 @@
+[package]
+name = "quack-instructions"
+description = "AGENTS.md discovery, skills, custom commands and other-harness detection"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+quack-protocol.workspace = true
+quack-config.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

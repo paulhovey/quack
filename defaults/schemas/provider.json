@@ -318,7 +318,7 @@
           "type": "object"
         },
         {
-          "description": "OS credential store entry `\"<service>/<user>\"`, or `\"<user>\"` under the\n`cutoffharness` service. Store one with `cutoffharness keyring set <name>`.",
+          "description": "OS credential store entry `\"<service>/<user>\"`, or `\"<user>\"` under the\n`quack` service. Store one with `quack keyring set <name>`.",
           "properties": {
             "keyring": {
               "type": "string"

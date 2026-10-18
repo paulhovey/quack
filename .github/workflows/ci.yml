@@ -9,7 +9,7 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
   # Tests never read the developer's real config.
-  CUTOFFHARNESS_DEFAULTS_DIR: none
+  QUACK_DEFAULTS_DIR: none
 
 jobs:
   test:
@@ -34,7 +34,7 @@ jobs:
       - run: cargo test --workspace --locked
       - name: minimal enterprise feature set builds
         if: matrix.name == 'linux-x64'
-        run: cargo build -p cutoffharness-cli --locked --no-default-features --features proto-openai-chat,lang-common,sandbox
+        run: cargo build -p quack-cli --locked --no-default-features --features proto-openai-chat,lang-common,sandbox
       - name: no-egress invariant (network namespace + connect() trace)
         if: matrix.name == 'linux-x64'
         run: |
@@ -63,7 +63,7 @@ jobs:
           path: .ci-models
           # Bump when the model or image pins in scripts/local-server-ci.sh change.
           key: local-models-${{ matrix.server }}-${{ hashFiles('scripts/local-server-ci.sh') }}
-      - run: cargo build --locked -p cutoffharness-cli
+      - run: cargo build --locked -p quack-cli
       - run: scripts/local-server-ci.sh ${{ matrix.server }}
 
   msrv:

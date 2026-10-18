@@ -1,0 +1,34 @@
+[package]
+name = "quack-mcp"
+description = "MCP client manager on top of rmcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+# Test fixture: a minimal MCP server over stdio. Not installed with the CLI.
+[[bin]]
+name = "mcp-fixture-server"
+test = false
+doc = false
+
+[dependencies]
+quack-config.workspace = true
+quack-providers.workspace = true
+quack-shell.workspace = true
+rmcp.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["process", "io-util"] }
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+toml.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

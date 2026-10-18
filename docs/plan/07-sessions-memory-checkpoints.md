@@ -29,7 +29,7 @@ Each line is one JSON object with `{"v":1, "t":"<type>", "ts":"…", ...}`:
 
 | Type | Content |
 |---|---|
-| `session_start` | version, cwd, workspace root, git head, OS, cutoffharness version, provider/model/profile |
+| `session_start` | version, cwd, workspace root, git head, OS, quack version, provider/model/profile |
 | `user` | input items (text, file refs, image refs) |
 | `assistant` | text, reasoning (if kept), tool calls (internal names + model-facing names) |
 | `tool_result` | call id, model-facing payload, UI summary, output file ref, duration, exit status |
@@ -50,17 +50,17 @@ Rules:
 
 ### Commands
 
-- `cutoffharness --continue` resumes the most recent session in this project. (No short flag: `-c` is the config override.)
-- `cutoffharness --resume <id>` resumes by id or unique prefix; `cutoffharness sessions` lists them. `/resume` opens the picker (title, age, turns, model, first message preview, fuzzy search).
+- `quack --continue` resumes the most recent session in this project. (No short flag: `-c` is the config override.)
+- `quack --resume <id>` resumes by id or unique prefix; `quack sessions` lists them. `/resume` opens the picker (title, age, turns, model, first message preview, fuzzy search).
 - `/fork` starts a new session that branches from the current point. Its `session_start` records `parent` + event index.
 - `/rewind` picks a previous user message. The conversation is truncated to before it (by appending a `rewind` event; nothing is deleted), and the user is optionally offered to **restore files** to the matching checkpoint.
 - `/title <text>`. Automatic titles come from the `small` model after the first turn, if one is configured. Otherwise the title is the truncated first message, with no extra model call.
 - `/export [md|json]` writes a readable transcript.
-- `cutoffharness sessions prune --older-than 30d` cleans up. `[sessions] retention_days` does the same automatically.
+- `quack sessions prune --older-than 30d` cleans up. `[sessions] retention_days` does the same automatically.
 
 ### Parallel sessions in worktrees
 
-`/fork --worktree` (and `cutoffharness --worktree <name>`) creates a git worktree under `<repo>/.cutoffharness/worktrees/<name>` on a new branch and starts a session there, so several tasks can run side by side without touching each other's files. `/sessions` shows which worktree each session belongs to; finishing offers to merge, keep or delete the worktree. It uses `gix` when possible and falls back to the `git` CLI. Planned for M3 with `/fork`.
+`/fork --worktree` (and `quack --worktree <name>`) creates a git worktree under `<repo>/.quack/worktrees/<name>` on a new branch and starts a session there, so several tasks can run side by side without touching each other's files. `/sessions` shows which worktree each session belongs to; finishing offers to merge, keep or delete the worktree. It uses `gix` when possible and falls back to the `git` CLI. Planned for M3 with `/fork`.
 
 ### Resume semantics
 
@@ -87,7 +87,7 @@ If the current config renders a different system prompt (AGENTS.md changed, prof
     └── notes/<slug>.md
 ```
 
-With `memory.project_scope = "repo"`, project memory lives in `<repo>/.cutoffharness/memory/` instead, so a team can commit shared memory.
+With `memory.project_scope = "repo"`, project memory lives in `<repo>/.quack/memory/` instead, so a team can commit shared memory.
 
 Note format:
 
@@ -151,7 +151,7 @@ A checkpoint is created at each **user turn** boundary (grouping all edits in th
 
 - `/undo` reverts the files changed by the last mutating tool call.
 - `/rewind` → pick a turn → choose "conversation only", "files only", or "both".
-- Restoring checks for conflicts: if a file has changed since the checkpoint (by the user, outside cutoffharness), restoring shows a diff and asks before overwriting.
+- Restoring checks for conflicts: if a file has changed since the checkpoint (by the user, outside quack), restoring shows a diff and asks before overwriting.
 
 ## Open questions
 

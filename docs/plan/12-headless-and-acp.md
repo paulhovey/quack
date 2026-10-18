@@ -2,22 +2,22 @@
 
 Both are clients of the engine protocol ([00](00-architecture.md#engine-protocol)), so the agent loop is shared.
 
-## Headless (`cutoffharness exec`)
+## Headless (`quack exec`)
 
 For CI, scripts, git hooks, and wrapping by other tools.
 
 ```
-cutoffharness exec "fix the failing test in crates/core" \
+quack exec "fix the failing test in crates/core" \
   --model corp-vllm/qwen3-coder \
   --permission-mode auto-edit \
   --allow "shell:cargo test*" \
   --output-format stream-json \
   --max-steps 50 \
   --resume <id> | --continue
-echo "summarize this diff" | git diff | cutoffharness exec -    # prompt + stdin
+echo "summarize this diff" | git diff | quack exec -    # prompt + stdin
 ```
 
-Aliases: `cutoffharness -p "<prompt>"` / `--print`.
+Aliases: `quack -p "<prompt>"` / `--print`.
 
 ### Output formats
 
@@ -43,8 +43,8 @@ We'll evaluate making `stream-json` compatible with Claude Code's stream-json fo
 
 ### Plan
 
-- Crate `cutoffharness-acp`, cargo feature `acp`, built on the `agent-client-protocol` Rust crate.
-- `cutoffharness acp` runs as an ACP agent on stdio.
+- Crate `quack-acp`, cargo feature `acp`, built on the `agent-client-protocol` Rust crate.
+- `quack acp` runs as an ACP agent on stdio.
 - Mapping:
 
 | ACP | Engine |

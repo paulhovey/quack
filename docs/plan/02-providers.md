@@ -169,7 +169,7 @@ This is the most important robustness work in the provider layer.
 
 Even in native mode, a model sometimes emits a tool call as plain text in `content`. This happens when the server's `--tool-call-parser` doesn't match the model, or when the call is inside `<think>`. So the stream is always passed through a **text tool-call detector** for the configured `text_format`. If it finds a complete, schema-valid call in content, that call is promoted to a real tool call and a debug note is logged. There is a toggle to disable this.
 
-### Parsers (in `cutoffharness-providers::toolparse`)
+### Parsers (in `quack-providers::toolparse`)
 
 | Format | Shape |
 |---|---|
@@ -212,7 +212,7 @@ Goal: count tokens locally, quickly, and without downloads.
 
 | `source` | How |
 |---|---|
-| `hf-file` | `tokenizers` crate loads a `tokenizer.json` that ships next to the provider TOML or sits in `<data>/tokenizers/`. Never downloaded unless `cutoffharness tokenizer fetch <model>` is run explicitly |
+| `hf-file` | `tokenizers` crate loads a `tokenizer.json` that ships next to the provider TOML or sits in `<data>/tokenizers/`. Never downloaded unless `quack tokenizer fetch <model>` is run explicitly |
 | `tiktoken` | `tiktoken-rs` encodings (gpt-oss uses o200k) |
 | `server` | llama.cpp `/tokenize`, batched and cached by content hash. Used for verification, never on the hot path |
 | `estimate` | bytes/3.5 heuristic, corrected per session using `usage.prompt_tokens` reported by the server (an EWMA ratio) |

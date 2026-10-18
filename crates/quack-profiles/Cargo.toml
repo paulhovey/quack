@@ -1,0 +1,22 @@
+[package]
+name = "quack-profiles"
+description = "Model profiles: loading, prompt rendering and tool-surface mapping"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+quack-config.workspace = true
+minijinja = { version = "3.0.1", default-features = false, features = ["builtins", "serde"] }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

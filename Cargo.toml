@@ -1,35 +1,35 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
-default-members = ["crates/cutoffharness-cli"]
+default-members = ["crates/quack-cli"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.97"
 license = "Apache-2.0"
-repository = "https://github.com/paulhovey/cutoffharness"
+repository = "https://github.com/paulhovey/quack"
 authors = ["Paul Hovey <paul@paulhovey.org>"]
 publish = false
 
 [workspace.dependencies]
 # internal
-cutoffharness-protocol = { path = "crates/cutoffharness-protocol" }
-cutoffharness-config = { path = "crates/cutoffharness-config" }
-cutoffharness-providers = { path = "crates/cutoffharness-providers" }
-cutoffharness-profiles = { path = "crates/cutoffharness-profiles" }
-cutoffharness-context = { path = "crates/cutoffharness-context" }
-cutoffharness-tools = { path = "crates/cutoffharness-tools" }
-cutoffharness-shell = { path = "crates/cutoffharness-shell" }
-cutoffharness-sandbox = { path = "crates/cutoffharness-sandbox" }
-cutoffharness-mcp = { path = "crates/cutoffharness-mcp" }
-cutoffharness-lsp = { path = "crates/cutoffharness-lsp" }
-cutoffharness-store = { path = "crates/cutoffharness-store" }
-cutoffharness-instructions = { path = "crates/cutoffharness-instructions" }
-cutoffharness-core = { path = "crates/cutoffharness-core" }
-cutoffharness-tui = { path = "crates/cutoffharness-tui" }
-cutoffharness-exec = { path = "crates/cutoffharness-exec" }
-cutoffharness-acp = { path = "crates/cutoffharness-acp" }
+quack-protocol = { path = "crates/quack-protocol" }
+quack-config = { path = "crates/quack-config" }
+quack-providers = { path = "crates/quack-providers" }
+quack-profiles = { path = "crates/quack-profiles" }
+quack-context = { path = "crates/quack-context" }
+quack-tools = { path = "crates/quack-tools" }
+quack-shell = { path = "crates/quack-shell" }
+quack-sandbox = { path = "crates/quack-sandbox" }
+quack-mcp = { path = "crates/quack-mcp" }
+quack-lsp = { path = "crates/quack-lsp" }
+quack-store = { path = "crates/quack-store" }
+quack-instructions = { path = "crates/quack-instructions" }
+quack-core = { path = "crates/quack-core" }
+quack-tui = { path = "crates/quack-tui" }
+quack-exec = { path = "crates/quack-exec" }
+quack-acp = { path = "crates/quack-acp" }
 
 # external
 anyhow = "1.0.104"

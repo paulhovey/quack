@@ -13,7 +13,7 @@
 The panel is drawn at the top of the transcript area during startup. It collapses to a single status-bar line when everything is ready (`ui.startup_panel = "auto"`).
 
 ```
- cutoffharness 0.1.0 · ~/src/project (main*)
+ quack 0.1.0 · ~/src/project (main*)
  ✓ config        3 layers · 4 providers · 2 profiles                 12ms
  ✓ provider      corp-vllm · qwen3-coder (262k ctx)                  84ms
  ⠋ tokenizer     loading qwen3-coder.json
@@ -66,7 +66,7 @@ All configuration UIs share one modal widget, so they look and behave the same:
 │ │   qwen3-coder-30b    128k  qwen-code│ │ profile    qwen-code (auto)    │ │
 │ │ novita                    ✗ no key  │ │ tools      native · qwen3-xml  │ │
 │ │   glm-4.6            200k  cc-style │ │ reasoning  none                │ │
-│ │                                     │ │ file  ~/.config/cutoffharness/ │ │
+│ │                                     │ │ file  ~/.config/quack/ │ │
 │ │                                     │ │       providers.d/corp-vllm.toml│ │
 │ └─────────────────────────────────────┘ └────────────────────────────────┘ │
 │ ↑↓ move  ⏎ use for session  ^D set default  ^E edit file  ^R refresh  esc  │
@@ -77,7 +77,7 @@ All configuration UIs share one modal widget, so they look and behave the same:
 - **Parts**: title, optional tabs, a filter line (always focused, so typing filters straight away), a list pane, a details/preview pane, and a footer listing the key bindings.
 - **Shared behaviour**: fuzzy filter (`nucleo`), ↑/↓ or j/k to move, Tab to switch panes or tabs, Enter for the main action, Esc to close (or go back one level), `?` for help on that modal.
 - **Edit file** (Ctrl-E) opens the item's backing TOML file in `$EDITOR`. The file is hot-reloaded when the editor exits.
-- **Writes go through `toml_edit`**, so comments and formatting are preserved. Every write asks for a **scope** when more than one applies: *Session only* / *Project* (`.cutoffharness/`) / *User*. The system layer is never written from the UI.
+- **Writes go through `toml_edit`**, so comments and formatting are preserved. Every write asks for a **scope** when more than one applies: *Session only* / *Project* (`.quack/`) / *User*. The system layer is never written from the UI.
 - **Policy-locked values** show a 🔒 (ASCII: `[locked]`) with the locking file, and can't be edited.
 - **Async data** (model discovery, MCP status) streams in. Rows show a spinner until they are ready, and the modal never blocks.
 - Modals are pure views over engine state plus Ops, so headless and ACP clients get the same operations through the protocol.
@@ -88,7 +88,7 @@ All configuration UIs share one modal widget, so they look and behave the same:
 |---|---|---|
 | `/models` | `/model` | Models modal (above). Switch for session, set default (`[model].default`), set `small` model, refresh discovery, set unknown context window |
 | `/providers` | | Provider list: state, protocol, base URL, auth status. Actions: enable/disable, test connection, set API key (keyring/env/cmd wizard), edit file, **add provider** (pick a local engine or hosted service from setup's list, or start blank; writes a new `providers.d/<id>.toml`) |
-| `/setup` | | Find model servers on this machine (loopback ports only) and add one: one row per server and model, Enter writes `providers.d/<id>.toml` to the user layer and switches to the model. Hosted services and other addresses go through `cutoffharness setup` ([14](14-packaging-and-distribution.md#first-run-experience)) |
+| `/setup` | | Find model servers on this machine (loopback ports only) and add one: one row per server and model, Enter writes `providers.d/<id>.toml` to the user layer and switches to the model. Hosted services and other addresses go through `quack setup` ([14](14-packaging-and-distribution.md#first-run-experience)) |
 | `/profiles` | `/profile` | Profile list with match rules. Actions: switch for session, pin for model (writes `profile =` into the model entry), preview the rendered prompt and its token cost |
 | `/resume` | `/sessions` | Session browser for this project (Tab switches to all projects): title, age, turns, model, preview pane with the transcript head. Actions: resume, fork, rename, export, delete (with confirmation) |
 | `/new` | `/clear` | Start a fresh session (the current one stays saved) |
@@ -115,10 +115,10 @@ All configuration UIs share one modal widget, so they look and behave the same:
 | `/tasks` | | Sub-agent views (M5) |
 | `/theme` | | Theme picker with live preview |
 | `/keys` | | Keybinding viewer/editor |
-| `/doctor` | | Runs `cutoffharness doctor` checks, shown as a modal report |
+| `/doctor` | | Runs `quack doctor` checks, shown as a modal report |
 | `/stats` | | Session usage: tokens, cache hits, TTFT, cost (hosted services) |
 | `/reload` | | Read config, providers, MCP servers, instructions and skills again, keeping the conversation ([01](01-configuration.md#hot-reload)) |
-| `/trust` | `[trusted\|settings-only\|ignored]` | Decide whether this repo's `.cutoffharness/` loads; opens on its own when a decision is needed ([01](01-configuration.md#as-implemented-2026-10-18)) |
+| `/trust` | `[trusted\|settings-only\|ignored]` | Decide whether this repo's `.quack/` loads; opens on its own when a decision is needed ([01](01-configuration.md#as-implemented-2026-10-18)) |
 | `/cd <path>` | | Change the workspace directory (updates roots, LSP, instructions) |
 | `/copy` | | Copy the last response (or pick a code block) to the clipboard. Implemented as `/copy [code]` through OSC 52: no clipboard library is needed, and it works over SSH. Inside tmux it needs `set -g set-clipboard on` |
 | `/help` | `?` | Commands and keys |
@@ -148,7 +148,7 @@ The **approval dialog** shows a diff view for edits (side-by-side at 160 columns
 
 ## Keybindings
 
-Defaults are listed in `cutoffharness keys --print`. Users override them in `config.toml [keys]`. Notable defaults: Esc interrupts the turn (double Esc opens the rewind picker), Ctrl-C clears input or interrupts, and a second Ctrl-C quits. Shift-Tab cycles permission mode, and Ctrl-T toggles the todo pane.
+Defaults are listed in `quack keys --print`. Users override them in `config.toml [keys]`. Notable defaults: Esc interrupts the turn (double Esc opens the rewind picker), Ctrl-C clears input or interrupts, and a second Ctrl-C quits. Shift-Tab cycles permission mode, and Ctrl-T toggles the todo pane.
 
 ## Themes
 

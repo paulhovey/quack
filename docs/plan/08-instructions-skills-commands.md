@@ -51,7 +51,7 @@ description: Create and review SQL migrations for this repo's Postgres schema. U
 
 1. System layer: `<system>/skills/`
 2. User: `<user config>/skills/`, `~/.agents/skills/`
-3. Project: `<repo>/.cutoffharness/skills/`, `<repo>/.agents/skills/`
+3. Project: `<repo>/.quack/skills/`, `<repo>/.agents/skills/`
 4. Compatibility paths (`[skills] compat_paths`): empty by default. Paths are added when the user accepts a detection prompt (below), or manually.
 
 `[skills] disabled = ["name", …]` turns individual skills off without deleting them.
@@ -69,7 +69,7 @@ At load time, frontmatter is validated (`name` matches the directory, `descripti
 
 ### As implemented (2026-10-18, ahead of M3)
 
-- **Where skills are found:** system `skills/`, user `skills/`, `~/.agents/skills`, the project's `.cutoffharness/skills` (only when the project is trusted), the repository's `.agents/skills`, then `[skills] compat_paths`. A later skill with the same name replaces an earlier one.
+- **Where skills are found:** system `skills/`, user `skills/`, `~/.agents/skills`, the project's `.quack/skills` (only when the project is trusted), the repository's `.agents/skills`, then `[skills] compat_paths`. A later skill with the same name replaces an earlier one.
 - **Front matter** is parsed without a YAML library. It reads `key: value`, quoted values and `>`/`|` blocks, and skips nested maps.
 - **Invalid skills** show as warnings and a NeedsAttention/Failed startup row. Valid ones still load.
 - **Prompt:** `{{ skills }}` holds one line per skill, capped by `index_max_tokens`. Descriptions are halved, down to 80 characters, before skills are dropped.

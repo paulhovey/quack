@@ -1,0 +1,38 @@
+[package]
+name = "quack-tools"
+description = "Internal tools, the tool registry and the permission engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+quack-protocol.workspace = true
+quack-config.workspace = true
+quack-shell.workspace = true
+quack-lsp.workspace = true
+quack-store.workspace = true
+quack-instructions.workspace = true
+quack-sandbox = { workspace = true, optional = true }
+futures.workspace = true
+globset = "0.4.20"
+ignore = "0.4.33"
+regex.workspace = true
+serde_json.workspace = true
+similar = "3.2.0"
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[features]
+sandbox = ["dep:quack-sandbox"]
+
+[lints]
+workspace = true

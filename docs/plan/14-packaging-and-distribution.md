@@ -6,8 +6,8 @@ The **binary** and the **defaults** are separate artifacts:
 
 | Artifact | Contains | Who removes what |
 |---|---|---|
-| `cutoffharness` binary | Engine, adapters (per features), grammars (per features), two themes, empty fallback profile, minimal deny-list floor | Recompile with fewer features |
-| `cutoffharness-defaults` bundle | `providers.d/`, `profiles.d/`, `mcp.d/` (examples, disabled), `lsp.d/`, `themes/`, `grammars/` queries, `schemas/`, `compat.toml` (other-harness detection list), `tokenizers/` (optional) | Delete files |
+| `quack` binary | Engine, adapters (per features), grammars (per features), two themes, empty fallback profile, minimal deny-list floor | Recompile with fewer features |
+| `quack-defaults` bundle | `providers.d/`, `profiles.d/`, `mcp.d/` (examples, disabled), `lsp.d/`, `themes/`, `grammars/` queries, `schemas/`, `compat.toml` (other-harness detection list), `tokenizers/` (optional) | Delete files |
 
 ## Where defaults live after install
 
@@ -15,12 +15,12 @@ Defaults are installed into a **read-only shared data directory**, which is load
 
 | OS | Defaults dir |
 |---|---|
-| Linux (package) | `/usr/share/cutoffharness/defaults/` |
+| Linux (package) | `/usr/share/quack/defaults/` |
 | Linux/macOS (tarball / user install) | `<user data>/defaults/` |
-| macOS (Homebrew) | `$(brew --prefix)/share/cutoffharness/defaults/` |
-| Windows (MSI) | `%ProgramFiles%\cutoffharness\defaults\` |
-| Windows (zip / user install) | `%LOCALAPPDATA%\cutoffharness\defaults\` |
-| Override | `CUTOFFHARNESS_DEFAULTS_DIR`, or `[defaults] dir = ""` in system config, or `dir = "none"` to disable |
+| macOS (Homebrew) | `$(brew --prefix)/share/quack/defaults/` |
+| Windows (MSI) | `%ProgramFiles%\quack\defaults\` |
+| Windows (zip / user install) | `%LOCALAPPDATA%\quack\defaults\` |
+| Override | `QUACK_DEFAULTS_DIR`, or `[defaults] dir = ""` in system config, or `dir = "none"` to disable |
 
 So the full precedence becomes: **compiled settings defaults → defaults bundle → system → user → project → env → CLI**.
 
@@ -29,33 +29,33 @@ Users or companies remove a capability in one of three ways:
 2. Override it with `enabled = false` in user/system `providers.d/<id>.toml`.
 3. Set `[defaults] dir = "none"` and ship only their own files in the system layer.
 
-`cutoffharness defaults list` shows which defaults are active and which are overridden or disabled, and where each comes from.
+`quack defaults list` shows which defaults are active and which are overridden or disabled, and where each comes from.
 
 ## First-run experience
 
 When no provider is configured:
 - The startup panel shows **"No providers configured"** with the paths that were searched.
-- `cutoffharness setup` (also reachable from the panel) is an interactive wizard:
+- `quack setup` (also reachable from the panel) is an interactive wizard:
   1. Lists provider files found in the defaults dir, and lets the user enable one by copying it to the user layer (`toml_edit`, comments preserved).
   2. Offers **local server detection**, but only when the user explicitly picks it: it probes `localhost:11434` (Ollama), `:8080` (llama.cpp), `:8000` (vLLM), `:1234` (LM Studio), `:30000` (SGLang). These are loopback only.
   3. Asks for the API key, using the secret form of the user's choice (env / keyring / cmd).
   4. Runs model discovery and picks a default model.
 - No wizard step needs internet access.
-- Goal: from install to a first working turn **in under a minute** on a machine already running a local server. Detection is also offered from the startup panel's "No providers configured" state, so users don't need to know about `cutoffharness setup`. Detected servers are written as minimal provider files (just `base_url`, plus `api = "ollama"` for Ollama), following [01](01-configuration.md).
+- Goal: from install to a first working turn **in under a minute** on a machine already running a local server. Detection is also offered from the startup panel's "No providers configured" state, so users don't need to know about `quack setup`. Detected servers are written as minimal provider files (just `base_url`, plus `api = "ollama"` for Ollama), following [01](01-configuration.md).
 
 ### As implemented (2026-10-18)
 
-- `cutoffharness setup` asks one question at a time and reads plain lines, so it can also be scripted through stdin. It offers three choices:
+- `quack setup` asks one question at a time and reads plain lines, so it can also be scripted through stdin. It offers three choices:
   1. **Look for servers on this machine.** It probes 127.0.0.1 on ports 11434, 8080, 8000, 1234 and 30000, waiting 1.5 s on each. A server counts only when it answers with a model list.
   2. **Use a hosted service** from the configured ones (out of the box, the bundle's open-model services and model makers' APIs and coding plans), grouped by each file's `group`. A service whose key is set is used as is. Otherwise the key goes into the OS credential store and the file is copied to the user layer with `api_key = { keyring = "<id>" }`, or the wizard says which variable to set.
   3. **Add a server by URL.** An optional key is stored in the credential store.
 
   It then lists the provider's models and saves the chosen one as `model.default`.
-- `/setup` in the TUI runs the same local detection and shows one row per server and model. Enter writes the provider file and switches to that model, which becomes `model.default` only if none is set. A server that a configured provider already points at is reused rather than written again. Hosted services and other addresses are pointed to `cutoffharness setup`, so API keys are never typed into the TUI.
+- `/setup` in the TUI runs the same local detection and shows one row per server and model. Enter writes the provider file and switches to that model, which becomes `model.default` only if none is set. A server that a configured provider already points at is reused rather than written again. Hosted services and other addresses are pointed to `quack setup`, so API keys are never typed into the TUI.
 - Files written are minimal: a comment and `base_url`, plus `api_key` when a key was given. If the id is already taken, a number is added (`server-2`). A server that a configured provider already points at is reused. A provider the system policy would disable is refused.
 - The wizard and `/setup` only offer the loaded providers; the binary contains no server addresses ([02](02-providers.md#servers-not-engines-2026-10-18)). Option 1 probes the loopback ones; option 3 takes any URL.
-- The "no providers configured" startup message names `/setup` and `cutoffharness setup`.
-- Code: `cutoffharness-core/src/setup.rs` (shared), `cutoffharness-cli/src/setup.rs` (wizard), `Op::DetectServers` / `Op::AddProvider`.
+- The "no providers configured" startup message names `/setup` and `quack setup`.
+- Code: `quack-core/src/setup.rs` (shared), `quack-cli/src/setup.rs` (wizard), `Op::DetectServers` / `Op::AddProvider`.
 
 ## Release artifacts
 
@@ -66,18 +66,18 @@ Built with **cargo-dist** (`dist`):
 | Linux x86_64 / aarch64 | static **musl** tarball, `.deb`, `.rpm` |
 | macOS x86_64 / aarch64 | tarball, Homebrew tap, notarized |
 | Windows x86_64 / aarch64 | zip, **MSI** (per-machine and per-user), signed (Authenticode) |
-| All | `cutoffharness-defaults-<ver>.{tar.gz,zip}`, `SHA256SUMS`, signatures, **SBOM** (CycloneDX via `cargo-cyclonedx`) |
+| All | `quack-defaults-<ver>.{tar.gz,zip}`, `SHA256SUMS`, signatures, **SBOM** (CycloneDX via `cargo-cyclonedx`) |
 
 Shell and PowerShell installer scripts install the binary, and the defaults *only if asked* (`--with-defaults`).
 
-**No self-updater** is built in. `cutoffharness version --check` exists but is **opt-in** and blocked by `offline`. Updates come through package managers or the enterprise's own distribution.
+**No self-updater** is built in. `quack version --check` exists but is **opt-in** and blocked by `offline`. Updates come through package managers or the enterprise's own distribution.
 
 ## Enterprise builds
 
 Documented recipe (`docs/enterprise.md`, to be written in M5):
 
 ```bash
-git clone https://github.com/<org>/cutoffharness && cd cutoffharness
+git clone https://github.com/<org>/quack && cd quack
 rm -rf defaults/providers.d/* defaults/mcp.d/*
 cp ~/corp/providers/corp-vllm.toml defaults/providers.d/
 cargo vendor > .cargo/config.toml           # air-gapped builds
@@ -86,7 +86,7 @@ cargo build --release --locked --offline \
 ```
 
 - A system `config.toml` with `[policy]` locks (offline, allowed providers and provider hosts, max permission mode, audit path), distributed through MDM/GPO/Ansible. `[policy.providers] hosts = ["llm.corp.example"]` guarantees no other model server is contacted, even if the bundle's files are left in place.
-- Windows: an MSI with transforms (MST) can drop the system config into `%ProgramData%\cutoffharness\`. Group Policy is not supported natively; the config file is the policy surface.
+- Windows: an MSI with transforms (MST) can drop the system config into `%ProgramData%\quack\`. Group Policy is not supported natively; the config file is the policy surface.
 - Reproducible builds: `--locked`, pinned toolchain via `rust-toolchain.toml`, `SOURCE_DATE_EPOCH`.
 
 ## Licensing hygiene
@@ -95,9 +95,9 @@ cargo build --release --locked --offline \
 - Ported files keep their original copyright header and add ours.
 - `cargo-deny` allowlist: Apache-2.0, MIT, BSD-2/3, ISC, Zlib, Unicode-3.0, MPL-2.0 (file-level, review case by case). **No** GPL/AGPL in the dependency graph, so enterprises can redistribute.
 - Default profiles: provenance field required, permissive sources only ([03](03-model-profiles.md)).
-- Tokenizer files bundled in defaults: each one keeps its model's licence file alongside it. If redistribution isn't allowed, it is not bundled and `cutoffharness tokenizer fetch` is documented instead.
+- Tokenizer files bundled in defaults: each one keeps its model's licence file alongside it. If redistribution isn't allowed, it is not bundled and `quack tokenizer fetch` is documented instead.
 
 ## Open questions
 
-- Should we publish to crates.io (`cargo install cutoffharness`)? Proposed: yes for the binary. Defaults then come from the separate bundle or `cutoffharness setup --download-defaults`, which is opt-in and blocked offline.
-- Package-manager defaults packages: `cutoffharness` and `cutoffharness-defaults` as separate `.deb`/`.rpm`/brew formulae? Proposed: yes. This mirrors the separation exactly.
+- Should we publish to crates.io (`cargo install quack`)? Proposed: yes for the binary. Defaults then come from the separate bundle or `quack setup --download-defaults`, which is opt-in and blocked offline.
+- Package-manager defaults packages: `quack` and `quack-defaults` as separate `.deb`/`.rpm`/brew formulae? Proposed: yes. This mirrors the separation exactly.

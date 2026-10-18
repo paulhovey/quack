@@ -4,10 +4,10 @@
 # Runs the invariant tests (startup + turns with the whole defaults bundle installed) in a
 # network namespace that has only loopback, tracing every connect() from every thread.
 # Fails if anything connects anywhere but 127.0.0.1 or ::1, DNS lookups included.
-# The in-process version of this test lives in crates/cutoffharness-core/tests/invariants.rs.
+# The in-process version of this test lives in crates/quack-core/tests/invariants.rs.
 set -eu
 
-bin=$(cargo test -p cutoffharness-core --test invariants --no-run --locked --message-format=json \
+bin=$(cargo test -p quack-core --test invariants --no-run --locked --message-format=json \
     | sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' | grep invariants | tail -n 1)
 log=$(mktemp)
 

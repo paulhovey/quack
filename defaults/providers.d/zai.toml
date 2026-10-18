@@ -1,6 +1,6 @@
 #:schema ../schemas/provider.json
 # Z.ai's pay-as-you-go API for GLM models.
-# Not contacted until ZAI_API_KEY is set or `cutoffharness setup` stores a key.
+# Not contacted until ZAI_API_KEY is set or `quack setup` stores a key.
 name = "Z.ai API"
 group = "From the model makers"
 base_url = "https://api.z.ai/api/paas/v4"

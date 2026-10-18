@@ -9,17 +9,17 @@ set -eu
 
 budget=${1:-50}
 runs=${2:-10}
-cargo build --release --locked -p cutoffharness-cli
-bin="$PWD/target/release/cutoffharness"
+cargo build --release --locked -p quack-cli
+bin="$PWD/target/release/quack"
 tmp=$(mktemp -d)
 mkdir -p "$tmp/ws"
 
 i=0
 while [ "$i" -lt "$runs" ]; do
     i=$((i + 1))
-    CUTOFFHARNESS_CONFIG_DIR="$tmp/user" CUTOFFHARNESS_DATA_DIR="$tmp/data" \
-    CUTOFFHARNESS_CACHE_DIR="$tmp/cache" CUTOFFHARNESS_SYSTEM_DIR="$tmp/system" \
-    CUTOFFHARNESS_DEFAULTS_DIR="$PWD/defaults" \
+    QUACK_CONFIG_DIR="$tmp/user" QUACK_DATA_DIR="$tmp/data" \
+    QUACK_CACHE_DIR="$tmp/cache" QUACK_SYSTEM_DIR="$tmp/system" \
+    QUACK_DEFAULTS_DIR="$PWD/defaults" \
         script -qec "stty cols 120 rows 40; '$bin' -C '$tmp/ws' --trace-startup '$tmp/trace-$i.json'" /dev/null >/dev/null
 done
 

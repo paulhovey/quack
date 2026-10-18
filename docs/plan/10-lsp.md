@@ -35,7 +35,7 @@ max_items = 20                         # per file, in a tool result
 
 `defaults/lsp.d/` ships commented files for: rust-analyzer, gopls, pyright / basedpyright, typescript-language-server, clangd, jdtls, omnisharp / csharp-ls, lua-language-server, bash-language-server, powershell-editor-services, taplo, yaml-language-server. Each file includes a comment with the install command. **We never run that command ourselves.**
 
-## Client manager (`cutoffharness-lsp`)
+## Client manager (`quack-lsp`)
 
 - One client per `(server id, workspace folder)`.
 - Implementation: `lsp-types` + JSON-RPC over stdio. `async-lsp` is to be evaluated in the M4 spike (see [00](00-architecture.md#open-questions)).

@@ -1,6 +1,6 @@
 #:schema ../schemas/provider.json
 # Together AI: hosted open models.
-# Not contacted until TOGETHER_API_KEY is set or `cutoffharness setup` stores a key.
+# Not contacted until TOGETHER_API_KEY is set or `quack setup` stores a key.
 name = "Together AI"
 group = "Open-model services"
 base_url = "https://api.together.xyz/v1"

@@ -14,7 +14,7 @@ These pairings were written in 2026-10 and must be re-checked against each famil
 
 **Scope: current coding models only (decided 2026-10-18).** Profiles, text tool-call parsers and fixtures are built only for the model families programmers are using now for coding. As of 2026-10 that is Qwen, Kimi, GLM, DeepSeek, MiniMax and Xiaomi MiMo, plus gpt-oss. Older generations and other families get `generic` and the text fallbacks, nothing more. When a family ships a new generation, its profile follows the new one; the old generation is not kept working at extra cost. The eval ([13](13-testing-and-evals.md)) decides which families make the list.
 
-A model performs measurably better when its harness looks like the one it was trained in. Open Interpreter puts this into practice with per-model "harnesses" that change the system prompt, tool definitions, message formatting, reasoning configuration and headers ([docs](https://www.openinterpreter.com/docs/terminal/harness#what-each-cutoffharness-changes)). Its harnesses are compiled into the binary. **Ours are data files**, in keeping with the "nothing built in" principle: a profile can be added, edited or deleted without a rebuild.
+A model performs measurably better when its harness looks like the one it was trained in. Open Interpreter puts this into practice with per-model "harnesses" that change the system prompt, tool definitions, message formatting, reasoning configuration and headers ([docs](https://www.openinterpreter.com/docs/terminal/harness#what-each-quack-changes)). Its harnesses are compiled into the binary. **Ours are data files**, in keeping with the "nothing built in" principle: a profile can be added, edited or deleted without a rebuild.
 
 ## What a profile controls
 
@@ -122,7 +122,7 @@ expose_skill_tool = true
 
 ### Parameter transforms
 
-There is a small, closed set of declarative transforms. Anything more complex requires code (a new transform in `cutoffharness-profiles`), which keeps profiles safe to load without trusting them.
+There is a small, closed set of declarative transforms. Anything more complex requires code (a new transform in `quack-profiles`), which keeps profiles safe to load without trusting them.
 
 | Transform | Effect |
 |---|---|
@@ -159,7 +159,7 @@ The system prompt and env templates use `minijinja` and these variables:
 3. Otherwise, use the profile named in `config.toml [model] fallback_profile`, which defaults to `generic`.
 4. If no profiles are installed at all, use the compiled-in **empty profile**. It has an empty system prompt (only the rendered `{{instructions}}`, if any), exposes the internal tools under their internal names with no added descriptions, uses `native` tool calling, and sets no sampling overrides. Like every profile it contains no endpoints or connections. It exists only so the binary works with zero files installed, and the status bar shows `profile: empty` as a hint to install one.
 
-`/profiles` shows the active profile and lets the user switch it for the session. `cutoffharness profile render <id> --model <m>` prints the full rendered prompt and tool schemas, for debugging and token accounting.
+`/profiles` shows the active profile and lets the user switch it for the session. `quack profile render <id> --model <m>` prints the full rendered prompt and tool schemas, for debugging and token accounting.
 
 ## Default profiles (shipped separately, in `defaults/profiles.d/`)
 

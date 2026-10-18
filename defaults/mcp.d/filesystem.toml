@@ -1,5 +1,5 @@
 #:schema ../schemas/mcp.json
-# Files under the listed folders. cutoffharness already has file tools for the workspace;
+# Files under the listed folders. quack already has file tools for the workspace;
 # this is for folders outside it. Needs Node.js.
 enabled = false
 command = "npx"

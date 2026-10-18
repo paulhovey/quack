@@ -8,11 +8,11 @@ Status: landed. `cargo test --workspace` passes (29 tests) and clippy is clean w
 
 Decided 2026-10-17: the first scaffold creates the **full workspace**. All 17 crates exist, with their dependency edges and placeholder modules, so the architecture can be seen and compiles from day one. Only the M1 crates get real skeletons:
 
-- `cutoffharness-protocol`: `Op` / `Event` / `LoadState` types
-- `cutoffharness-config`: per-OS layer paths, TOML loading for `config.toml` + `providers.d`, miette diagnostics, `config check`
-- `cutoffharness-cli`: clap commands (`tui` default, `exec`, `config check|show`, `doctor` stubs)
-- `cutoffharness-tui`: full-screen app loop, startup panel fed by `StartupProgress`, input box, slash-command popup + modal framework with one real modal (`/help`)
-- `cutoffharness-core`: engine task with an `EngineHandle`, and fake startup subsystems that report progress
+- `quack-protocol`: `Op` / `Event` / `LoadState` types
+- `quack-config`: per-OS layer paths, TOML loading for `config.toml` + `providers.d`, miette diagnostics, `config check`
+- `quack-cli`: clap commands (`tui` default, `exec`, `config check|show`, `doctor` stubs)
+- `quack-tui`: full-screen app loop, startup panel fed by `StartupProgress`, input box, slash-command popup + modal framework with one real modal (`/help`)
+- `quack-core`: engine task with an `EngineHandle`, and fake startup subsystems that report progress
 
 Also: Cargo workspace lints/profiles, `rust-toolchain.toml`, CI (Linux x64, macOS ARM64, Windows x64 + ARM64), `cargo-deny`, `LICENSE` (Apache-2.0), `NOTICE`, the `defaults/` directory layout with schema stubs, and `docs/plan/` kept as-is.
 
@@ -24,7 +24,7 @@ Primary manual test target: **hosted open-model services** (Novita, Fireworks, T
 |---|---|---|
 | Tool-call reliability | Record native tool-call streams from 2+ hosted services for 3–4 current coding models (for example Qwen3-Coder or Qwen3.6, GLM-5.x, Kimi K3, DeepSeek V4), plus llama.cpp `--jinja` and Ollama on CPU with a tiny model. How often do calls leak into content, and do services differ for the same model? | First fixtures in `tests/fixtures/providers/`, list of required text parsers |
 | Prefix-cache behaviour | On hosted services: compare `cached_tokens` reporting, cost and TTFT for append-only vs. mid-history edits at 16k/64k/128k. On CPU llama.cpp: confirm cache reuse through `timings`. A GPU measurement is deferred until hardware is available | Numbers that seed the `auto` cache strategy ([05](05-context-management.md)) |
-| Windows process & terminal | Job Objects + ConPTY + crossterm key events + pwsh invocation, in a throwaway binary | Confirmed approach for `cutoffharness-shell` and the TUI input layer |
+| Windows process & terminal | Job Objects + ConPTY + crossterm key events + pwsh invocation, in a throwaway binary | Confirmed approach for `quack-shell` and the TUI input layer |
 | Startup budget | ratatui first frame with tokio + config parse, on Windows and Linux | Baseline numbers for [13](13-testing-and-evals.md) budgets |
 | tree-sitter-powershell | Is the grammar good enough to classify commands for permissions? | Go/no-go; fallback = "ask for all PowerShell except allowlisted cmdlets" |
 
@@ -42,7 +42,7 @@ Landed, with tests (unit, mock-server integration, TUI snapshots) and clippy cle
 - Profiles: loader, selection (`[match]` globs, `generic` fallback, compiled-in empty), minijinja rendering, tool renames and transforms; `generic` profile shipped
 - AGENTS.md from the user layer and workspace root
 - Text tool-call fallback: `hermes` and `qwen3-xml` calls printed in content are promoted to real calls (`tool_calling.text_format`, `"none"` disables)
-- Sessions: JSONL log per session plus a per-project index, written as the turn happens (crash-safe, torn last line repaired), `--continue`, `--resume <id>`, `cutoffharness sessions`
+- Sessions: JSONL log per session plus a per-project index, written as the turn happens (crash-safe, torn last line repaired), `--continue`, `--resume <id>`, `quack sessions`
 - `/models`: catalogue of every provider (declared plus discovered models, unavailable ones with the reason), switching mid-session keeps history and approvals; `/models provider/model` switches directly
 - TUI: markdown rendering, tool calls with diffs and output, reasoning, approval box, context usage; `exec`: tool activity on stderr, headless denials, `--permission-mode`
 - Defaults bundle v0: novita, fireworks, together, openrouter, deepinfra, llama-cpp, ollama, vllm, lmstudio, sglang (none tagged verified yet). The bundle folders now use the layer layout (`providers.d/`, `profiles.d/`, …)
@@ -55,9 +55,9 @@ Round 2 (2026-10-18):
 - Context estimate corrected by each response's reported prompt tokens (per-model ratio); live context figure after tool results and for servers that report no usage
 - Native `ollama` adapter (`proto-ollama`): `/api/chat` NDJSON with `num_ctx` per request, tool calls, `thinking`, discovery via `/api/tags` + `/api/show` (window capped at 32k). The default `ollama.toml` now uses it
 - Windows Job Objects with kill-on-close for every shell command (`taskkill /T` fallback)
-- `keyring` secrets and `cutoffharness keyring set|delete` (feature `keyring`, on by default). Native stores on Windows/macOS (5–6 crates); on Linux the Secret Service through `secret-tool`, with no extra crates
+- `keyring` secrets and `quack keyring set|delete` (feature `keyring`, on by default). Native stores on Windows/macOS (5–6 crates); on Linux the Secret Service through `secret-tool`, with no extra crates
 
-Round 3 (2026-10-18): exit-criteria tests in `crates/cutoffharness-core/tests/invariants.rs` (removal, no egress, resume fidelity), `scripts/no-egress.sh` and `scripts/first-frame.sh` as Linux CI steps, hidden `--trace-startup`. Keyring on Linux moved from zbus to `secret-tool` (131 → 0 crates).
+Round 3 (2026-10-18): exit-criteria tests in `crates/quack-core/tests/invariants.rs` (removal, no egress, resume fidelity), `scripts/no-egress.sh` and `scripts/first-frame.sh` as Linux CI steps, hidden `--trace-startup`. Keyring on Linux moved from zbus to `secret-tool` (131 → 0 crates).
 
 
 Round 4 (2026-10-18): local-server CI (`scripts/local-server-ci.sh`, job `local-servers`). Found by it: llama.cpp discovery reported the trained window (262k) instead of the served one (`-c`); now read from `/props`. Empty replies get one nudge, as planned in [04](04-agent-loop-and-tools.md#loop-guards). Model scope narrowed to current coding families ([03](03-model-profiles.md#why-profiles-exist)).
@@ -65,17 +65,17 @@ Round 4 (2026-10-18): local-server CI (`scripts/local-server-ci.sh`, job `local-
 Round 5 (2026-10-18): the remaining M1 slash commands.
 - `/providers`: usable or why not, and the models of each provider.
 - `/permissions [mode]`: mode picker and the configured rules.
-- `/doctor`: the same checks as `cutoffharness doctor`, now real: config, defaults, each provider contacted, model, project, AGENTS.md, shell, git, `secret-tool`, the sessions folder written to, memory and terminal.
+- `/doctor`: the same checks as `quack doctor`, now real: config, defaults, each provider contacted, model, project, AGENTS.md, shell, git, `secret-tool`, the sessions folder written to, memory and terminal.
 - `/copy [code]` through OSC 52.
 
-Speed in the status bar (`63 t/s`, from M2), and a `speed` event with time to first token. Interactive provider setup and rule editing wait for `cutoffharness setup` (M2). `/reload` moves to M3 with hot reload.
+Speed in the status bar (`63 t/s`, from M2), and a `speed` event with time to first token. Interactive provider setup and rule editing wait for `quack setup` (M2). `/reload` moves to M3 with hot reload.
 
 Still open for M1: the unchecked exit criteria below. `cargo deny`, the macOS/Windows builds of `aws-lc-sys` (reqwest's TLS crypto), the Windows job-kill test and the macOS/Windows keyring stores are only checked in CI or by hand.
 
 - Workspace scaffold, CI matrix (Linux/macOS/Windows), `cargo-deny`, Apache-2.0 + NOTICE
-- `cutoffharness-protocol` (Op/Event), `cutoffharness-core` loop with interrupt and loop guards
-- `cutoffharness-config`: layers, per-OS paths, `providers.d`, secrets (env/cmd/keyring/file), miette diagnostics, `config check`
-- `cutoffharness-providers`: `openai-chat` + `ollama` adapters, SSE streaming, retries, hermes/qwen3-xml/think-tag parsers, discovery, `estimate` tokenizer with server correction
+- `quack-protocol` (Op/Event), `quack-core` loop with interrupt and loop guards
+- `quack-config`: layers, per-OS paths, `providers.d`, secrets (env/cmd/keyring/file), miette diagnostics, `config check`
+- `quack-providers`: `openai-chat` + `ollama` adapters, SSE streaming, retries, hermes/qwen3-xml/think-tag parsers, discovery, `estimate` tokenizer with server correction
 - Profiles: loader + `generic` profile only, minijinja rendering, parameter mapping
 - Tools: `read`, `write`, `edit.str_replace` (with fuzzy matching), `glob`, `grep`, `list_dir`, `shell` (bash/zsh/pwsh, Job Objects, timeouts, output trimming)
 - Permissions: modes + allow/deny rules (string glob only; tree-sitter analysis comes in M3)
@@ -113,8 +113,8 @@ Left out on purpose: a hosted marketplace, telemetry-backed features and cloud e
 - Profiles for current coding families only ([03](03-model-profiles.md#why-profiles-exist)): `qwen-code`, `codex`, `cc-style`, `swe-agent`, `kimi-code`. Text and grammar tool-calling modes; `edit.apply_patch`, `edit.whole_file`, `edit.search_replace_blocks`, `edit.hashline`
 - Remaining tool-call parsers, only for formats the current families emit (expected: glm, deepseek, kimi, json-block; decided from the M0 fixtures)
 - `anthropic-messages` + `openai-responses` adapters
-- `cutoffharness eval` v1 with about 20 tasks; first `docs/compat.md`, published with the release and linked from the default provider files
-- `cutoffharness setup` and local server detection from the startup panel; speed in the status bar
+- `quack eval` v1 with about 20 tasks; first `docs/compat.md`, published with the release and linked from the default provider files
+- `quack setup` and local server detection from the startup panel; speed in the status bar
 - Plan mode (`/plan`, `plan` permission mode); optional `[model] planner`
 - AGENTS.md discovery (chain + nested on-demand + imports); memory (`memory` tool, index injection, configurable path)
 
@@ -125,7 +125,7 @@ Left out on purpose: a hosted marketplace, telemetry-backed features and cloud e
 - AGENTS.md: system and user files, then the chain from the git root down to the cwd (the first configured name wins in each directory), `@` imports (one level, kept inside the workspace), and nested files attached to the first tool result that touches their directory ([08](08-instructions-skills-commands.md#rules))
 - Plan mode: `/plan [task|accept|off]`, Shift-Tab, edits refused and only read-only commands run, the plan request appended to the message ([04](04-agent-loop-and-tools.md#plan-mode))
 - Memory: markdown notes plus an index per scope (global, and project in the data dir or the repo), the index in the prompt via `{{ memory_index }}`, a lenient `memory` tool, `memory.writes = "ask"`, and `/memory` ([07](07-sessions-memory-checkpoints.md#behaviour))
-- `cutoffharness setup` and `/setup`: local server detection (loopback only), hosted services with the key stored in the OS credential store, or any URL, then the default model ([14](14-packaging-and-distribution.md#as-implemented-2026-10-18))
+- `quack setup` and `/setup`: local server detection (loopback only), hosted services with the key stored in the OS credential store, or any URL, then the default model ([14](14-packaging-and-distribution.md#as-implemented-2026-10-18))
 - Mistral Large 4 through Mistral's API: a Mistral dialect in `openai-chat` (strict fields, `none`/`high` effort, reasoning sent back as `thinking` parts, 9-character tool-call ids, `prompt_cache_key`); not yet run live ([02](02-providers.md#mistral-large-4-2026-10-18))
 - Default providers are data again: 5 local servers and 13 hosted services in `defaults/providers.d`, each unused until it runs or has a key, and hosted ones never auto-selected. The binary names no server, so deleting the files removes them completely. `[policy.providers] hosts` and `[policy.mcp] hosts` limit what can be contacted at all, and `doctor` lists the reachable hosts ([02](02-providers.md#servers-not-engines-2026-10-18))
 
@@ -149,32 +149,32 @@ Left out on purpose: a hosted marketplace, telemetry-backed features and cloud e
 - Bundles (`bundles/`, `/bundles`)
 - Sub-agents (`task` tool) with `/tasks` views (moved from M5)
 
-Landed early (2026-10-18): the project trust flow (Trust modal, `/trust`, `cutoffharness trust`, fingerprinted decisions; [01](01-configuration.md#as-implemented-2026-10-18)), and `/reload` keeping the conversation (folder watching is still to do; [01](01-configuration.md#hot-reload)). `/undo` and `/rewind` from edit pre-images ([07](07-sessions-memory-checkpoints.md#as-implemented-2026-10-18-ahead-of-m3)). Skills discovery, the `skill` tool, `{{ skills }}`, `/<skill>` and `/skills` ([08](08-instructions-skills-commands.md#as-implemented-2026-10-18-ahead-of-m3)). Still to do for skills: other harnesses' folders through the detection prompt.
+Landed early (2026-10-18): the project trust flow (Trust modal, `/trust`, `quack trust`, fingerprinted decisions; [01](01-configuration.md#as-implemented-2026-10-18)), and `/reload` keeping the conversation (folder watching is still to do; [01](01-configuration.md#hot-reload)). `/undo` and `/rewind` from edit pre-images ([07](07-sessions-memory-checkpoints.md#as-implemented-2026-10-18-ahead-of-m3)). Skills discovery, the `skill` tool, `{{ skills }}`, `/<skill>` and `/skills` ([08](08-instructions-skills-commands.md#as-implemented-2026-10-18-ahead-of-m3)). Still to do for skills: other harnesses' folders through the detection prompt.
 
 **Exit criteria**
 - [ ] GitHub MCP server works on Windows via `npx` (`.cmd` resolution) and on Linux/macOS
-- [x] A malicious `.cutoffharness/mcp.d` in an untrusted repo doesn't execute (`core/tests/trust.rs`: nothing starts until trusted, it starts after the trust reload, and editing it asks again)
+- [x] A malicious `.quack/mcp.d` in an untrusted repo doesn't execute (`core/tests/trust.rs`: nothing starts until trusted, it starts after the trust reload, and editing it asks again)
 - [x] `git status && rm -rf x` is split and needs approval for `rm` in `ask` mode (hand-written splitter for now; deny rules now see every command, even in `full-auto`; [11](11-security.md#as-implemented-2026-10-18-ahead-of-m3))
 - [x] Rewind restores files byte-exactly, CRLF files included (`core/tests/rewind.rs`; [07](07-sessions-memory-checkpoints.md#as-implemented-2026-10-18-ahead-of-m3))
 
 ## M4 — IDE-grade feedback: "it knows when it broke the build"
 
-- `cutoffharness-lsp`: lazy start, document sync, progress, diagnostics-after-edit delta, LSP tools, rename with approval
+- `quack-lsp`: lazy start, document sync, progress, diagnostics-after-edit delta, LSP tools, rename with approval
 - Default `lsp.d` files for the main languages (no auto-install)
-- Headless `cutoffharness exec` with text/json/stream-json, exit codes
+- Headless `quack exec` with text/json/stream-json, exit codes
 - `shell.background` processes
 - Startup/perf budgets enforced in CI
 
 **Exit criteria**
 - [ ] Edits that introduce type errors get diagnostics in the same tool result (rust-analyzer, pyright, tsserver, gopls)
-- [ ] `cutoffharness exec` runs in GitHub Actions on all three OSes
+- [ ] `quack exec` runs in GitHub Actions on all three OSes
 - [ ] LSP URIs are correct on Windows (drive letters, spaces)
 
 ## M5 — Enterprise hardening: "a company can roll it out"
 
 - Sandboxing: Linux Landlock+seccomp, macOS Seatbelt, **Windows** restricted token/AppContainer (spike outcome), stdio MCP/LSP sandbox option
 - Offline policy end-to-end, egress allowlist, `web_fetch` (opt-in, SSRF-protected)
-- `[policy]` locks, audit log, `cutoffharness doctor` enterprise checks
+- `[policy]` locks, audit log, `quack doctor` enterprise checks
 - mTLS, custom CA, proxy validation; multi-`base_urls` failover
 - Packaging: cargo-dist, MSI (+ signing), deb/rpm, Homebrew, defaults bundle as a separate package, SBOM, `docs/enterprise.md`, air-gapped build recipe
 - Dynamic tree-sitter grammars (`libloading`)
@@ -187,8 +187,8 @@ Landed early (2026-10-18): the project trust flow (Trust modal, `/trust`, `cutof
 
 ## M6 — Editor integration & extras
 
-- ACP agent (`cutoffharness acp`), tested with Zed
-- Optional: code-execution sandbox tool (maki-style), repo map, OpenTelemetry export (opt-in), daemon/socket mode, cutoffharness-as-MCP-server
+- ACP agent (`quack acp`), tested with Zed
+- Optional: code-execution sandbox tool (maki-style), repo map, OpenTelemetry export (opt-in), daemon/socket mode, quack-as-MCP-server
 
 ## Cross-cutting, every milestone
 

@@ -35,10 +35,10 @@
 
 This is where open-model harnesses usually fall down. We treat it as a product feature.
 
-### `cutoffharness eval`
+### `quack eval`
 
 - **Task suite** in `evals/tasks/`: small, self-contained repos with a prompt and a verification command (tests pass, file contains X). The suite grows from about 20 tasks (M2) to about 100. Categories: read/navigate, single edit, multi-file edit, fix failing test, use shell, use LSP, long-context.
-- Run `cutoffharness eval --model <p/m> [--profile <id>] [--tasks …] [--repeat 3]`.
+- Run `quack eval --model <p/m> [--profile <id>] [--tasks …] [--repeat 3]`.
 - Optionally, adapters for external suites: Terminal-Bench, SWE-bench Lite/Verified (Docker required, kept out of the default CI).
 
 ### Metrics per (model, profile, server)
@@ -54,13 +54,13 @@ Pass rate, steps per task, tokens per task (prompt / cached / completion), wall 
 
 The compatibility table is a headline feature, not an internal report: it answers the first question every open-model user has ("will my model work, and with which settings?").
 - `docs/compat.md` and a page on the project site list model × quantization × server × profile with pass rate, steps per task and tokens per task, plus the date and harness version.
-- `cutoffharness eval --submit-file` writes a self-contained result file (no secrets, no prompts from private repos) that users can attach to a PR. Community results are marked as such and kept apart from CI results.
+- `quack eval --submit-file` writes a self-contained result file (no secrets, no prompts from private repos) that users can attach to a PR. Community results are marked as such and kept apart from CI results.
 - The default provider and profile files link to the matching rows.
 - Results are produced locally; nothing is uploaded by the harness.
 
 ### Recording fixtures
 
-`cutoffharness debug record --model … --prompt …` saves the raw request/response SSE to the fixture directory, with secrets stripped. Every bug report about a parse failure should end up as a fixture.
+`quack debug record --model … --prompt …` saves the raw request/response SSE to the fixture directory, with secrets stripped. Every bug report about a parse failure should end up as a fixture.
 
 ## CI
 

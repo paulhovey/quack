@@ -1,6 +1,6 @@
 #:schema ../schemas/provider.json
 # Moonshot's pay-as-you-go API for Kimi models.
-# Not contacted until MOONSHOT_API_KEY is set or `cutoffharness setup` stores a key.
+# Not contacted until MOONSHOT_API_KEY is set or `quack setup` stores a key.
 name = "Moonshot API (Kimi)"
 group = "From the model makers"
 base_url = "https://api.moonshot.ai/v1"

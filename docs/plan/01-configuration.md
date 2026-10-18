@@ -10,15 +10,15 @@
 
 ## Directory layout
 
-The directory is resolved per OS. Environment overrides, useful for testing and portable installs: `CUTOFFHARNESS_CONFIG_DIR` (user layer), `CUTOFFHARNESS_SYSTEM_DIR` (system layer), `CUTOFFHARNESS_DATA_DIR`, `CUTOFFHARNESS_CACHE_DIR`, and `CUTOFFHARNESS_DEFAULTS_DIR` (`none` disables the defaults bundle). `cutoffharness config paths` prints the resolved directories.
+The directory is resolved per OS. Environment overrides, useful for testing and portable installs: `QUACK_CONFIG_DIR` (user layer), `QUACK_SYSTEM_DIR` (system layer), `QUACK_DATA_DIR`, `QUACK_CACHE_DIR`, and `QUACK_DEFAULTS_DIR` (`none` disables the defaults bundle). `quack config paths` prints the resolved directories.
 
 | Layer | Linux | macOS | Windows |
 |---|---|---|---|
-| System (admin) | `/etc/cutoffharness/` | `/Library/Application Support/cutoffharness/` | `%ProgramData%\cutoffharness\` |
-| User config | `$XDG_CONFIG_HOME/cutoffharness/` (`~/.config/cutoffharness/`) | `~/.config/cutoffharness/` (XDG honoured; see note) | `%APPDATA%\cutoffharness\` |
-| User data | `$XDG_DATA_HOME/cutoffharness/` | `~/Library/Application Support/cutoffharness/` | `%LOCALAPPDATA%\cutoffharness\` |
-| User cache | `$XDG_CACHE_HOME/cutoffharness/` | `~/Library/Caches/cutoffharness/` | `%LOCALAPPDATA%\cutoffharness\cache\` |
-| Project | `<repo>/.cutoffharness/` | same | same |
+| System (admin) | `/etc/quack/` | `/Library/Application Support/quack/` | `%ProgramData%\quack\` |
+| User config | `$XDG_CONFIG_HOME/quack/` (`~/.config/quack/`) | `~/.config/quack/` (XDG honoured; see note) | `%APPDATA%\quack\` |
+| User data | `$XDG_DATA_HOME/quack/` | `~/Library/Application Support/quack/` | `%LOCALAPPDATA%\quack\` |
+| User cache | `$XDG_CACHE_HOME/quack/` | `~/Library/Caches/quack/` | `%LOCALAPPDATA%\quack\cache\` |
+| Project | `<repo>/.quack/` | same | same |
 
 Note: on macOS, terminal tools conventionally use `~/.config`, so we default to it there. `~/Library/Application Support` is used for data only.
 
@@ -48,7 +48,7 @@ From lowest to highest:
 2. System layer
 3. User layer
 4. Project layer (only once the project is trusted)
-5. Environment variables `CUTOFFHARNESS_*` (e.g. `CUTOFFHARNESS_MODEL`)
+5. Environment variables `QUACK_*` (e.g. `QUACK_MODEL`)
 6. CLI flags and `-c key=value` overrides
 
 Then policy is applied: any key the system layer locks is reset to the system value, and the attempted override is reported as a warning.
@@ -89,8 +89,8 @@ allow = ["shell:git status*", "shell:cargo check*", "edit:src/**", "mcp:github/g
 deny  = ["shell:rm -rf /*", "mcp:github/delete_*"]   # kinds: shell, edit, read, mcp (<server>/<tool>)
 
 [memory]
-path = "~/notes/cutoffharness-memory"   # default: <user data>/memory
-project_scope = "data-dir"        # data-dir | repo (store under .cutoffharness/memory and commit it)
+path = "~/notes/quack-memory"   # default: <user data>/memory
+project_scope = "data-dir"        # data-dir | repo (store under .quack/memory and commit it)
 writes = "auto"                   # auto | ask: approve the model's memory writes
 index_max_tokens = 1500           # cap on the note index in the system prompt
 
@@ -127,19 +127,19 @@ project_config = "trusted-only"   # trusted-only | never | always
 
 ## Project trust
 
-Loading a project's `.cutoffharness/` can run code: MCP `command`s, LSP `command`s, hooks, and shell permissions in `allow`. So:
+Loading a project's `.quack/` can run code: MCP `command`s, LSP `command`s, hooks, and shell permissions in `allow`. So:
 
-- On first launch in a repo that contains `.cutoffharness/`, the startup panel shows **"Project config found (N MCP servers, M hooks). Trust?"** with options: *Trust*, *Trust settings only* (no executables), *Ignore*.
+- On first launch in a repo that contains `.quack/`, the startup panel shows **"Project config found (N MCP servers, M hooks). Trust?"** with options: *Trust*, *Trust settings only* (no executables), *Ignore*.
 - Decisions are stored in `<user data>/trust.toml`, keyed by canonical repo path plus a hash of every executable-bearing file. When any of those files changes, the user is asked again.
 - AGENTS.md, skills and commands are text and load without trust. Skills that bundle scripts still go through the normal shell permissions when executed.
 - Policy `project_config = "never"` disables the project layer entirely, for locked-down enterprises.
 
 ### As implemented (2026-10-18)
 
-- When the project needs a decision, the engine sends `Event::ProjectTrust` with what the folder holds (for example "settings, 2 MCP servers, 1 hook"). The TUI opens the **Trust** modal with *Trust*, *Trust settings only*, *Ignore* and *Decide later*. `/trust` reopens it, and `/trust trusted|settings-only|ignored` decides directly. Outside the TUI, `cutoffharness trust` shows the state and `cutoffharness trust <decision>` records it.
+- When the project needs a decision, the engine sends `Event::ProjectTrust` with what the folder holds (for example "settings, 2 MCP servers, 1 hook"). The TUI opens the **Trust** modal with *Trust*, *Trust settings only*, *Ignore* and *Decide later*. `/trust` reopens it, and `/trust trusted|settings-only|ignored` decides directly. Outside the TUI, `quack trust` shows the state and `quack trust <decision>` records it.
 - A decision reloads the session (`Op::TrustProject`, then the same path as `/reload`). Files that a trusted project adds take effect at once, and the conversation and model are kept.
-- The fingerprint is SHA-256 over the relative path and contents of every file in `.cutoffharness/`, except `skills/`, `commands/` and `memory/`, which are text. Symlinks are hashed by their target and never followed. If the fingerprint differs from the stored one, the project shows as *changed since you trusted it* and is skipped until the user decides again. An *Ignore* decision stays in force when files change. A record with no `hash`, such as one written by an administrator, trusts any content.
-- A `.cutoffharness/` that holds only text folders needs no decision.
+- The fingerprint is SHA-256 over the relative path and contents of every file in `.quack/`, except `skills/`, `commands/` and `memory/`, which are text. Symlinks are hashed by their target and never followed. If the fingerprint differs from the stored one, the project shows as *changed since you trusted it* and is skipped until the user decides again. An *Ignore* decision stays in force when files change. A record with no `hash`, such as one written by an administrator, trusts any content.
+- A `.quack/` that holds only text folders needs no decision.
 - `trust.toml` is edited with `toml_edit`, so comments survive, and the file is replaced atomically. There is one record per canonical path.
 - The hash is hand-written (about 100 lines, checked against the FIPS 180-4 vectors) rather than a new crate, per the dependency policy. The TLS stack's hash isn't used because builds without TLS must still verify trust.
 
@@ -155,14 +155,14 @@ api_key = { file = "~/.secrets/llm-key" }
 api_key = "sk-..."                                        # allowed, but warns if file is world-readable / in a git repo
 ```
 
-`cmd` forms run only from system/user layers, or from trusted project layers. `cutoffharness keyring set <name>` stores a key (typed hidden, or piped on stdin) and `cutoffharness keyring delete <name>` removes it. A bare name lives under the `cutoffharness` service. The stores are Credential Manager on Windows, Keychain on macOS, and the Secret Service elsewhere. The Secret Service is reached through the `secret-tool` program (package `libsecret-tools` on Debian/Ubuntu, `libsecret` on Fedora/Arch) rather than a compiled-in D-Bus stack, which would add about 130 crates; when `secret-tool` is missing the error says which package to install. Keyring support is the `keyring` build feature, on by default; builds without it report keyring secrets as unsupported.
+`cmd` forms run only from system/user layers, or from trusted project layers. `quack keyring set <name>` stores a key (typed hidden, or piped on stdin) and `quack keyring delete <name>` removes it. A bare name lives under the `quack` service. The stores are Credential Manager on Windows, Keychain on macOS, and the Secret Service elsewhere. The Secret Service is reached through the `secret-tool` program (package `libsecret-tools` on Debian/Ubuntu, `libsecret` on Fedora/Arch) rather than a compiled-in D-Bus stack, which would add about 130 crates; when `secret-tool` is missing the error says which package to install. Keyring support is the `keyring` build feature, on by default; builds without it report keyring secrets as unsupported.
 
 ## Tooling
 
-- `cutoffharness config check` validates every layer and prints miette diagnostics. Exits non-zero on errors, so it can run in CI or from an enterprise image build.
-- `cutoffharness config show [--layer] [--origin]` prints the effective config, with the source file of each value.
-- `cutoffharness config schema [--dir DIR]` writes JSON Schema files (via `schemars`) for config, providers, profiles, MCP, LSP, hooks and `compat.toml` into `<user config>/schemas/` (or `DIR`). Kinds not yet implemented get permissive stubs. Default TOML files carry a **relative** `#:schema ../schemas/<kind>.json` line, so taplo and VS Code offer completion without fetching anything from the network. The defaults bundle ships the schema files too.
-- `cutoffharness doctor` checks config, provider reachability, tokenizer availability, MCP/LSP binaries on PATH, terminal capabilities, and Windows-specific items (VT support, PowerShell version, long paths).
+- `quack config check` validates every layer and prints miette diagnostics. Exits non-zero on errors, so it can run in CI or from an enterprise image build.
+- `quack config show [--layer] [--origin]` prints the effective config, with the source file of each value.
+- `quack config schema [--dir DIR]` writes JSON Schema files (via `schemars`) for config, providers, profiles, MCP, LSP, hooks and `compat.toml` into `<user config>/schemas/` (or `DIR`). Kinds not yet implemented get permissive stubs. Default TOML files carry a **relative** `#:schema ../schemas/<kind>.json` line, so taplo and VS Code offer completion without fetching anything from the network. The defaults bundle ships the schema files too.
+- `quack doctor` checks config, provider reachability, tokenizer availability, MCP/LSP binaries on PATH, terminal capabilities, and Windows-specific items (VT support, PowerShell version, long paths).
 
 ## Editing from the UI
 

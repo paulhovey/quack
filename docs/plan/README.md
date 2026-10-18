@@ -1,6 +1,6 @@
-# cutoffharness — Implementation Plan
+# quack — Implementation Plan
 
-> Working name: **cutoffharness**. It was picked to be unique, so the final name can be swapped in with one search-and-replace across docs, crates, paths and env vars (`cutoffharness` → `<name>`, `CUTOFFHARNESS_` → `<NAME>_`).
+> Working name: **quack**. It was picked to be unique, so the final name can be swapped in with one search-and-replace across docs, crates, paths and env vars (`quack` → `<name>`, `QUACK_` → `<NAME>_`).
 
 A fast, context-efficient coding agent for **self-hosted and open-weight models**: Ollama, llama.cpp, vLLM/SGLang clusters, rented GPUs, and hosted open-model services such as Novita and Fireworks. Written in Rust with a ratatui TUI. Licensed Apache-2.0.
 
@@ -45,7 +45,7 @@ A fast, context-efficient coding agent for **self-hosted and open-weight models*
 | 2026-10-17 | Windows supported from M1 | Enterprise requirement |
 | 2026-10-17 | ACP = Zed Agent Client Protocol, low priority | Planned for after the core is stable |
 | 2026-10-17 | One TOML file per provider / MCP server / LSP server / hook; one directory per profile | Removal = delete one file |
-| 2026-10-17 | Working name `cutoffharness` | Unique string for an easy rename later |
+| 2026-10-17 | Working name `quack` | Unique string for an easy rename later |
 | 2026-10-17 | Full-screen (alternate screen) TUI | Configuration happens through slash commands that open large modals ([06](06-tui.md#slash-commands--modals)) |
 | 2026-10-17 | Fallback profile is empty | Used only when no profiles are installed: empty prompt, no connections, no tools beyond the internal set |
 | 2026-10-17 | Accepted compiled-in minimum | Empty fallback profile, dark + light themes, a minimal deny-list floor. Nothing that makes or names an external connection |
@@ -62,7 +62,7 @@ A fast, context-efficient coding agent for **self-hosted and open-weight models*
 Each document ends with its own open questions. The cross-cutting ones are:
 
 - **Product name.** Affects the config directory, binary name and crate prefix.
-- **Repository URL.** `Cargo.toml` assumes `github.com/paulhovey/cutoffharness`; confirm before CI and the docs reference it publicly.
+- **Repository URL.** `Cargo.toml` assumes `github.com/paulhovey/quack`; confirm before CI and the docs reference it publicly.
 
 ## Reference projects
 

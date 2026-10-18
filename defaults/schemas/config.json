@@ -130,7 +130,7 @@
         },
         {
           "const": "repo",
-          "description": "Store project memory under `.cutoffharness/memory` so it can be committed.",
+          "description": "Store project memory under `.quack/memory` so it can be committed.",
           "type": "string"
         }
       ]

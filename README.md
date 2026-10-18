@@ -1,4 +1,4 @@
-# cutoffharness
+# quack
 
 A terminal coding agent for open-weight models: self-hosted (llama.cpp, vLLM, Ollama,
 SGLang) or hosted open-model services. Written in Rust with a full-screen ratatui UI.
@@ -7,7 +7,7 @@ SGLang) or hosted open-model services. Written in Rust with a full-screen ratatu
 > Turns are answered by a stub until the provider adapters land in M1.
 > See [docs/plan/roadmap.md](docs/plan/roadmap.md).
 
-`cutoffharness` is a working name, chosen so it is easy to find and replace.
+`quack` is a working name, chosen so it is easy to find and replace.
 
 ## Principles
 
@@ -24,7 +24,7 @@ cargo run -- exec "explain src/main.rs"     # headless, one turn
 cargo run -- config check                   # validate every config layer
 cargo run -- config show --origin           # effective settings and where each came from
 cargo run -- config paths                   # resolved directories
-CUTOFFHARNESS_DEFAULTS_DIR=defaults cargo run   # use the defaults bundle from this checkout
+QUACK_DEFAULTS_DIR=defaults cargo run   # use the defaults bundle from this checkout
 ```
 
 ## Layout

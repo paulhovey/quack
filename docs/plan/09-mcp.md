@@ -11,7 +11,7 @@
 
 Built on [`rmcp`](https://github.com/modelcontextprotocol/rust-sdk), the official Rust SDK, in client mode.
 
-**Spec version.** Target the **2026-07-28** revision first. It made the protocol stateless: no transport sessions, no `initialize` handshake, per-request `_meta` and headers, a rewritten authorization model, and three deprecated core features. Older servers (2025-06-18 / 2025-11-25) stay supported as a fallback. As of 2026-10, rmcp's support for 2026-07-28 was reported as beta; check its release status and conformance results before starting M3, and pin the version. Where this document still says `initialize`, read it as "the version-appropriate discovery step". `cutoffharness-mcp` owns a `McpManager` that:
+**Spec version.** Target the **2026-07-28** revision first. It made the protocol stateless: no transport sessions, no `initialize` handshake, per-request `_meta` and headers, a rewritten authorization model, and three deprecated core features. Older servers (2025-06-18 / 2025-11-25) stay supported as a fallback. As of 2026-10, rmcp's support for 2026-07-28 was reported as beta; check its release status and conformance results before starting M3, and pin the version. Where this document still says `initialize`, read it as "the version-appropriate discovery step". `quack-mcp` owns a `McpManager` that:
 
 - starts every enabled server concurrently at startup, each with `startup_timeout_secs`, reporting `StartupProgress`,
 - performs `initialize`, then `tools/list`, `prompts/list` and `resources/list` (whichever the server advertises),
@@ -81,7 +81,7 @@ Large MCP servers can carry 20–100 tools and over 10k tokens of schemas, which
 | `sampling` | **Supported, gated.** The server's LLM request is served by the current model (or `small`), with user approval by default. This is useful offline, since MCP servers can use the local model instead of calling out |
 | `elicitation` | Shown as an `ask_user`-style dialog in the TUI. Declined automatically in headless mode unless `--allow-elicitation` is passed |
 | Progress notifications | Shown on the tool call row |
-| Logging notifications | Written to the cutoffharness log file, and visible in `/mcp` |
+| Logging notifications | Written to the quack log file, and visible in `/mcp` |
 
 ## Security
 
@@ -101,22 +101,22 @@ Large MCP servers can carry 20–100 tools and over 10k tokens of schemas, which
 
 M3 MCP landed early, with these parts:
 
-- **Crate.** `cutoffharness-mcp` uses rmcp `=3.5.1` with only `client`, `transport-async-rw` and the reqwest streamable-HTTP client. Stdio servers are started by our own code (`cutoffharness-shell`'s program lookup and process tree: process group on Unix, Job Object on Windows), not rmcp's `transport-child-process`. That keeps out `process-wrap` and the `windows` crates: rmcp adds 5 crates on every OS (rmcp, chrono, num-traits, sse-stream, tokio-stream).
+- **Crate.** `quack-mcp` uses rmcp `=3.5.1` with only `client`, `transport-async-rw` and the reqwest streamable-HTTP client. Stdio servers are started by our own code (`quack-shell`'s program lookup and process tree: process group on Unix, Job Object on Windows), not rmcp's `transport-child-process`. That keeps out `process-wrap` and the `windows` crates: rmcp adds 5 crates on every OS (rmcp, chrono, num-traits, sse-stream, tokio-stream).
 - **Protocol.** rmcp's `Auto` lifecycle: `server/discover` (2026-07-28) first, then the `initialize` handshake at 2025-11-25 for servers that answer "method not found" or don't answer in 10 s. Roots and logging are not offered; both are deprecated in 2026-07-28, and stdio servers start in the workspace root.
-- **Startup.** The engine reads `mcp.d` and connects every server in the background before provider startup; the MCP startup row updates as servers connect (`2 of 3 ready · 15 tools · connecting github`). A turn never waits. Each request offers the tools of the servers that are ready at that moment, in the order servers became ready. `cutoffharness exec` is the exception: a headless run is one turn, so it waits until the MCP row settles (bounded by each server's `startup_timeout_secs`) before sending the prompt.
+- **Startup.** The engine reads `mcp.d` and connects every server in the background before provider startup; the MCP startup row updates as servers connect (`2 of 3 ready · 15 tools · connecting github`). A turn never waits. Each request offers the tools of the servers that are ready at that moment, in the order servers became ready. `quack exec` is the exception: a headless run is one turn, so it waits until the MCP row settles (bounded by each server's `startup_timeout_secs`) before sending the prompt.
 - **Tool names.** `mcp__<server>__<tool>`, with other characters replaced by `_` and cut to 64. MCP tools bypass the profile's tool surface.
 - **Deferred tools.** When the MCP tool definitions are over a tenth of the context budget (32k when the window is unknown), only `tool_search` is offered. Its description lists the ready servers; a search scores tools by words in the name (×3) and description, returns up to 8, and turns them on for the rest of the session.
 - **Permissions.** `Subject::Mcp { server, tool, read_only, auto_approve }`. Rules `mcp:<server>/<tool>` (globs) work in `[permissions] allow/ask/deny`. Plan mode and `read-only` mode refuse tools the server doesn't mark `readOnlyHint`; marked tools still ask unless allowed. `tools.auto_approve` and `full-auto` allow without asking. `tool_search` is always allowed.
 - **Results.** Text content verbatim; images and audio replaced by a note (no vision yet); embedded text resources inlined; links shown as `[link: uri name]`; `structuredContent` used when there is no content. `isError` marks the call failed. Output over `max_output_tokens × 4` characters keeps 60 % head and 40 % tail.
 - **Failures.** A server that fails to start is shown with the reason and its last stderr line; others are unaffected. A stdio server that exits is restarted after 2, 4 and 8 s, then left failed until `/mcp restart <id>` (or Ctrl-S in `/mcp`). `list_changed` re-lists that server's tools.
 - **Offline.** With `network.offline`, `url` servers must be on loopback or match `network.egress_allow`.
-- **UI.** `/mcp` lists servers with state, error, command or URL, tools, estimated tool tokens, whether tools are deferred, and the last 12 stderr lines. `cutoffharness doctor` has an `mcp` row: files parse, name a transport, and local programs are found on `PATH` (nothing is started).
+- **UI.** `/mcp` lists servers with state, error, command or URL, tools, estimated tool tokens, whether tools are deferred, and the last 12 stderr lines. `quack doctor` has an `mcp` row: files parse, name a transport, and local programs are found on `PATH` (nothing is started).
 - **Defaults.** `defaults/mcp.d/` ships `everything`, `filesystem`, `time` and `github`, all `enabled = false`.
 - **Tests.** A fixture stdio server (`mcp-fixture-server`, a bin in the MCP crate) covers listing, calls, error results, a crash mid-call with restart, and a missing program. An in-process HTTP server in the engine tests covers offering and calling tools and `tool_search`. Checked live with `@modelcontextprotocol/server-everything` (Node) and `mcp-server-time` (Python) and Qwen3.5-0.8B on llama.cpp: `tool_search` → `echo` → `get_current_time`.
 - **Not yet.** Prompts as commands, resources and `read_mcp_resource`, sampling, elicitation, progress display, OAuth, saving full output to a file, a Windows run of `.cmd` servers.
 
 ## Open questions
 
-- Should cutoffharness also act as an **MCP server** (exposing its tools to other agents)? Proposed: later, low priority.
+- Should quack also act as an **MCP server** (exposing its tools to other agents)? Proposed: later, low priority.
 - Legacy HTTP+SSE transport: support only if rmcp provides it cheaply. Streamable HTTP is the current standard.
 - Which of the features deprecated in 2026-07-28 still need client support for older servers? Decide from what the default example servers use.

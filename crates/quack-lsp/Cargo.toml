@@ -1,0 +1,17 @@
+[package]
+name = "quack-lsp"
+description = "LSP client manager"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+quack-protocol.workspace = true
+quack-config.workspace = true
+
+[lints]
+workspace = true

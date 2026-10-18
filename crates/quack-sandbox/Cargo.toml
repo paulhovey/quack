@@ -1,0 +1,16 @@
+[package]
+name = "quack-sandbox"
+description = "OS sandboxing: Landlock + seccomp, Seatbelt, Windows restricted token"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+quack-protocol.workspace = true
+
+[lints]
+workspace = true

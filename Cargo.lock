@@ -571,244 +571,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cutoffharness-acp"
-version = "0.1.0"
-dependencies = [
- "cutoffharness-core",
- "cutoffharness-protocol",
-]
-
-[[package]]
-name = "cutoffharness-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "crossterm",
- "cutoffharness-acp",
- "cutoffharness-config",
- "cutoffharness-context",
- "cutoffharness-core",
- "cutoffharness-exec",
- "cutoffharness-protocol",
- "cutoffharness-providers",
- "cutoffharness-store",
- "cutoffharness-tools",
- "cutoffharness-tui",
- "miette",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "wiremock",
-]
-
-[[package]]
-name = "cutoffharness-config"
-version = "0.1.0"
-dependencies = [
- "apple-native-keyring-store",
- "cutoffharness-protocol",
- "keyring-core",
- "miette",
- "schemars",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
- "toml",
- "toml_edit",
- "windows-native-keyring-store",
-]
-
-[[package]]
-name = "cutoffharness-context"
-version = "0.1.0"
-dependencies = [
- "cutoffharness-protocol",
- "cutoffharness-providers",
- "serde",
-]
-
-[[package]]
-name = "cutoffharness-core"
-version = "0.1.0"
-dependencies = [
- "cutoffharness-config",
- "cutoffharness-context",
- "cutoffharness-instructions",
- "cutoffharness-mcp",
- "cutoffharness-profiles",
- "cutoffharness-protocol",
- "cutoffharness-providers",
- "cutoffharness-shell",
- "cutoffharness-store",
- "cutoffharness-tools",
- "futures",
- "serde_json",
- "tempfile",
- "tokio",
- "tokio-util",
- "toml",
- "tracing",
- "wiremock",
-]
-
-[[package]]
-name = "cutoffharness-exec"
-version = "0.1.0"
-dependencies = [
- "cutoffharness-core",
- "cutoffharness-protocol",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "cutoffharness-instructions"
-version = "0.1.0"
-dependencies = [
- "cutoffharness-config",
- "cutoffharness-protocol",
- "tempfile",
-]
-
-[[package]]
-name = "cutoffharness-lsp"
-version = "0.1.0"
-dependencies = [
- "cutoffharness-config",
- "cutoffharness-protocol",
-]
-
-[[package]]
-name = "cutoffharness-mcp"
-version = "0.1.0"
-dependencies = [
- "cutoffharness-config",
- "cutoffharness-providers",
- "cutoffharness-shell",
- "rmcp",
- "serde_json",
- "tempfile",
- "tokio",
- "tokio-util",
- "toml",
- "tracing",
-]
-
-[[package]]
-name = "cutoffharness-profiles"
-version = "0.1.0"
-dependencies = [
- "cutoffharness-config",
- "minijinja",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "cutoffharness-protocol"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "cutoffharness-providers"
-version = "0.1.0"
-dependencies = [
- "cutoffharness-config",
- "cutoffharness-protocol",
- "futures",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
- "tokio-util",
- "toml",
- "tracing",
- "wiremock",
-]
-
-[[package]]
-name = "cutoffharness-sandbox"
-version = "0.1.0"
-dependencies = [
- "cutoffharness-protocol",
-]
-
-[[package]]
-name = "cutoffharness-shell"
-version = "0.1.0"
-dependencies = [
- "nix 0.31.3",
- "tokio",
- "tokio-util",
- "tracing",
- "which",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "cutoffharness-store"
-version = "0.1.0"
-dependencies = [
- "cutoffharness-protocol",
- "serde",
- "serde_json",
- "tempfile",
- "tracing",
-]
-
-[[package]]
-name = "cutoffharness-tools"
-version = "0.1.0"
-dependencies = [
- "cutoffharness-config",
- "cutoffharness-instructions",
- "cutoffharness-lsp",
- "cutoffharness-protocol",
- "cutoffharness-sandbox",
- "cutoffharness-shell",
- "cutoffharness-store",
- "futures",
- "globset",
- "ignore",
- "regex",
- "serde_json",
- "similar 3.2.0",
- "tempfile",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "cutoffharness-tui"
-version = "0.1.0"
-dependencies = [
- "crossterm",
- "cutoffharness-config",
- "cutoffharness-core",
- "cutoffharness-protocol",
- "futures",
- "insta",
- "nucleo-matcher",
- "pulldown-cmark",
- "ratatui",
- "tokio",
- "tracing",
- "unicode-width 0.2.2",
-]
-
-[[package]]
 name = "darling"
 version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2269,6 +2031,244 @@ dependencies = [
  "bitflags 2.13.2",
  "memchr",
  "unicase",
+]
+
+[[package]]
+name = "quack-acp"
+version = "0.1.0"
+dependencies = [
+ "quack-core",
+ "quack-protocol",
+]
+
+[[package]]
+name = "quack-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "crossterm",
+ "miette",
+ "quack-acp",
+ "quack-config",
+ "quack-context",
+ "quack-core",
+ "quack-exec",
+ "quack-protocol",
+ "quack-providers",
+ "quack-store",
+ "quack-tools",
+ "quack-tui",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "wiremock",
+]
+
+[[package]]
+name = "quack-config"
+version = "0.1.0"
+dependencies = [
+ "apple-native-keyring-store",
+ "keyring-core",
+ "miette",
+ "quack-protocol",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "toml",
+ "toml_edit",
+ "windows-native-keyring-store",
+]
+
+[[package]]
+name = "quack-context"
+version = "0.1.0"
+dependencies = [
+ "quack-protocol",
+ "quack-providers",
+ "serde",
+]
+
+[[package]]
+name = "quack-core"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "quack-config",
+ "quack-context",
+ "quack-instructions",
+ "quack-mcp",
+ "quack-profiles",
+ "quack-protocol",
+ "quack-providers",
+ "quack-shell",
+ "quack-store",
+ "quack-tools",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "toml",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
+name = "quack-exec"
+version = "0.1.0"
+dependencies = [
+ "quack-core",
+ "quack-protocol",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "quack-instructions"
+version = "0.1.0"
+dependencies = [
+ "quack-config",
+ "quack-protocol",
+ "tempfile",
+]
+
+[[package]]
+name = "quack-lsp"
+version = "0.1.0"
+dependencies = [
+ "quack-config",
+ "quack-protocol",
+]
+
+[[package]]
+name = "quack-mcp"
+version = "0.1.0"
+dependencies = [
+ "quack-config",
+ "quack-providers",
+ "quack-shell",
+ "rmcp",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "toml",
+ "tracing",
+]
+
+[[package]]
+name = "quack-profiles"
+version = "0.1.0"
+dependencies = [
+ "minijinja",
+ "quack-config",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "quack-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "quack-providers"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "quack-config",
+ "quack-protocol",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "toml",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
+name = "quack-sandbox"
+version = "0.1.0"
+dependencies = [
+ "quack-protocol",
+]
+
+[[package]]
+name = "quack-shell"
+version = "0.1.0"
+dependencies = [
+ "nix 0.31.3",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "which",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "quack-store"
+version = "0.1.0"
+dependencies = [
+ "quack-protocol",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
+name = "quack-tools"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "globset",
+ "ignore",
+ "quack-config",
+ "quack-instructions",
+ "quack-lsp",
+ "quack-protocol",
+ "quack-sandbox",
+ "quack-shell",
+ "quack-store",
+ "regex",
+ "serde_json",
+ "similar 3.2.0",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "quack-tui"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "futures",
+ "insta",
+ "nucleo-matcher",
+ "pulldown-cmark",
+ "quack-config",
+ "quack-core",
+ "quack-protocol",
+ "ratatui",
+ "tokio",
+ "tracing",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]

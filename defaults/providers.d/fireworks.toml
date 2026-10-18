@@ -1,6 +1,6 @@
 #:schema ../schemas/provider.json
 # Fireworks AI: hosted open models.
-# Not contacted until FIREWORKS_API_KEY is set or `cutoffharness setup` stores a key.
+# Not contacted until FIREWORKS_API_KEY is set or `quack setup` stores a key.
 name = "Fireworks AI"
 group = "Open-model services"
 base_url = "https://api.fireworks.ai/inference/v1"

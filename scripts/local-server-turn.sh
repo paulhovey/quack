@@ -16,7 +16,7 @@ kind=$1
 base_url=$2
 model=${3:-}
 attempts=${4:-3}
-bin=${CUTOFFHARNESS_BIN:-target/debug/cutoffharness}
+bin=${QUACK_BIN:-target/debug/quack}
 word=73914
 
 tmp=$(mktemp -d)
@@ -31,9 +31,9 @@ printf 'The code is %s.\n' "$word" > "$tmp/ws/notes/code.txt"
     if [ -n "$model" ]; then printf 'models = ["%s"]\n' "$model"; fi
 } > "$tmp/user/providers.d/local.toml"
 
-export CUTOFFHARNESS_CONFIG_DIR="$tmp/user" CUTOFFHARNESS_DATA_DIR="$tmp/data"
-export CUTOFFHARNESS_CACHE_DIR="$tmp/cache" CUTOFFHARNESS_SYSTEM_DIR="$tmp/system"
-export CUTOFFHARNESS_DEFAULTS_DIR="$PWD/defaults"
+export QUACK_CONFIG_DIR="$tmp/user" QUACK_DATA_DIR="$tmp/data"
+export QUACK_CACHE_DIR="$tmp/cache" QUACK_SYSTEM_DIR="$tmp/system"
+export QUACK_DEFAULTS_DIR="$PWD/defaults"
 
 prompt="Use the read tool to open notes/code.txt, then reply with only the code number."
 n=0

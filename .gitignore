@@ -69,9 +69,9 @@ $RECYCLE.BIN/
 # --- Local agent state ---
 # Session logs, checkpoints and memory live in the user data directory by default.
 # If a developer points them inside the repo, keep them out of commits:
-/.cutoffharness/sessions/
-/.cutoffharness/checkpoints/
-/.cutoffharness/*.local.toml
+/.quack/sessions/
+/.quack/checkpoints/
+/.quack/*.local.toml
 
 # Model downloads for the local-server CI jobs (scripts/local-server-ci.sh)
 .ci-models/

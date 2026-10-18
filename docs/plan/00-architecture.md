@@ -10,26 +10,26 @@
 ## Cargo workspace
 
 ```
-cutoffharness/
+quack/
 ├── Cargo.toml                 # [workspace], shared deps, lints, profiles
 ├── crates/
-│   ├── cutoffharness-protocol/      # Op / Event types shared by engine and clients (serde, no tokio)
-│   ├── cutoffharness-config/        # TOML loading, layering, schema, policy, trust store
-│   ├── cutoffharness-providers/     # Wire adapters, streaming, tool-call normalization, tokenizers
-│   ├── cutoffharness-profiles/      # Profile loading, prompt rendering, tool-surface mapping
-│   ├── cutoffharness-context/       # Token budget, tree-sitter index, pruning, compaction
-│   ├── cutoffharness-tools/         # Built-in tools + tool registry + permission engine
-│   ├── cutoffharness-shell/         # Process spawning, PTY, kill trees (per-OS)
-│   ├── cutoffharness-sandbox/       # Landlock/seccomp, Seatbelt, Windows restricted token (per-OS)
-│   ├── cutoffharness-mcp/           # MCP client manager on top of rmcp
-│   ├── cutoffharness-lsp/           # LSP client manager
-│   ├── cutoffharness-store/         # Sessions, memory, checkpoints, trust records
-│   ├── cutoffharness-instructions/  # AGENTS.md discovery, skills, custom commands
-│   ├── cutoffharness-core/          # Agent loop: owns a session, wires everything together
-│   ├── cutoffharness-tui/           # ratatui client
-│   ├── cutoffharness-exec/          # Headless client (text / json / stream-json)
-│   ├── cutoffharness-acp/           # Zed Agent Client Protocol server (feature-gated, later)
-│   └── cutoffharness-cli/           # The `cutoffharness` binary: arg parsing, picks a client
+│   ├── quack-protocol/      # Op / Event types shared by engine and clients (serde, no tokio)
+│   ├── quack-config/        # TOML loading, layering, schema, policy, trust store
+│   ├── quack-providers/     # Wire adapters, streaming, tool-call normalization, tokenizers
+│   ├── quack-profiles/      # Profile loading, prompt rendering, tool-surface mapping
+│   ├── quack-context/       # Token budget, tree-sitter index, pruning, compaction
+│   ├── quack-tools/         # Built-in tools + tool registry + permission engine
+│   ├── quack-shell/         # Process spawning, PTY, kill trees (per-OS)
+│   ├── quack-sandbox/       # Landlock/seccomp, Seatbelt, Windows restricted token (per-OS)
+│   ├── quack-mcp/           # MCP client manager on top of rmcp
+│   ├── quack-lsp/           # LSP client manager
+│   ├── quack-store/         # Sessions, memory, checkpoints, trust records
+│   ├── quack-instructions/  # AGENTS.md discovery, skills, custom commands
+│   ├── quack-core/          # Agent loop: owns a session, wires everything together
+│   ├── quack-tui/           # ratatui client
+│   ├── quack-exec/          # Headless client (text / json / stream-json)
+│   ├── quack-acp/           # Zed Agent Client Protocol server (feature-gated, later)
+│   └── quack-cli/           # The `quack` binary: arg parsing, picks a client
 ├── defaults/                  # Default TOML files. NOT compiled in (see 14-packaging)
 │   ├── providers.d/
 │   ├── profiles.d/
@@ -43,25 +43,25 @@ cutoffharness/
 ### Dependency direction
 
 ```
-cutoffharness-cli ─┬─> cutoffharness-tui ──┐
-             ├─> cutoffharness-exec ─┼─> cutoffharness-core ─┬─> cutoffharness-providers ─> cutoffharness-config
-             └─> cutoffharness-acp ──┘                 ├─> cutoffharness-profiles
-                                                 ├─> cutoffharness-context
-                                                 ├─> cutoffharness-tools ─> cutoffharness-shell, cutoffharness-sandbox, cutoffharness-lsp
-                                                 ├─> cutoffharness-mcp
-                                                 ├─> cutoffharness-store
-                                                 └─> cutoffharness-instructions
-all ─> cutoffharness-protocol
+quack-cli ─┬─> quack-tui ──┐
+             ├─> quack-exec ─┼─> quack-core ─┬─> quack-providers ─> quack-config
+             └─> quack-acp ──┘                 ├─> quack-profiles
+                                                 ├─> quack-context
+                                                 ├─> quack-tools ─> quack-shell, quack-sandbox, quack-lsp
+                                                 ├─> quack-mcp
+                                                 ├─> quack-store
+                                                 └─> quack-instructions
+all ─> quack-protocol
 ```
 
-Client crates (`tui`, `exec`, `acp`) never depend on each other. `cutoffharness-protocol` has no async-runtime dependency, so it can also be used for ACP translation and tests.
+Client crates (`tui`, `exec`, `acp`) never depend on each other. `quack-protocol` has no async-runtime dependency, so it can also be used for ACP translation and tests.
 
 ## Engine protocol
 
 Modelled on codex's submission/event split. The client sends **Ops**; the engine emits **Events**. Both are serde types, which keeps them easy to log, replay and test.
 
 ```rust
-// cutoffharness-protocol (sketch)
+// quack-protocol (sketch)
 pub enum Op {
     UserTurn { items: Vec<InputItem>, overrides: TurnOverrides },
     Interrupt,
@@ -140,7 +140,7 @@ async    ├─ load providers.d/*.toml ─> validate ─> (optional) model disc
 
 Each async task reports through `Event::StartupProgress`. If the user submits a prompt before the selected provider is ready, the prompt is queued and the panel shows what it is waiting on. MCP and LSP never block the first turn. Their tools become available once they report Ready.
 
-`cutoffharness --trace-startup` writes a timing breakdown, and CI enforces a time budget (see [13](13-testing-and-evals.md)).
+`quack --trace-startup` writes a timing breakdown, and CI enforces a time budget (see [13](13-testing-and-evals.md)).
 
 ## Platform abstraction
 
@@ -148,14 +148,14 @@ Platform-specific code is confined to:
 
 | Concern | Crate | Linux | macOS | Windows |
 |---|---|---|---|---|
-| Config/data/cache dirs | `cutoffharness-config` | XDG | `~/Library/...` or XDG override | `%APPDATA%`, `%LOCALAPPDATA%`, `%ProgramData%` |
-| Process spawn & kill tree | `cutoffharness-shell` | process groups + `killpg` | process groups | Job Objects |
-| PTY | `cutoffharness-shell` | `portable-pty` | `portable-pty` | ConPTY via `portable-pty` |
-| Default shell | `cutoffharness-shell` | `$SHELL` or `bash` | `$SHELL` or `zsh` | `pwsh` → `powershell` → Git Bash (configurable) |
-| Executable resolution | `cutoffharness-shell` | `PATH` | `PATH` | `PATH` + `PATHEXT` (`npx` → `npx.cmd`) |
-| Sandbox | `cutoffharness-sandbox` | Landlock + seccomp | Seatbelt | Restricted token + Job Object (see [11](11-security.md)) |
-| Secrets | `cutoffharness-config` | Secret Service via `secret-tool` | Keychain | Credential Manager |
-| TLS roots | `cutoffharness-providers` | `rustls-platform-verifier` | same | same (uses the Windows cert store, so corporate root CAs work) |
+| Config/data/cache dirs | `quack-config` | XDG | `~/Library/...` or XDG override | `%APPDATA%`, `%LOCALAPPDATA%`, `%ProgramData%` |
+| Process spawn & kill tree | `quack-shell` | process groups + `killpg` | process groups | Job Objects |
+| PTY | `quack-shell` | `portable-pty` | `portable-pty` | ConPTY via `portable-pty` |
+| Default shell | `quack-shell` | `$SHELL` or `bash` | `$SHELL` or `zsh` | `pwsh` → `powershell` → Git Bash (configurable) |
+| Executable resolution | `quack-shell` | `PATH` | `PATH` | `PATH` + `PATHEXT` (`npx` → `npx.cmd`) |
+| Sandbox | `quack-sandbox` | Landlock + seccomp | Seatbelt | Restricted token + Job Object (see [11](11-security.md)) |
+| Secrets | `quack-config` | Secret Service via `secret-tool` | Keychain | Credential Manager |
+| TLS roots | `quack-providers` | `rustls-platform-verifier` | same | same (uses the Windows cert store, so corporate root CAs work) |
 
 Path handling rules, enforced by a lint/test helper:
 - Use `Path`/`PathBuf` everywhere. Never build paths by joining strings with `/`.
@@ -215,9 +215,9 @@ proto-ollama = []
 lang-common = ["lang-rust", "lang-python", "lang-typescript", "lang-javascript", "lang-go",
                "lang-java", "lang-c", "lang-cpp", "lang-csharp", "lang-bash", "lang-powershell",
                "lang-json", "lang-toml", "lang-yaml", "lang-markdown"]
-tokenizers-hf = ["cutoffharness-providers/tokenizers"]
-sandbox = ["cutoffharness-tools/sandbox"]
-acp = ["dep:cutoffharness-acp"]
+tokenizers-hf = ["quack-providers/tokenizers"]
+sandbox = ["quack-tools/sandbox"]
+acp = ["dep:quack-acp"]
 ```
 
 A minimal enterprise build:
@@ -232,5 +232,5 @@ If a provider TOML names a protocol that was compiled out, the provider fails to
 
 ## Open questions
 
-- Should `cutoffharness-core` also expose a local socket (daemon mode) so several frontends can attach to one session? This is deferred, but the protocol is designed to allow it.
+- Should `quack-core` also expose a local socket (daemon mode) so several frontends can attach to one session? This is deferred, but the protocol is designed to allow it.
 - `async-lsp` vs. a hand-rolled LSP client. Decide during the M4 spike.
