@@ -9,7 +9,9 @@
 
 ## Implementation
 
-Built on [`rmcp`](https://github.com/modelcontextprotocol/rust-sdk), the official Rust SDK, in client mode. `cutoffharness-mcp` owns a `McpManager` that:
+Built on [`rmcp`](https://github.com/modelcontextprotocol/rust-sdk), the official Rust SDK, in client mode.
+
+**Spec version.** Target the **2026-07-28** revision first. It made the protocol stateless: no transport sessions, no `initialize` handshake, per-request `_meta` and headers, a rewritten authorization model, and three deprecated core features. Older servers (2025-06-18 / 2025-11-25) stay supported as a fallback. As of 2026-10, rmcp's support for 2026-07-28 was reported as beta; check its release status and conformance results before starting M3, and pin the version. Where this document still says `initialize`, read it as "the version-appropriate discovery step". `cutoffharness-mcp` owns a `McpManager` that:
 
 - starts every enabled server concurrently at startup, each with `startup_timeout_secs`, reporting `StartupProgress`,
 - performs `initialize`, then `tools/list`, `prompts/list` and `resources/list` (whichever the server advertises),
@@ -107,3 +109,4 @@ Large MCP servers can carry 20–100 tools and over 10k tokens of schemas, which
 
 - Should cutoffharness also act as an **MCP server** (exposing its tools to other agents)? Proposed: later, low priority.
 - Legacy HTTP+SSE transport: support only if rmcp provides it cheaply. Streamable HTTP is the current standard.
+- Which of the features deprecated in 2026-07-28 still need client support for older servers? Decide from what the default example servers use.

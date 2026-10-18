@@ -117,7 +117,7 @@ vision = false
 
 [models.tool_calling]
 mode = "native"                        # native | text | grammar
-text_format = "auto"                   # used when mode=text or native fails: hermes | qwen3-xml | mistral | glm | json-block
+text_format = "auto"                   # used when mode=text or native fails: hermes | qwen3-xml | glm | json-block
 parallel = true
 
 [models.reasoning]
@@ -175,11 +175,10 @@ Even in native mode, a model sometimes emits a tool call as plain text in `conte
 |---|---|
 | `hermes` | `<tool_call>{"name":..,"arguments":{..}}</tool_call>` (Qwen2.5, Hermes, many fine-tunes) |
 | `qwen3-xml` | `<tool_call><function=name><parameter=x>..</parameter></function></tool_call>` (Qwen3-Coder) |
-| `mistral` | `[TOOL_CALLS][{"name":..,"arguments":..}]` |
-| `glm` | GLM-4.x `<tool_call>name<arg_key>..</arg_key><arg_value>..</arg_value></tool_call>` |
+| `glm` | GLM `<tool_call>name<arg_key>..</arg_key><arg_value>..</arg_value></tool_call>` |
 | `json-block` | Fenced ```json {"tool": .., "args": ..}``` (generic fallback for weak models) |
 | `deepseek` | DeepSeek special-token format, for raw completions |
-| `kimi` | Kimi K2 special-token format |
+| `kimi` | Kimi special-token format |
 
 (Exact token formats must be verified against each model's chat template when implementing. The templates themselves are the source of truth.)
 

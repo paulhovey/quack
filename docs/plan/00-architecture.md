@@ -154,7 +154,7 @@ Platform-specific code is confined to:
 | Default shell | `cutoffharness-shell` | `$SHELL` or `bash` | `$SHELL` or `zsh` | `pwsh` → `powershell` → Git Bash (configurable) |
 | Executable resolution | `cutoffharness-shell` | `PATH` | `PATH` | `PATH` + `PATHEXT` (`npx` → `npx.cmd`) |
 | Sandbox | `cutoffharness-sandbox` | Landlock + seccomp | Seatbelt | Restricted token + Job Object (see [11](11-security.md)) |
-| Secrets | `cutoffharness-config` | Secret Service | Keychain | Credential Manager (`keyring` crate) |
+| Secrets | `cutoffharness-config` | Secret Service via `secret-tool` | Keychain | Credential Manager |
 | TLS roots | `cutoffharness-providers` | `rustls-platform-verifier` | same | same (uses the Windows cert store, so corporate root CAs work) |
 
 Path handling rules, enforced by a lint/test helper:
@@ -184,7 +184,7 @@ Path handling rules, enforced by a lint/test helper:
 | PTY/process | `portable-pty`, `which` | |
 | Markdown | `pulldown-cmark` | Render to ratatui spans ourselves |
 | Highlighting | `tree-sitter-highlight` (reuse grammars) | Avoids syntect startup cost |
-| Secrets | `keyring` | |
+| Secrets | `keyring-core` + `windows-native-keyring-store` / `apple-native-keyring-store` | Per-OS stores only; Linux shells out to `secret-tool` |
 | Logging | `tracing`, `tracing-subscriber`, `tracing-appender` | Logs to file only |
 | CLI | `clap` (derive) | |
 | IDs/time | `uuid` (v7), `jiff` | |
@@ -192,6 +192,15 @@ Path handling rules, enforced by a lint/test helper:
 | Git (checkpoints) | `gix` | Pure Rust; git may not be installed on Windows machines |
 
 Every dependency goes through `cargo-deny`, which checks licenses (Apache-2.0-compatible only), advisories and duplicate crates.
+
+### Dependency policy
+
+Keep the crate count low; every crate is supply-chain surface and build time, and air-gapped users have to vendor all of them.
+- A new crate must earn its place: a large feature, a widely used and maintained crate, or something hard to get right (TLS, parsing, OS APIs). Small helpers are written in-house.
+- Use `default-features = false` and enable only what is needed.
+- Prefer per-OS crates behind `cfg` over umbrella crates that pull every backend.
+- When a standard system tool does the job and the feature is optional, calling the tool is acceptable (example: `secret-tool` for the Secret Service).
+- Report the added crates per OS (`cargo tree -e normal --target <t>`) when proposing a dependency.
 
 ## Cargo features (binary level)
 
@@ -217,7 +226,7 @@ A minimal enterprise build:
 cargo build --release --no-default-features --features proto-openai-chat,lang-common,sandbox
 ```
 
-`openai-chat` is always compiled in, so `proto-openai-chat` is effectively a no-op; the other `proto-*` features are real.
+`openai-chat` is always compiled in, so `proto-openai-chat` is effectively a no-op; the other `proto-*` features are real (`proto-ollama` is implemented). The `keyring` feature (on by default) adds the OS credential stores: 5 crates on Windows, 6 on macOS, none on Linux, where the Secret Service is reached through `secret-tool`.
 
 If a provider TOML names a protocol that was compiled out, the provider fails to load with an error saying which feature is missing. Nothing else is affected.
 

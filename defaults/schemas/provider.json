@@ -318,6 +318,7 @@
           "type": "object"
         },
         {
+          "description": "OS credential store entry `\"<service>/<user>\"`, or `\"<user>\"` under the\n`cutoffharness` service. Store one with `cutoffharness keyring set <name>`.",
           "properties": {
             "keyring": {
               "type": "string"
@@ -340,7 +341,7 @@
           "type": "object"
         }
       ],
-      "description": "A secret value. Secrets never have to be written into TOML in plain text.\nResolution (running `cmd`, reading the keyring) lands with the providers in M1."
+      "description": "A secret value. Secrets never have to be written into TOML in plain text."
     },
     "Serving": {
       "additionalProperties": false,
@@ -446,7 +447,7 @@
         },
         "text_format": {
           "default": "auto",
-          "description": "`auto`, `hermes`, `qwen3-xml`, `mistral`, `glm`, `json-block`, `deepseek`, `kimi`.",
+          "description": "`auto`, `hermes`, `qwen3-xml`, `glm`, `json-block`, `deepseek`, `kimi`.",
           "type": "string"
         }
       },

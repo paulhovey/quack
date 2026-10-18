@@ -197,8 +197,10 @@ async fn tool_call_printed_as_text_is_promoted() {
         .await;
     let mut rewritten = None;
     let mut tool_ok = false;
+    let mut streamed = String::new();
     loop {
         match next(&mut engine.events).await {
+            Event::AssistantDelta { text } => streamed.push_str(&text),
             Event::AssistantRewrite { text } => rewritten = Some(text),
             Event::ToolCallEnd { result, .. } => tool_ok = result.ok,
             Event::TurnComplete { .. } => break,
@@ -208,6 +210,10 @@ async fn tool_call_printed_as_text_is_promoted() {
         }
     }
     assert_eq!(rewritten.as_deref(), Some("Reading."));
+    assert!(
+        !streamed.contains("<tool_call>"),
+        "raw call was streamed: {streamed}"
+    );
     assert!(tool_ok);
     engine.shutdown().await;
 }
@@ -268,5 +274,160 @@ async fn switching_models_keeps_history() {
     // The big-model mock only answers when the earlier question is still in the history.
     engine.submit(turn("second")).await;
     assert_eq!(answer(&mut engine.events).await, "from big");
+    engine.shutdown().await;
+}
+
+async fn turn(engine: &mut cutoffharness_core::EngineHandle, text: &str) {
+    engine
+        .submit(Op::UserTurn {
+            items: vec![InputItem::text(text)],
+            overrides: TurnOverrides::default(),
+        })
+        .await;
+    loop {
+        match next(&mut engine.events).await {
+            Event::TurnComplete { .. } => return,
+            Event::TurnAborted { reason, .. } => panic!("aborted: {reason}"),
+            Event::Error { error } => panic!("engine error: {}", error.message),
+            _ => {}
+        }
+    }
+}
+
+#[tokio::test]
+async fn new_list_resume_title_and_save_setting() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(sse(&[
+            r#"{"choices":[{"delta":{"content":"Hi."},"finish_reason":"stop"}]}"#,
+        ]))
+        .mount(&server)
+        .await;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let loaded = workspace(tmp.path(), &server.uri());
+    let user_config = loaded.dirs.user_config.join("config.toml");
+    let mut engine = Engine::spawn(Arc::new(loaded));
+
+    turn(&mut engine, "first question").await;
+    engine
+        .submit(Op::SetTitle {
+            title: "alpha".into(),
+        })
+        .await;
+    engine.submit(Op::NewSession).await;
+    turn(&mut engine, "second question").await;
+
+    engine.submit(Op::ListSessions).await;
+    let sessions = loop {
+        if let Event::SessionList { sessions } = next(&mut engine.events).await {
+            break sessions;
+        }
+    };
+    assert_eq!(sessions.len(), 2, "{sessions:?}");
+    assert!(sessions[0].current && sessions[0].title == "second question");
+    assert_eq!(sessions[1].title, "alpha");
+
+    engine
+        .submit(Op::ResumeSession {
+            id: sessions[1].id.clone(),
+        })
+        .await;
+    let items = loop {
+        if let Event::SessionResumed { items, .. } = next(&mut engine.events).await {
+            break items;
+        }
+    };
+    assert!(
+        matches!(items.first(), Some(ReplayItem::User { text }) if text == "first question"),
+        "{items:?}"
+    );
+    turn(&mut engine, "third question").await;
+    let requests = server.received_requests().await.unwrap_or_default();
+    let last = String::from_utf8_lossy(&requests.last().expect("request").body).into_owned();
+    assert!(
+        last.contains("first question") && !last.contains("second question"),
+        "{last}"
+    );
+
+    engine
+        .submit(Op::SaveSetting {
+            key: "model.default".into(),
+            value: "\"mock/tiny\"".into(),
+            scope: cutoffharness_core::protocol::WriteScope::User,
+        })
+        .await;
+    loop {
+        match next(&mut engine.events).await {
+            Event::SettingSaved { key, .. } => {
+                assert_eq!(key, "model.default");
+                break;
+            }
+            Event::Error { error } => panic!("{}", error.message),
+            _ => {}
+        }
+    }
+    let text = std::fs::read_to_string(&user_config).expect("config written");
+    assert!(text.contains("default = \"mock/tiny\""), "{text}");
+    engine.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_empty_reply_is_nudged_once() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(body_string_contains("Your last reply was empty"))
+        .respond_with(sse(&[
+            r#"{"choices":[{"delta":{"content":"Recovered."},"finish_reason":"stop"}]}"#,
+        ]))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(sse(&[
+            r#"{"choices":[{"delta":{"reasoning_content":"Hmm."},"finish_reason":"stop"}]}"#,
+        ]))
+        .mount(&server)
+        .await;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut engine = Engine::spawn(Arc::new(workspace(tmp.path(), &server.uri())));
+    engine
+        .submit(Op::UserTurn {
+            items: vec![InputItem::text("hello")],
+            overrides: TurnOverrides::default(),
+        })
+        .await;
+    let (mut text, mut warnings) = (String::new(), Vec::new());
+    loop {
+        match next(&mut engine.events).await {
+            Event::AssistantDelta { text: t } => text.push_str(&t),
+            Event::Warning { message } if message.contains("empty response") => {
+                warnings.push(message);
+            }
+            Event::TurnComplete { .. } => break,
+            Event::TurnAborted { reason, .. } => panic!("aborted: {reason}"),
+            _ => {}
+        }
+    }
+    assert_eq!(text, "Recovered.");
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    let requests: Vec<_> = server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|r| r.url.path().ends_with("/chat/completions"))
+        .collect();
+    assert_eq!(requests.len(), 2);
+    // The empty assistant message is not sent back.
+    let body: serde_json::Value = serde_json::from_slice(&requests[1].body).expect("json");
+    let roles: Vec<&str> = body["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .filter_map(|m| m["role"].as_str())
+        .collect();
+    assert_eq!(roles, ["user", "user"]);
     engine.shutdown().await;
 }

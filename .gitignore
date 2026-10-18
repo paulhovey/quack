@@ -71,3 +71,6 @@ $RECYCLE.BIN/
 /.cutoffharness/sessions/
 /.cutoffharness/checkpoints/
 /.cutoffharness/*.local.toml
+
+# Model downloads for the local-server CI jobs (scripts/local-server-ci.sh)
+.ci-models/

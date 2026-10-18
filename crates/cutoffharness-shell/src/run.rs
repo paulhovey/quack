@@ -55,7 +55,7 @@ pub async fn run(shell: &ShellKind, script: &str, opts: RunOptions) -> std::io::
     }
 
     let mut child = cmd.spawn()?;
-    let pid = child.id();
+    let tree = Tree::new(&child);
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
     if let Some(out) = child.stdout.take() {
         tokio::spawn(pump(out, tx.clone()));
@@ -116,12 +116,10 @@ pub async fn run(shell: &ShellKind, script: &str, opts: RunOptions) -> std::io::
         }
     }
 
+    // On exit too: reap anything the shell left running in the background.
+    tree.kill();
     if timed_out || cancelled || status.is_none() {
-        kill_tree(pid);
         let _ = child.kill().await;
-    } else {
-        // The shell exited; reap anything it left behind in its group.
-        kill_tree(pid);
     }
 
     Ok(RunResult {
@@ -147,24 +145,57 @@ async fn pump(mut r: impl AsyncRead + Unpin, tx: mpsc::UnboundedSender<Vec<u8>>)
     }
 }
 
-#[cfg(unix)]
-fn kill_tree(pid: Option<u32>) {
-    use nix::sys::signal::{Signal, killpg};
-    use nix::unistd::Pid;
-    if let Some(pid) = pid.and_then(|p| i32::try_from(p).ok()) {
-        // ESRCH (group already gone) is the normal case.
-        let _ = killpg(Pid::from_raw(pid), Signal::SIGKILL);
-    }
+/// The command's process tree: its process group on Unix, its Job Object on Windows.
+#[derive(Debug)]
+struct Tree {
+    pid: Option<u32>,
+    #[cfg(windows)]
+    job: Option<crate::job::Job>,
 }
 
-#[cfg(windows)]
-fn kill_tree(pid: Option<u32>) {
-    if let Some(pid) = pid {
-        let _ = std::process::Command::new("taskkill")
-            .args(["/T", "/F", "/PID", &pid.to_string()])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+impl Tree {
+    #[cfg(unix)]
+    fn new(child: &tokio::process::Child) -> Self {
+        Self { pid: child.id() }
+    }
+
+    #[cfg(windows)]
+    fn new(child: &tokio::process::Child) -> Self {
+        // A grandchild started in the instant before assignment escapes the job;
+        // `taskkill /T` below still finds it while its parent lives.
+        let job =
+            crate::job::Job::new().filter(|j| child.raw_handle().is_some_and(|h| j.assign(h)));
+        if job.is_none() {
+            tracing::debug!("no job object for this command; using taskkill");
+        }
+        Self {
+            pid: child.id(),
+            job,
+        }
+    }
+
+    #[cfg(unix)]
+    fn kill(&self) {
+        use nix::sys::signal::{Signal, killpg};
+        use nix::unistd::Pid;
+        if let Some(pid) = self.pid.and_then(|p| i32::try_from(p).ok()) {
+            // ESRCH (group already gone) is the normal case.
+            let _ = killpg(Pid::from_raw(pid), Signal::SIGKILL);
+        }
+    }
+
+    #[cfg(windows)]
+    fn kill(&self) {
+        if let Some(job) = &self.job {
+            return job.kill();
+        }
+        if let Some(pid) = self.pid {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/T", "/F", "/PID", &pid.to_string()])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
     }
 }
 
@@ -214,5 +245,18 @@ mod tests {
             .expect("runs");
         assert!(r.timed_out);
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    /// The job kills the shell and the `ping` it started (CI runs this on Windows).
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn timeout_kills_the_job() {
+        let sh = ShellKind::detect("cmd", None);
+        let started = std::time::Instant::now();
+        let r = run(&sh, "ping -n 30 127.0.0.1 > nul", opts(500))
+            .await
+            .expect("runs");
+        assert!(r.timed_out, "{r:?}");
+        assert!(started.elapsed() < Duration::from_secs(10));
     }
 }

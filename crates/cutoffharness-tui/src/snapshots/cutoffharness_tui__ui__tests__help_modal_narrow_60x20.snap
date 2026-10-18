@@ -1,6 +1,6 @@
 ---
 source: crates/cutoffharness-tui/src/ui.rs
-assertion_line: 524
+assertion_line: 559
 expression: "render(&app, 60, 20)"
 ---
 "╭ Help ────────────────────────────────────────────────────╮"
@@ -10,7 +10,7 @@ expression: "render(&app, 60, 20)"
 "││ /models                                                ││"
 "││ /providers                                          M1 ││"
 "││ /profiles                                           M2 ││"
-"││ /resume                                             M1 ││"
+"││ /resume                                                ││"
 "││ /new                                                   ││"
 "││ /rewind                                             M3 ││"
 "││ /undo                                               M3 ││"

@@ -6,7 +6,10 @@
 //! then keys locked by the system layer's `[policy]` are reset to the system value.
 
 mod diagnostic;
+mod edit;
 mod items;
+#[cfg(feature = "keyring")]
+mod keyring;
 mod list;
 mod load;
 mod merge;
@@ -19,6 +22,7 @@ pub mod settings;
 mod trust;
 
 pub use diagnostic::FileDiagnostic;
+pub use edit::{SettingRow, set_in_file};
 pub use items::{Item, ItemState, glob_match, load_dir_items, load_items};
 pub use load::{
     ConfigError, LayerReport, LayerStatus, LoadOptions, Loaded, Origin, ProjectStatus, load,
@@ -26,7 +30,7 @@ pub use load::{
 };
 pub use paths::{Dirs, Env, LayerKind, find_workspace_root};
 pub use provider::ProviderFile;
-pub use secret::{Secret, SecretError, expand_home};
+pub use secret::{Secret, SecretError, expand_home, keyring_delete, keyring_parts, keyring_set};
 pub use settings::Settings;
 pub use trust::TrustDecision;
 

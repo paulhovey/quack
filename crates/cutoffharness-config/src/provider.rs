@@ -232,7 +232,7 @@ impl ModelEntry {
 #[serde(default, deny_unknown_fields)]
 pub struct ToolCalling {
     pub mode: ToolCallMode,
-    /// `auto`, `hermes`, `qwen3-xml`, `mistral`, `glm`, `json-block`, `deepseek`, `kimi`.
+    /// `auto`, `hermes`, `qwen3-xml`, `glm`, `json-block`, `deepseek`, `kimi`.
     pub text_format: String,
     pub parallel: bool,
 }

@@ -11,6 +11,8 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::{ErrorKind, ProviderError};
+#[cfg(feature = "proto-ollama")]
+use crate::ollama;
 use crate::openai_chat::{self, ChunkParser};
 use crate::sse::SseDecoder;
 use crate::types::{ChatRequest, DiscoveredModel, StreamEvent};
@@ -18,10 +20,19 @@ use crate::types::{ChatRequest, DiscoveredModel, StreamEvent};
 /// Longest wait we honour from a `Retry-After` header.
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(60);
 
+/// Wire protocol of a provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Api {
+    OpenAiChat,
+    #[cfg(feature = "proto-ollama")]
+    Ollama,
+}
+
 #[derive(Debug, Clone)]
 pub struct Provider {
     pub id: String,
     pub file: ProviderFile,
+    api: Api,
     client: reqwest::Client,
     base_url: String,
     headers: HeaderMap,
@@ -36,15 +47,23 @@ impl Provider {
         env: Env<'_>,
     ) -> Result<Self, ProviderError> {
         let config = |msg: String| ProviderError::new(ErrorKind::Config, msg);
-        match file.api.as_str() {
-            "openai-chat" => {}
-            other @ ("openai-responses" | "anthropic-messages" | "ollama") => {
+        let api = match file.api.as_str() {
+            "openai-chat" => Api::OpenAiChat,
+            #[cfg(feature = "proto-ollama")]
+            "ollama" => Api::Ollama,
+            #[cfg(not(feature = "proto-ollama"))]
+            "ollama" => {
+                return Err(config(
+                    "this build has no `ollama` adapter; use `openai-chat` with `/v1`".into(),
+                ));
+            }
+            other @ ("openai-responses" | "anthropic-messages") => {
                 return Err(config(format!(
                     "api `{other}` is not implemented yet; use `openai-chat`"
                 )));
             }
             other => return Err(config(format!("unknown api `{other}`"))),
-        }
+        };
 
         let mut headers = HeaderMap::new();
         if let Some(key) = &file.api_key {
@@ -67,9 +86,16 @@ impl Provider {
         }
 
         let client = build_client(&file, network, env)?;
+        let base_url = match api {
+            Api::OpenAiChat => file.base_url.trim_end_matches('/'),
+            #[cfg(feature = "proto-ollama")]
+            Api::Ollama => ollama::native_base(&file.base_url),
+        }
+        .to_owned();
         Ok(Self {
             id: id.to_owned(),
-            base_url: file.base_url.trim_end_matches('/').to_owned(),
+            api,
+            base_url,
             file,
             client,
             headers,
@@ -80,24 +106,77 @@ impl Provider {
         format!("{}/{path}", self.base_url)
     }
 
-    /// Query the models endpoint.
-    pub async fn list_models(&self) -> Result<Vec<DiscoveredModel>, ProviderError> {
+    fn discovery_timeout(&self) -> Duration {
+        Duration::from_secs(self.file.http.timeout_connect_secs.max(1) * 3)
+    }
+
+    async fn get_json(&self, path: &str) -> Result<serde_json::Value, ProviderError> {
+        self.get_json_at(self.url(path)).await
+    }
+
+    async fn get_json_at(&self, url: String) -> Result<serde_json::Value, ProviderError> {
         let resp = self
             .client
-            .get(self.url(openai_chat::MODELS_PATH))
+            .get(url)
             .headers(self.headers.clone())
-            .timeout(Duration::from_secs(
-                self.file.http.timeout_connect_secs.max(1) * 3,
-            ))
+            .timeout(self.discovery_timeout())
             .send()
             .await
             .map_err(|e| ProviderError::from_reqwest(&e))?;
         let resp = check_status(resp).await?;
-        let body: serde_json::Value = resp
-            .json()
+        resp.json()
             .await
-            .map_err(|e| ProviderError::from_reqwest(&e))?;
-        Ok(openai_chat::parse_models(&body))
+            .map_err(|e| ProviderError::from_reqwest(&e))
+    }
+
+    /// Query the models endpoint.
+    pub async fn list_models(&self) -> Result<Vec<DiscoveredModel>, ProviderError> {
+        match self.api {
+            Api::OpenAiChat => {
+                let body = self.get_json(openai_chat::MODELS_PATH).await?;
+                let mut models = openai_chat::parse_models(&body);
+                // llama-server serves one model with the window it was started with.
+                if let [only] = models.as_mut_slice()
+                    && openai_chat::is_llama_cpp(&body)
+                {
+                    let root = self.base_url.strip_suffix("/v1").unwrap_or(&self.base_url);
+                    let props = format!("{root}/{}", openai_chat::LLAMA_CPP_PROPS_PATH);
+                    if let Ok(p) = self.get_json_at(props).await
+                        && let Some(n) = openai_chat::llama_cpp_window(&p)
+                    {
+                        only.context_window = Some(n);
+                    }
+                }
+                Ok(models)
+            }
+            #[cfg(feature = "proto-ollama")]
+            Api::Ollama => {
+                let names = ollama::parse_tags(&self.get_json(ollama::TAGS_PATH).await?);
+                // A local server: asking each model for its window is cheap.
+                let shown =
+                    futures::future::join_all(names.iter().map(|n| self.ollama_show(n))).await;
+                Ok(names
+                    .into_iter()
+                    .zip(shown)
+                    .map(|(name, trained)| ollama::discovered(name, trained))
+                    .collect())
+            }
+        }
+    }
+
+    #[cfg(feature = "proto-ollama")]
+    async fn ollama_show(&self, model: &str) -> Option<u32> {
+        let resp = self
+            .client
+            .post(self.url(ollama::SHOW_PATH))
+            .headers(self.headers.clone())
+            .timeout(self.discovery_timeout())
+            .json(&serde_json::json!({ "model": model }))
+            .send()
+            .await
+            .ok()?;
+        let body: serde_json::Value = check_status(resp).await.ok()?.json().await.ok()?;
+        ollama::parse_show(&body)
     }
 
     /// Start a streaming request. Events arrive on the returned channel; it closes after
@@ -125,14 +204,26 @@ impl Provider {
         reasoning: ReasoningFormat,
         tx: &mpsc::Sender<Result<StreamEvent, ProviderError>>,
     ) {
-        let body = openai_chat::build_body(&req);
+        let (path, body, accept) = match self.api {
+            Api::OpenAiChat => (
+                openai_chat::CHAT_PATH,
+                openai_chat::build_body(&req),
+                "text/event-stream",
+            ),
+            #[cfg(feature = "proto-ollama")]
+            Api::Ollama => (
+                ollama::CHAT_PATH,
+                ollama::build_body(&req),
+                "application/x-ndjson",
+            ),
+        };
         let mut attempt = 0;
         let resp = loop {
             let sent = self
                 .client
-                .post(self.url(openai_chat::CHAT_PATH))
+                .post(self.url(path))
                 .headers(self.headers.clone())
-                .header(reqwest::header::ACCEPT, "text/event-stream")
+                .header(reqwest::header::ACCEPT, accept)
                 .json(&body)
                 .send()
                 .await;
@@ -156,8 +247,14 @@ impl Provider {
         };
 
         // Once bytes flow we never retry: the user has already seen part of the answer.
-        let mut sse = SseDecoder::default();
-        let mut parser = ChunkParser::new(reasoning);
+        let mut wire = match self.api {
+            Api::OpenAiChat => Wire::Sse(SseDecoder::default(), ChunkParser::new(reasoning)),
+            #[cfg(feature = "proto-ollama")]
+            Api::Ollama => Wire::Lines(
+                ollama::LineDecoder::default(),
+                ollama::LineParser::new(reasoning),
+            ),
+        };
         let mut bytes = resp.bytes_stream();
         while let Some(chunk) = bytes.next().await {
             let chunk = match chunk {
@@ -167,20 +264,51 @@ impl Provider {
                     return;
                 }
             };
-            for data in sse.feed(&chunk) {
-                if !forward(parser.parse(&data), tx).await {
+            for parsed in wire.feed(&chunk) {
+                if !forward(parsed, tx).await {
                     return;
                 }
             }
         }
-        for data in sse.finish() {
-            if !forward(parser.parse(&data), tx).await {
+        for parsed in wire.finish() {
+            if !forward(parsed, tx).await {
                 return;
             }
         }
-        for ev in parser.finish() {
-            let _ = tx.send(Ok(ev)).await;
+    }
+}
+
+/// Framing plus parsing for each wire format.
+enum Wire {
+    Sse(SseDecoder, ChunkParser),
+    #[cfg(feature = "proto-ollama")]
+    Lines(ollama::LineDecoder, ollama::LineParser),
+}
+
+type Parsed = Result<Vec<StreamEvent>, ProviderError>;
+
+impl Wire {
+    fn feed(&mut self, bytes: &[u8]) -> Vec<Parsed> {
+        match self {
+            Self::Sse(d, p) => d.feed(bytes).iter().map(|x| p.parse(x)).collect(),
+            #[cfg(feature = "proto-ollama")]
+            Self::Lines(d, p) => d.feed(bytes).iter().map(|x| p.parse(x)).collect(),
         }
+    }
+
+    /// End of stream: trailing frames, then text the parser still holds.
+    fn finish(&mut self) -> Vec<Parsed> {
+        let mut out: Vec<Parsed> = match self {
+            Self::Sse(d, p) => d.finish().iter().map(|x| p.parse(x)).collect(),
+            #[cfg(feature = "proto-ollama")]
+            Self::Lines(d, p) => d.finish().iter().map(|x| p.parse(x)).collect(),
+        };
+        out.push(Ok(match self {
+            Self::Sse(_, p) => p.finish(),
+            #[cfg(feature = "proto-ollama")]
+            Self::Lines(_, p) => p.finish(),
+        }));
+        out
     }
 }
 

@@ -47,6 +47,72 @@ impl TextFormat {
     }
 }
 
+/// Openings of a text tool call, in any supported format.
+const MARKERS: &[&str] = &["<tool_call>", "<function="];
+
+/// Holds back streamed text from the first tool-call marker on, so a call printed as text
+/// is never shown raw. Whatever it hid comes back through the step's final content.
+#[derive(Debug, Default)]
+pub struct TextGate {
+    pending: String,
+    hiding: bool,
+    /// Pass everything through (`text_format = "none"`).
+    off: bool,
+}
+
+impl TextGate {
+    pub fn new(format: TextFormat) -> Self {
+        Self {
+            off: format == TextFormat::Off,
+            ..Self::default()
+        }
+    }
+
+    /// Text that is safe to show now.
+    pub fn feed(&mut self, delta: &str) -> String {
+        if self.off {
+            return delta.to_owned();
+        }
+        if self.hiding {
+            return String::new();
+        }
+        self.pending.push_str(delta);
+        if let Some(i) = MARKERS.iter().filter_map(|m| self.pending.find(m)).min() {
+            self.hiding = true;
+            let shown = self.pending[..i].to_owned();
+            self.pending.clear();
+            return shown;
+        }
+        // Keep back a tail that could be the start of a marker (markers are ASCII, so the
+        // cut is always on a character boundary).
+        let keep = MARKERS
+            .iter()
+            .map(|m| {
+                (1..m.len())
+                    .rev()
+                    .find(|k| self.pending.ends_with(&m[..*k]))
+                    .unwrap_or(0)
+            })
+            .max()
+            .unwrap_or(0);
+        let cut = self.pending.len() - keep;
+        self.pending.drain(..cut).collect()
+    }
+
+    /// The held-back tail at the end of the stream, unless it is part of a call.
+    pub fn finish(&mut self) -> String {
+        if self.off || self.hiding {
+            return String::new();
+        }
+        std::mem::take(&mut self.pending)
+    }
+
+    /// Whether some text was withheld because it looked like a tool call.
+    pub fn hid(&self) -> bool {
+        self.hiding
+    }
+}
+
 /// Extract text tool calls from `content`. Returns the content with the calls removed and
 /// the calls, or `None` when there are none.
 pub fn extract(
@@ -170,6 +236,30 @@ mod tests {
 
     fn args(c: &ToolCall) -> Value {
         serde_json::from_str(&c.arguments).unwrap_or_default()
+    }
+
+    #[test]
+    fn gate_hides_calls_split_across_deltas() {
+        let mut g = TextGate::new(TextFormat::Auto);
+        let mut shown = String::new();
+        for d in [
+            "Let me look.\n<to",
+            "ol_call>\n{\"name\"",
+            ": \"read\"}</tool_call>",
+        ] {
+            shown.push_str(&g.feed(d));
+        }
+        shown.push_str(&g.finish());
+        assert_eq!(shown, "Let me look.\n");
+        assert!(g.hid());
+
+        let mut g = TextGate::new(TextFormat::Auto);
+        let shown = g.feed("a < b and <fun") + &g.feed("ny stuff>") + &g.finish();
+        assert_eq!(shown, "a < b and <funny stuff>");
+        assert!(!g.hid());
+
+        let mut g = TextGate::new(TextFormat::Off);
+        assert_eq!(g.feed("<tool_call>"), "<tool_call>");
     }
 
     #[test]

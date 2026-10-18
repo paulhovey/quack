@@ -18,5 +18,12 @@ which = "8.0.6"
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31.3", default-features = false, features = ["signal"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+] }
+
 [lints]
 workspace = true

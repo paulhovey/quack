@@ -370,7 +370,7 @@ fn project_status(dirs: &Dirs, policy: ProjectConfigPolicy) -> ProjectStatus {
     }
 }
 
-fn parse_override(value: &str) -> Value {
+pub(crate) fn parse_override(value: &str) -> Value {
     toml::from_str::<Table>(&format!("v = {value}"))
         .ok()
         .and_then(|mut t| t.remove("v"))

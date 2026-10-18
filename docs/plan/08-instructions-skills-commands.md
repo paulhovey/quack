@@ -122,6 +122,21 @@ Review the output of `git diff --staged`. Focus: {{args | default("correctness")
 - MCP prompts appear as `/mcp:<server>:<prompt>` ([09](09-mcp.md)).
 - Built-in commands (`/models`, `/resume`, `/compact`, …) are code. A custom command with the same name is rejected, with a warning naming the file.
 
+## Bundles
+
+A bundle is a folder that groups skills, custom commands, `mcp.d`, `hooks.d` and `profiles.d` files under one name, so a team can ship them together:
+
+```
+corp-tools/
+  bundle.toml        # name, version, description; nothing else required
+  skills/  commands/  mcp.d/  hooks.d/  profiles.d/
+```
+
+- Installed by copying the folder into `<layer>/bundles/`; removed by deleting it. `/bundles` lists them and turns them on or off. There is no marketplace and no download command, which keeps the no-egress promise; companies distribute bundles the way they distribute other files.
+- Bundle contents load as if they were in the layer that holds the bundle, so trust rules apply unchanged: a bundle in an untrusted project does nothing until the project is trusted.
+- Name clashes: a file outside any bundle wins over a bundle's, and two bundles with the same item is a warning that names both.
+- Planned for M3, with skills and hooks.
+
 ## Open questions
 
 - Should skills declare `allowed-tools` that narrow permissions while they are active? Proposed: honour it if present (it is in the spec as experimental), and never let it *widen* permissions.

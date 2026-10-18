@@ -39,6 +39,8 @@ pub(crate) struct Setup {
     pub permissions: Permissions,
     /// Planned context budget in tokens, when the window is known.
     pub budget: Option<u32>,
+    /// Byte estimate corrected by this model's reported usage.
+    pub estimator: std::sync::Mutex<cutoffharness_providers::tokens::Estimator>,
 }
 
 /// What startup resolved, for the engine's use.
@@ -588,6 +590,7 @@ async fn build_setup(
         tool_ctx,
         permissions,
         budget,
+        estimator: std::sync::Mutex::default(),
     })
 }
 

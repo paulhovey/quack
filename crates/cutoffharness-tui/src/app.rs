@@ -1,11 +1,11 @@
 use std::time::{Duration, Instant};
 
 use crossterm::event::{Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use cutoffharness_config::Loaded;
 use cutoffharness_config::settings::{StartupPanel, UiSettings};
+use cutoffharness_config::{LayerStatus, Loaded, SettingRow};
 use cutoffharness_protocol::{
     ApprovalDecision, ApprovalRequest, CallId, Event, InputItem, LoadState, ModelId, Op,
-    ProviderId, ReplayItem, Subsystem, TurnOverrides,
+    ProviderId, ReplayItem, SessionId, Subsystem, TurnOverrides, WriteScope,
 };
 
 use crate::commands::{self, COMMANDS, Command};
@@ -28,6 +28,10 @@ pub struct AppInfo {
     pub permission_mode: String,
     pub ui: UiSettings,
     pub no_color: bool,
+    /// Effective settings for `/config`.
+    pub settings: Vec<SettingRow>,
+    /// `(layer, status and file)` rows for `/config`.
+    pub layers: Vec<(String, String)>,
 }
 
 impl AppInfo {
@@ -47,6 +51,23 @@ impl AppInfo {
             permission_mode: config.settings.permissions.mode.label().to_owned(),
             ui: config.settings.ui.clone(),
             no_color: std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()),
+            settings: config.setting_rows(),
+            layers: config
+                .layers
+                .iter()
+                .map(|l| {
+                    let status = match &l.status {
+                        LayerStatus::Loaded => "loaded".to_owned(),
+                        LayerStatus::Missing => "no config.toml".to_owned(),
+                        LayerStatus::Failed => "failed to parse (see config check)".to_owned(),
+                        LayerStatus::Skipped(why) => format!("skipped: {why}"),
+                    };
+                    let file = l.dir.as_ref().map_or_else(String::new, |d| {
+                        format!("\n{}", d.join("config.toml").display())
+                    });
+                    (l.kind.label().to_owned(), format!("{status}{file}"))
+                })
+                .collect(),
         }
     }
 }
@@ -100,6 +121,8 @@ pub struct App {
     /// `(used, budget)` tokens from the last response.
     pub(crate) context: Option<(u32, u32)>,
     panel_collapsed: bool,
+    /// A `/resume` is in flight: clear the transcript when it lands.
+    resuming: bool,
     frame: u64,
     dirty: bool,
     quit: bool,
@@ -128,6 +151,7 @@ impl App {
             approval: None,
             context: None,
             panel_collapsed: false,
+            resuming: false,
             frame: 0,
             dirty: true,
             quit: false,
@@ -242,7 +266,22 @@ impl App {
                     ));
                 }
             }
+            Event::SessionList { sessions } => {
+                if self.modal.as_ref().is_some_and(|m| m.title == "Sessions") {
+                    self.modal = Some(modal::sessions(Some(&sessions), &self.theme));
+                }
+            }
+            Event::SettingSaved {
+                key,
+                value,
+                path,
+                note,
+            } => self.on_setting_saved(&key, &value, &path, note),
             Event::SessionResumed { session, items } => {
+                if std::mem::take(&mut self.resuming) {
+                    self.transcript.clear();
+                    self.context = None;
+                }
                 self.panel_collapsed = true;
                 let short: String = session.id.0.chars().take(12).collect();
                 self.note(format!("resumed session {short} ({} entries)", items.len()));
@@ -510,6 +549,10 @@ impl App {
     fn run_command(&mut self, cmd: &Command, args: &str) {
         self.popup_selected = 0;
         match cmd.name {
+            "models" if args.starts_with("default ") => {
+                let reference = args["default ".len()..].trim();
+                self.save_setting("model.default", &toml_string(reference));
+            }
             "models" if !args.is_empty() => match args.split_once('/') {
                 Some((provider, model)) if !provider.is_empty() && !model.is_empty() => {
                     self.note(format!("switching to {args}…"));
@@ -524,12 +567,50 @@ impl App {
                 self.modal = Some(modal::models(None, self.info.model.as_deref(), &self.theme));
                 self.ops.push(Op::ListModels);
             }
+            "resume" if !args.is_empty() => {
+                self.resuming = true;
+                self.ops.push(Op::ResumeSession {
+                    id: SessionId(args.to_owned()),
+                });
+            }
+            "resume" => {
+                self.modal = Some(modal::sessions(None, &self.theme));
+                self.ops.push(Op::ListSessions);
+            }
+            "new" => {
+                if self.turn_running {
+                    return self.note("wait for the current turn to finish first".into());
+                }
+                self.transcript.clear();
+                self.context = None;
+                self.ops.push(Op::NewSession);
+                self.note("new session; the previous one is saved (/resume)".into());
+            }
+            "title" if args.is_empty() => self.note("usage: /title <text>".into()),
+            "title" => {
+                self.ops.push(Op::SetTitle {
+                    title: args.to_owned(),
+                });
+                self.note(format!("session renamed to “{args}”"));
+            }
+            "config" if args.is_empty() => {
+                self.modal = Some(modal::config(
+                    &self.info.settings,
+                    &self.info.layers,
+                    &self.theme,
+                ));
+            }
+            "config" => {
+                let rest = args.strip_prefix("set").map(str::trim_start);
+                match rest.and_then(|r| r.split_once(char::is_whitespace)) {
+                    Some((key, value)) if !value.trim().is_empty() => {
+                        self.save_setting(key, value.trim());
+                    }
+                    _ => self.note("usage: /config set <key> <value>".into()),
+                }
+            }
             "help" => self.modal = Some(modal::help(&self.theme)),
             "quit" => self.quit = true,
-            "new" => {
-                self.transcript.clear();
-                self.note("new session (sessions are saved from M1)".into());
-            }
             name => self.note(format!(
                 "/{name} is planned for {}",
                 cmd.pending.unwrap_or("a later milestone")
@@ -540,6 +621,55 @@ impl App {
     fn note(&mut self, text: String) {
         self.transcript.push(Entry::System(text));
     }
+
+    fn save_setting(&mut self, key: &str, value: &str) {
+        self.ops.push(Op::SaveSetting {
+            key: key.to_owned(),
+            value: value.to_owned(),
+            scope: WriteScope::User,
+        });
+    }
+
+    fn on_setting_saved(&mut self, key: &str, value: &str, path: &str, note: Option<String>) {
+        // Settings the UI owns apply now; the rest on the next start.
+        let live = match key {
+            "ui.ascii" => {
+                self.info.ui.ascii = value == "true";
+                self.glyphs = Glyphs::new(self.info.ui.ascii);
+                true
+            }
+            "ui.reduced_motion" => {
+                self.info.ui.reduced_motion = value == "true";
+                true
+            }
+            "ui.theme" => {
+                self.info.ui.theme = value.trim_matches('"').to_owned();
+                self.theme = Theme::resolve(&self.info.ui.theme, self.info.no_color);
+                true
+            }
+            _ => false,
+        };
+        if let Some(row) = self.info.settings.iter_mut().find(|r| r.key == key) {
+            row.value = value.to_owned();
+            row.origin = format!("user: {path}");
+        }
+        let when = if live {
+            ""
+        } else {
+            " (takes effect on the next start)"
+        };
+        let mut text = format!("saved {key} = {value} to {path}{when}");
+        if let Some(n) = note {
+            text.push_str("; ");
+            text.push_str(&n);
+        }
+        self.note(text);
+    }
+}
+
+/// A TOML string literal, so ids like `true` or `1.5` stay strings.
+fn toml_string(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 #[cfg(test)]
@@ -558,6 +688,8 @@ mod tests {
             permission_mode: "ask".into(),
             ui: UiSettings::default(),
             no_color: false,
+            settings: Vec::new(),
+            layers: Vec::new(),
         }
     }
 
@@ -661,6 +793,118 @@ mod tests {
                 model: ModelId("qwen3.8-flash".into()),
             }]
         );
+    }
+
+    #[test]
+    fn models_modal_ctrl_s_saves_default() {
+        use cutoffharness_protocol::{ModelInfo, ProviderModels};
+        let mut app = App::new(info());
+        type_str(&mut app, "/models");
+        press(&mut app, KeyCode::Enter);
+        app.take_ops();
+        app.on_engine(Event::ModelCatalog {
+            providers: vec![ProviderModels {
+                id: "charm".into(),
+                available: true,
+                note: String::new(),
+                models: vec![ModelInfo {
+                    id: "true".into(),
+                    alias: None,
+                    context_window: None,
+                }],
+            }],
+            current: None,
+        });
+        app.on_terminal(TermEvent::Key(KeyEvent::new(
+            KeyCode::Char('s'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(app.modal.is_none());
+        assert_eq!(
+            app.take_ops(),
+            vec![Op::SaveSetting {
+                key: "model.default".into(),
+                value: "\"charm/true\"".into(),
+                scope: WriteScope::User,
+            }]
+        );
+        app.on_engine(Event::SettingSaved {
+            key: "model.default".into(),
+            value: "\"charm/true\"".into(),
+            path: "/u/config.toml".into(),
+            note: None,
+        });
+        assert!(
+            matches!(app.transcript.last(), Some(Entry::System(t)) if t.contains("next start"))
+        );
+    }
+
+    #[test]
+    fn resume_picker_switches_and_replaces_transcript() {
+        use cutoffharness_protocol::{SessionInfo, SessionSummary};
+        let mut app = App::new(info());
+        app.transcript.push(Entry::User("old".into()));
+        type_str(&mut app, "/resume");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.take_ops(), vec![Op::ListSessions]);
+        let summary = |id: &str, title: &str, current| SessionSummary {
+            id: SessionId(id.into()),
+            title: title.into(),
+            model: "charm/x".into(),
+            turns: 2,
+            age: "1h ago".into(),
+            started: "2026-10-17".into(),
+            current,
+        };
+        app.on_engine(Event::SessionList {
+            sessions: vec![
+                summary("aaa", "now", true),
+                summary("bbb", "fix the parser", false),
+            ],
+        });
+        type_str(&mut app, "parser");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(
+            app.take_ops(),
+            vec![Op::ResumeSession {
+                id: SessionId("bbb".into())
+            }]
+        );
+        app.on_engine(Event::SessionResumed {
+            session: SessionInfo {
+                id: SessionId("bbb".into()),
+                cwd: String::new(),
+                model: None,
+                profile: "generic".into(),
+            },
+            items: vec![ReplayItem::User {
+                text: "fix it".into(),
+            }],
+        });
+        assert!(!app.transcript.contains(&Entry::User("old".into())));
+        assert!(app.transcript.contains(&Entry::User("fix it".into())));
+    }
+
+    #[test]
+    fn config_set_saves_to_user_layer_and_applies_ui_live() {
+        let mut app = App::new(info());
+        type_str(&mut app, "/config set ui.ascii true");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(
+            app.take_ops(),
+            vec![Op::SaveSetting {
+                key: "ui.ascii".into(),
+                value: "true".into(),
+                scope: WriteScope::User,
+            }]
+        );
+        app.on_engine(Event::SettingSaved {
+            key: "ui.ascii".into(),
+            value: "true".into(),
+            path: "/u/config.toml".into(),
+            note: None,
+        });
+        assert!(app.info.ui.ascii);
     }
 
     #[test]

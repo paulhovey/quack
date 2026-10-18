@@ -218,7 +218,7 @@ impl ChunkParser {
     }
 }
 
-fn piece_event(p: Piece) -> StreamEvent {
+pub(crate) fn piece_event(p: Piece) -> StreamEvent {
     match p {
         Piece::Text(t) => StreamEvent::TextDelta(t),
         Piece::Reasoning(r) => StreamEvent::ReasoningDelta(r),
@@ -238,6 +238,26 @@ fn parse_usage(u: &Value) -> Usage {
             .or_else(|| num("/cached_tokens"))
             .or_else(|| num("/prompt_cache_hit_tokens")),
     }
+}
+
+/// llama.cpp's server info, at the server root rather than under `/v1`.
+pub(crate) const LLAMA_CPP_PROPS_PATH: &str = "props";
+
+/// A `/models` response from llama.cpp's `llama-server` (`owned_by: "llamacpp"`).
+pub(crate) fn is_llama_cpp(body: &Value) -> bool {
+    body.get("data")
+        .and_then(Value::as_array)
+        .is_some_and(|d| d.iter().any(|m| m["owned_by"] == "llamacpp"))
+}
+
+/// The window llama.cpp actually serves (`-c`, per slot), which `/models` doesn't report:
+/// there `meta.n_ctx_train` is the trained window, often far larger.
+pub(crate) fn llama_cpp_window(props: &Value) -> Option<u32> {
+    props
+        .pointer("/default_generation_settings/n_ctx")
+        .and_then(Value::as_u64)
+        .and_then(|n| u32::try_from(n).ok())
+        .filter(|&n| n > 0)
 }
 
 /// Parse a `/models` response. Context sizes go by different names per server.
@@ -284,6 +304,18 @@ pub(crate) fn parse_models(body: &Value) -> Vec<DiscoveredModel> {
 mod tests {
     use super::*;
     use crate::types::{ResponseBuilder, ToolCall, ToolSpec};
+
+    #[test]
+    fn llama_cpp_serves_less_than_it_was_trained_on() {
+        let models = serde_json::json!({"data":[{"id":"/models/q.gguf","owned_by":"llamacpp","meta":{"n_ctx_train":262144}}]});
+        assert!(is_llama_cpp(&models));
+        assert_eq!(parse_models(&models)[0].context_window, Some(262_144));
+        let props = serde_json::json!({"default_generation_settings":{"n_ctx":16384}});
+        assert_eq!(llama_cpp_window(&props), Some(16384));
+        assert!(!is_llama_cpp(
+            &serde_json::json!({"data":[{"id":"m","owned_by":"vllm"}]})
+        ));
+    }
 
     #[test]
     fn body_shape() {

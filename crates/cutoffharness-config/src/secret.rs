@@ -2,7 +2,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// A secret value. Secrets never have to be written into TOML in plain text.
-/// Resolution (running `cmd`, reading the keyring) lands with the providers in M1.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum Secret {
@@ -18,6 +17,8 @@ pub enum Secret {
     Cmd {
         cmd: Vec<String>,
     },
+    /// OS credential store entry `"<service>/<user>"`, or `"<user>"` under the
+    /// `cutoffharness` service. Store one with `cutoffharness keyring set <name>`.
     Keyring {
         keyring: String,
     },
@@ -39,8 +40,10 @@ pub enum SecretError {
     File { path: String, reason: String },
     #[error("command `{cmd}` failed: {reason}")]
     Cmd { cmd: String, reason: String },
-    #[error("keyring secrets are not supported yet (use `env`, `file` or `cmd`)")]
+    #[error("this build has no keyring support (use `env`, `file` or `cmd`)")]
     KeyringUnsupported,
+    #[error("keyring `{name}`: {reason}")]
+    Keyring { name: String, reason: String },
     #[error("`{0}` resolved to an empty value")]
     Empty(String),
 }
@@ -93,13 +96,70 @@ impl Secret {
                     format!("cmd {shown}"),
                 )
             }
-            Self::Keyring { .. } => return Err(SecretError::KeyringUnsupported),
+            Self::Keyring { keyring } => (keyring_get(keyring)?, format!("keyring {keyring}")),
         };
         if value.is_empty() {
             return Err(SecretError::Empty(source));
         }
         Ok(value)
     }
+}
+
+/// `"<service>/<user>"` or `"<user>"` → `(service, user)`.
+pub fn keyring_parts(name: &str) -> (&str, &str) {
+    match name.split_once('/') {
+        Some((service, user)) if !service.is_empty() && !user.is_empty() => (service, user),
+        _ => (crate::APP_NAME, name),
+    }
+}
+
+#[cfg(feature = "keyring")]
+fn keyring_error(name: &str) -> impl Fn(String) -> SecretError + '_ {
+    move |reason| SecretError::Keyring {
+        name: name.to_owned(),
+        reason,
+    }
+}
+
+#[cfg(feature = "keyring")]
+fn keyring_get(name: &str) -> Result<String, SecretError> {
+    let (service, user) = keyring_parts(name);
+    crate::keyring::get(service, user)
+        .map_err(keyring_error(name))?
+        .ok_or_else(|| {
+            keyring_error(name)(format!(
+                "nothing stored; run `cutoffharness keyring set {name}`"
+            ))
+        })
+}
+
+#[cfg(not(feature = "keyring"))]
+fn keyring_get(_name: &str) -> Result<String, SecretError> {
+    Err(SecretError::KeyringUnsupported)
+}
+
+/// Store a secret in the OS credential store.
+#[cfg(feature = "keyring")]
+pub fn keyring_set(name: &str, value: &str) -> Result<(), SecretError> {
+    let (service, user) = keyring_parts(name);
+    crate::keyring::set(service, user, value).map_err(keyring_error(name))
+}
+
+#[cfg(not(feature = "keyring"))]
+pub fn keyring_set(_name: &str, _value: &str) -> Result<(), SecretError> {
+    Err(SecretError::KeyringUnsupported)
+}
+
+/// Remove a secret from the OS credential store.
+#[cfg(feature = "keyring")]
+pub fn keyring_delete(name: &str) -> Result<(), SecretError> {
+    let (service, user) = keyring_parts(name);
+    crate::keyring::delete(service, user).map_err(keyring_error(name))
+}
+
+#[cfg(not(feature = "keyring"))]
+pub fn keyring_delete(_name: &str) -> Result<(), SecretError> {
+    Err(SecretError::KeyringUnsupported)
 }
 
 /// Expand a leading `~` to the home directory (`%USERPROFILE%` on Windows).
@@ -120,6 +180,33 @@ pub fn expand_home(path: &str, env: Env<'_>) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Uses the real OS store, so it only runs on request:
+    /// `cargo test -p cutoffharness-config --features keyring -- --ignored keyring`.
+    #[cfg(feature = "keyring")]
+    #[test]
+    #[ignore = "touches the OS credential store"]
+    fn keyring_round_trip() {
+        let name = "cutoffharness-selftest/round-trip";
+        keyring_set(name, "dummy-value").expect("set");
+        let secret = Secret::Keyring {
+            keyring: name.into(),
+        };
+        let got = secret.resolve(&|_| None);
+        keyring_delete(name).expect("delete");
+        assert_eq!(got.as_deref(), Ok("dummy-value"));
+        assert!(matches!(
+            secret.resolve(&|_| None),
+            Err(SecretError::Keyring { .. })
+        ));
+    }
+
+    #[test]
+    fn keyring_names() {
+        assert_eq!(keyring_parts("corp/vllm"), ("corp", "vllm"));
+        assert_eq!(keyring_parts("novita"), ("cutoffharness", "novita"));
+        assert_eq!(keyring_parts("/x"), ("cutoffharness", "/x"));
+    }
     use std::ffi::OsString;
 
     #[test]

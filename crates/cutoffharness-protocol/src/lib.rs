@@ -36,8 +36,22 @@ pub enum Op {
     Undo {
         checkpoint: Option<CheckpointId>,
     },
+    /// Switch to a saved session (the current one stays saved).
     ResumeSession {
         id: SessionId,
+    },
+    /// Start a fresh session (the current one stays saved).
+    NewSession,
+    /// Ask for this project's saved sessions; answered with `Event::SessionList`.
+    ListSessions,
+    SetTitle {
+        title: String,
+    },
+    /// Write a setting to a layer's `config.toml`. `value` is TOML, falling back to a string.
+    SaveSetting {
+        key: String,
+        value: String,
+        scope: WriteScope,
     },
     ForkSession {
         at: EventIndex,
@@ -69,6 +83,18 @@ pub enum Event {
     SessionResumed {
         session: SessionInfo,
         items: Vec<ReplayItem>,
+    },
+    /// This project's saved sessions, most recent first.
+    SessionList {
+        sessions: Vec<SessionSummary>,
+    },
+    /// A setting was written to `path`; `note` says if something still overrides it.
+    SettingSaved {
+        key: String,
+        value: String,
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
     },
     ShutdownComplete,
     // turn
@@ -216,6 +242,20 @@ pub struct ModelInfo {
     pub alias: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionSummary {
+    pub id: SessionId,
+    pub title: String,
+    pub model: String,
+    pub turns: u32,
+    /// Human age of the last update, e.g. `3h ago`.
+    pub age: String,
+    /// Start date, `YYYY-MM-DD`.
+    pub started: String,
+    /// The session this client is in.
+    pub current: bool,
 }
 
 /// A transcript entry of a resumed session.

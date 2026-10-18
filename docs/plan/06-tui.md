@@ -41,9 +41,11 @@ The panel is drawn at the top of the transcript area during startup. It collapse
 ├ input ─────────────────────────────────────────────────────────────────┤
 │ > _                                                                   │
 ├ status ────────────────────────────────────────────────────────────────┤
-│ corp-vllm/qwen3-coder · qwen-code · ask · 41.2k/220k (88% cached) · ⚠1│
+│ corp-vllm/qwen3-coder · qwen-code · ask · 41.2k/220k (88% cached) · 63 t/s │
 └────────────────────────────────────────────────────────────────────────┘
 ```
+
+Speed in the status bar: local and on-prem users care more about speed than dollars. The status bar shows the last response's generation speed (tokens per second, from server timings when reported, otherwise measured), and a details line in `/context` shows prompt processing time, time to first token and cache hits. Cost is shown only when a provider file declares prices.
 
 ## Slash commands & modals
 
@@ -91,7 +93,9 @@ All configuration UIs share one modal widget, so they look and behave the same:
 | `/new` | `/clear` | Start a fresh session (the current one stays saved) |
 | `/rewind` | (Esc Esc) | Pick an earlier user message. Choose conversation / files / both |
 | `/undo` | | Revert the last mutating tool call's file changes |
-| `/fork` | | Branch the session from here |
+| `/fork` | | Branch the session from here. `--worktree` runs the branch in its own git worktree ([07](07-sessions-memory-checkpoints.md#parallel-sessions-in-worktrees)) |
+| `/plan` | | Enter plan mode: read-only exploration ending in a plan to accept or revise ([04](04-agent-loop-and-tools.md#plan-mode)) |
+| `/bundles` | | Installed bundles with their contents; turn each on or off ([08](08-instructions-skills-commands.md#bundles)) |
 | `/title <text>` | | Rename the session |
 | `/export [md\|json]` | | Write transcript to a file |
 | `/compact [focus]` | | Compact now, with optional focus instructions |

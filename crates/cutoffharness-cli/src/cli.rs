@@ -38,6 +38,9 @@ pub(crate) struct Global {
     /// Permission mode for this run; shorthand for -c permissions.mode=MODE.
     #[arg(long, global = true, value_enum)]
     pub permission_mode: Option<PermissionModeArg>,
+    /// Draw the first frame, write startup timings as JSON to FILE, and exit.
+    #[arg(long, hide = true, value_name = "FILE")]
+    pub trace_startup: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -74,6 +77,11 @@ pub(crate) enum Cmd {
     Sessions,
     /// Check the environment: config, directories, terminal.
     Doctor,
+    /// Store or remove API keys in the OS credential store, for `api_key = { keyring = "…" }`.
+    Keyring {
+        #[command(subcommand)]
+        cmd: KeyringCmd,
+    },
     /// Run as a Zed Agent Client Protocol agent on stdio.
     #[cfg(feature = "acp")]
     Acp,
@@ -102,6 +110,17 @@ impl From<Format> for cutoffharness_exec::OutputFormat {
             Format::StreamJson => Self::StreamJson,
         }
     }
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum KeyringCmd {
+    /// Store a secret. Reads it hidden from the terminal, or from stdin when piped.
+    Set {
+        /// `<service>/<user>`, or `<user>` under the `cutoffharness` service.
+        name: String,
+    },
+    /// Remove a stored secret.
+    Delete { name: String },
 }
 
 #[derive(Debug, Subcommand)]

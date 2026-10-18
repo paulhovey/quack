@@ -79,7 +79,7 @@ cache_strategy = "auto"        # preserve | aggressive | auto   → 05-context
 compaction_threshold = 0.80
 
 [tools]
-edit_format = "auto"           # auto (from profile/model) | str_replace | apply_patch | whole_file
+edit_format = "auto"           # auto (from profile/model) | str_replace | apply_patch | whole_file | hashline
 shell = "auto"                 # auto | bash | zsh | pwsh | powershell | cmd | <path>
 default_timeout_secs = 120
 
@@ -132,12 +132,12 @@ Secrets never have to be written into TOML. Supported value forms for any secret
 ```toml
 api_key = { env = "CORP_LLM_KEY" }
 api_key = { cmd = ["pass", "show", "llm/corp"] }          # stdout, trimmed, cached for session
-api_key = { keyring = "cutoffharness/corp-vllm" }               # OS keyring
+api_key = { keyring = "corp-vllm" }                       # OS keyring (`<service>/<user>` or `<user>`)
 api_key = { file = "~/.secrets/llm-key" }
 api_key = "sk-..."                                        # allowed, but warns if file is world-readable / in a git repo
 ```
 
-`cmd` forms run only from system/user layers, or from trusted project layers. The `cutoffharness auth set <provider>` command writes to the keyring.
+`cmd` forms run only from system/user layers, or from trusted project layers. `cutoffharness keyring set <name>` stores a key (typed hidden, or piped on stdin) and `cutoffharness keyring delete <name>` removes it. A bare name lives under the `cutoffharness` service. The stores are Credential Manager on Windows, Keychain on macOS, and the Secret Service elsewhere. The Secret Service is reached through the `secret-tool` program (package `libsecret-tools` on Debian/Ubuntu, `libsecret` on Fedora/Arch) rather than a compiled-in D-Bus stack, which would add about 130 crates; when `secret-tool` is missing the error says which package to install. Keyring support is the `keyring` build feature, on by default; builds without it report keyring secrets as unsupported.
 
 ## Tooling
 
@@ -145,6 +145,10 @@ api_key = "sk-..."                                        # allowed, but warns i
 - `cutoffharness config show [--layer] [--origin]` prints the effective config, with the source file of each value.
 - `cutoffharness config schema [--dir DIR]` writes JSON Schema files (via `schemars`) for config, providers, profiles, MCP, LSP, hooks and `compat.toml` into `<user config>/schemas/` (or `DIR`). Kinds not yet implemented get permissive stubs. Default TOML files carry a **relative** `#:schema ../schemas/<kind>.json` line, so taplo and VS Code offer completion without fetching anything from the network. The defaults bundle ships the schema files too.
 - `cutoffharness doctor` checks config, provider reachability, tokenizer availability, MCP/LSP binaries on PATH, terminal capabilities, and Windows-specific items (VT support, PowerShell version, long paths).
+
+## Editing from the UI
+
+`/config` lists every setting with its effective value, its origin (default, a layer file, env or CLI) and its schema description. Enter flips a boolean, or puts `/config set <key> <value>` in the input to edit. `/models` saves a default model with Ctrl-S. Both write to the user layer's `config.toml` through `toml_edit`, so comments and layout survive. The edit is validated against the schema before anything is written, and the file is replaced atomically. Keys locked by policy are refused. If a higher layer, an environment variable or a CLI flag still overrides the key, the confirmation says so. `ui.*` changes apply at once; the rest apply on the next start.
 
 ## Hot reload
 

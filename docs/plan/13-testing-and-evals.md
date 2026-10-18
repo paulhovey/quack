@@ -15,7 +15,7 @@
 ## Invariant tests (must never regress)
 
 - **Prefix stability**: for each default profile, render a session of N simulated turns. The system prompt and tool block must be byte-identical across turns, and must change only at epoch boundaries ([05](05-context-management.md)).
-- **No egress**: run startup + 3 turns with a mock provider in an environment where every outbound connection except the mock fails and is recorded. Assert zero attempts. Run once with `offline = true` and once with defaults.
+- **No egress**: run startup + 3 turns with a mock provider in an environment where every outbound connection except the mock fails and is recorded. Assert zero attempts. Run once with `offline = true` and once with defaults. Implemented twice: in-process, with all provider traffic sent through a recording proxy that refuses anything but the mock; and on Linux CI with `scripts/no-egress.sh`, which runs the tests in a loopback-only network namespace under `strace -e connect`, so connections from any code (DNS included) are caught, not just our HTTP client.
 - **No built-ins**: assert that the release binary contains no provider ids, base URLs or MCP commands. Scan the binary strings for the hostnames in `defaults/` as a smoke check.
 - **Resume fidelity**: for recorded sessions with prunes and compactions, the replayed context equals the context logged at the time.
 - **Removal**: delete each default file one at a time. Startup must succeed, with only that item missing.
@@ -25,7 +25,7 @@
 
 | Metric | Budget | How |
 |---|---|---|
-| Time to first frame | < 50 ms (Linux CI), < 120 ms (Windows CI) | `--trace-startup` JSON, median of 10 runs |
+| Time to first frame | < 50 ms (Linux CI), < 120 ms (Windows CI) | `--trace-startup <file>` (hidden flag: draws one frame, writes JSON, exits), median of 10 runs in a PTY: `scripts/first-frame.sh`. Measured from the top of `main`, so process creation is not included |
 | Idle CPU | ~0% | sample after startup with no input |
 | Streaming render | ≥ 500 tok/s without dropped frames | mock provider at fixed rate, measure frame times |
 | Memory, idle | < 60 MB RSS | |
@@ -50,6 +50,14 @@ Pass rate, steps per task, tokens per task (prompt / cached / completion), wall 
 - `evals/results/<date>/<server>-<model>-<profile>.json`
 - `docs/compat.md`: a generated table of model × profile × server with pass rate and notes. Its results set default profile `[match]` priorities ([03](03-model-profiles.md#evaluating-profiles)) and default `tool_calling` / `edit_format` values in `defaults/providers.d/*.toml`.
 
+### Publishing results
+
+The compatibility table is a headline feature, not an internal report: it answers the first question every open-model user has ("will my model work, and with which settings?").
+- `docs/compat.md` and a page on the project site list model × quantization × server × profile with pass rate, steps per task and tokens per task, plus the date and harness version.
+- `cutoffharness eval --submit-file` writes a self-contained result file (no secrets, no prompts from private repos) that users can attach to a PR. Community results are marked as such and kept apart from CI results.
+- The default provider and profile files link to the matching rows.
+- Results are produced locally; nothing is uploaded by the harness.
+
 ### Recording fixtures
 
 `cutoffharness debug record --model … --prompt …` saves the raw request/response SSE to the fixture directory, with secrets stripped. Every bug report about a parse failure should end up as a fixture.
@@ -57,6 +65,6 @@ Pass rate, steps per task, tokens per task (prompt / cached / completion), wall 
 ## CI
 
 - PR: fmt, clippy (`-D warnings`), unit + snapshot + integration on Linux x64, macOS ARM64, Windows x64 and **Windows ARM64** (GitHub-hosted `windows-11-arm` runner), plus `cargo-deny`, invariant tests and the startup budget.
-- **Local-server protocol coverage without a GPU**: a Linux CI job runs `llama-server` and Ollama in Docker on **CPU** with tiny models (e.g. Qwen3-0.6B/1.7B GGUF). These models are too small to measure quality, but large enough to exercise streaming, tool-call templates, `/tokenize`, `/props`, `num_ctx`, and prefix-cache reuse (`cached_tokens`/timings). This covers the local adapters even though day-to-day manual testing uses hosted services.
+- **Local-server protocol coverage without a GPU**: a Linux CI job runs `llama-server` and Ollama in Docker on **CPU** with a tiny current model (Qwen3.5-0.8B: GGUF Q4_K_M for llama.cpp, `qwen3.5:0.8b` for Ollama). `scripts/local-server-ci.sh <llama-cpp|ollama>` starts the pinned server image, and `scripts/local-server-turn.sh` asks the model to read a file and reply with the number in it; the job passes when `read` was called and the answer has the number (3 attempts, since tiny models are erratic). It runs locally with `DOCKER=podman`. These models are too small to measure quality, but large enough to exercise streaming, tool-call templates, `/tokenize`, `/props`, `num_ctx`, and prefix-cache reuse (`cached_tokens`/timings). This covers the local adapters even though day-to-day manual testing uses hosted services.
 - Nightly: E2E PTY tests, fuzzing of parsers (`cargo-fuzz`, 10 min), an eval run against a hosted open-model service (key from CI secrets, small task subset, budget-capped), and a GPU runner later if one becomes available.
 - Release: see [14](14-packaging-and-distribution.md).

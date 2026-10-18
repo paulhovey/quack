@@ -23,6 +23,14 @@ Op::UserTurn
   └─ 8. loop to step 2 until: no tool calls | max_steps | interrupt | fatal error
 ```
 
+### Plan mode
+
+`/plan` (or Shift-Tab to `plan`) runs turns with the `read-only` permission set plus `todo` and `ask_user`, and a short system addendum asking for a plan instead of changes. The plan is shown as a reviewable message; **Accept** switches back to the previous mode and sends "carry out the plan" as the next turn, **Revise** keeps planning. The plan is stored in the session so `/resume` restores it. The addendum is appended at the end of the prompt, not the start, to keep the cached prefix ([05](05-context-management.md#stable-prefix-layout)).
+
+### Planner / editor split
+
+`[model] planner = "<provider/model>"` (optional) lets a larger model write the plan and the default model carry it out, or the reverse (a hosted model edits from a plan written by an on-prem one). The planner gets only read-only tools. This builds on the existing `small` role; nothing changes when `planner` is unset.
+
 ### Loop guards
 
 - `max_steps_per_turn` (default 100), configurable. When reached, the loop pauses and asks the user whether to continue.
@@ -58,6 +66,7 @@ Internal tools have stable internal names and schemas. Profiles map onto them ([
 | `edit.apply_patch` | Mutating | Codex `apply_patch` format (ported, Apache-2.0) |
 | `edit.whole_file` | Mutating | Model sends the full new content. The diff is shown for approval |
 | `edit.search_replace_blocks` | Mutating | Aider-style `<<<<<<< SEARCH / ======= / >>>>>>> REPLACE` blocks, for text mode |
+| `edit.hashline` | Mutating | Hash-anchored edits: `read` tags each line with a short content hash, and edits name lines by hash instead of retyping old text (below) |
 | `shell` | Mutating | Run a command (see below) |
 | `shell.background` | Mutating | Start a long-running process (dev servers, watchers). Tools `shell.output` / `shell.kill` read and stop it |
 | `lsp.*` | ReadOnly/Mutating | definition, references, hover, symbols, diagnostics, rename ([10](10-lsp.md)) |
@@ -67,7 +76,7 @@ Internal tools have stable internal names and schemas. Profiles map onto them ([
 | `tool_search` | ReadOnly | Search deferred tools (MCP) and activate them ([09](09-mcp.md)) |
 | `ask_user` | Interactive | Ask the user a structured question |
 | `web_fetch` | ReadOnly | **Disabled by default.** Unavailable when `offline = true` |
-| `task` | Mutating | Sub-agent with its own context. M5 ([roadmap](roadmap.md)) |
+| `task` | Mutating | Sub-agent with its own context. M3 ([roadmap](roadmap.md)) |
 
 Each tool lives in `cutoffharness-tools/src/<tool>.rs` and implements:
 
@@ -93,6 +102,7 @@ These are the main source of failures with open models, so they get the most har
 - **Line endings and encoding**: detect CRLF/LF and the BOM per file and preserve them. Treat the model's `\n` as the file's newline. Refuse non-UTF-8 files unless forced.
 - **Checkpoint before write**: store the pre-image ([07](07-sessions-memory-checkpoints.md)).
 - **Post-edit feedback**: return a compact diff summary. When an LSP server is running, also return new diagnostics for the edited file, if any arrive within the settle window ([10](10-lsp.md)).
+- **Hash-anchored edits (`edit.hashline`, M2)**: when a profile selects this format, `read` returns lines as `<line>:<hash>| <text>`, where the hash is a few characters derived from the line's content. Edits reference a range by its start and end hashes (`replace`, `insert_after`, `delete`). The model never has to reproduce old text exactly, which is where small models fail. A hash that no longer matches is rejected with a fresh tagged snippet of that region, so retries converge. Hashes survive line drift from earlier edits. One 2026 harness benchmark (by an implementer, so treat it with care) found it beat patch-style edits for 14 of 16 models; open-model evidence is thin and mixed, and `insert_after` is reported to invite duplicated lines. It ships as an option, and the eval decides which profiles default to it.
 - **Format selection**: `config [tools].edit_format` overrides the model TOML, which overrides the profile default. `auto` uses the profile default.
 
 ## Shell tool

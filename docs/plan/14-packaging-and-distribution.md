@@ -41,6 +41,7 @@ When no provider is configured:
   3. Asks for the API key, using the secret form of the user's choice (env / keyring / cmd).
   4. Runs model discovery and picks a default model.
 - No wizard step needs internet access.
+- Goal: from install to a first working turn **in under a minute** on a machine already running a local server. Detection is also offered from the startup panel's "No providers configured" state, so users don't need to know about `cutoffharness setup`. Detected servers are written as minimal provider files (just `base_url`, plus `api = "ollama"` for Ollama), following [01](01-configuration.md).
 
 ## Release artifacts
 

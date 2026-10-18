@@ -57,9 +57,9 @@ pub(crate) const COMMANDS: &[Command] = &[
     c(
         "resume",
         &["sessions"],
-        "",
-        "Browse and resume past sessions",
-        Some("M1"),
+        "[id]",
+        "Browse and resume past sessions; with an id, resume directly",
+        None,
     ),
     c(
         "new",
@@ -82,8 +82,21 @@ pub(crate) const COMMANDS: &[Command] = &[
         "Revert the last mutating tool call's file changes",
         Some("M3"),
     ),
-    c("fork", &[], "", "Branch the session from here", Some("M3")),
-    c("title", &[], "<text>", "Rename the session", Some("M1")),
+    c(
+        "fork",
+        &[],
+        "[--worktree]",
+        "Branch the session from here",
+        Some("M3"),
+    ),
+    c(
+        "plan",
+        &[],
+        "",
+        "Plan mode: explore read-only, then accept or revise a plan",
+        Some("M2"),
+    ),
+    c("title", &[], "<text>", "Rename the session", None),
     c(
         "export",
         &[],
@@ -108,9 +121,16 @@ pub(crate) const COMMANDS: &[Command] = &[
     c(
         "config",
         &["settings"],
+        "[set <key> <value>]",
+        "Settings with their origins; saves changes to the user config.toml",
+        None,
+    ),
+    c(
+        "bundles",
+        &[],
         "",
-        "Settings editor with value origins",
-        Some("M1"),
+        "Installed bundles of skills, commands and servers",
+        Some("M3"),
     ),
     c(
         "permissions",
@@ -221,4 +241,8 @@ pub(crate) const KEYS: &[(&str, &str)] = &[
     ("/", "Slash commands; Tab completes"),
     ("Ctrl-P", "Command palette (opens help for now)"),
     ("Tab (in modal)", "Switch tab"),
+    (
+        "Ctrl-S (in modal)",
+        "Secondary action, e.g. save as default in /models",
+    ),
 ];

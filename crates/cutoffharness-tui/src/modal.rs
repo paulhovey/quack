@@ -26,6 +26,8 @@ pub(crate) struct ModalItem {
     pub action: Option<String>,
     /// Run `action` as a command immediately instead of inserting it.
     pub run: bool,
+    /// Command run by the modal's secondary key (Ctrl-S), if any.
+    pub alt: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +46,9 @@ pub(crate) struct Modal {
     selected: usize,
     footer: Vec<(&'static str, &'static str)>,
 }
+
+/// The secondary action key, shown in the footer when a modal has one.
+const ALT_KEY: &str = "^s";
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ModalOutcome {
@@ -73,6 +78,12 @@ impl Modal {
         };
         m.refilter();
         m
+    }
+
+    /// Name the secondary action (Ctrl-S) in the footer.
+    pub fn with_alt(mut self, what: &'static str) -> Self {
+        self.footer.insert(self.footer.len() - 1, (ALT_KEY, what));
+        self
     }
 
     fn items(&self) -> &[ModalItem] {
@@ -108,6 +119,11 @@ impl Modal {
             KeyCode::Char('p') if ctrl => self.selected = self.selected.saturating_sub(1),
             KeyCode::Down => self.move_down(),
             KeyCode::Char('n') if ctrl => self.move_down(),
+            KeyCode::Char('s') if ctrl => {
+                if let Some(cmd) = self.selected_item().and_then(|i| i.alt.clone()) {
+                    return ModalOutcome::Run(cmd);
+                }
+            }
             KeyCode::PageUp => self.selected = self.selected.saturating_sub(10),
             KeyCode::PageDown => {
                 self.selected = (self.selected + 10).min(self.filtered.len().saturating_sub(1));
@@ -316,6 +332,7 @@ pub(crate) fn help(theme: &Theme) -> Modal {
                     if c.args.is_empty() { "" } else { " " }
                 )),
                 run: false,
+                alt: None,
             }
         })
         .collect();
@@ -331,6 +348,7 @@ pub(crate) fn help(theme: &Theme) -> Modal {
             ],
             action: None,
             run: false,
+            alt: None,
         })
         .collect();
     Modal::new(
@@ -371,6 +389,7 @@ pub(crate) fn models(
             )],
             action: None,
             run: false,
+            alt: None,
         }),
         Some(providers) => {
             for p in providers {
@@ -385,6 +404,7 @@ pub(crate) fn models(
                         ],
                         action: None,
                         run: false,
+                        alt: None,
                     });
                     continue;
                 }
@@ -413,7 +433,7 @@ pub(crate) fn models(
                         Line::styled("⏎ switch to this model for the session", theme.dim)
                     });
                     detail.push(Line::styled(
-                        format!("To make it the default: [model] default = \"{reference}\""),
+                        "^s save as the default model (user config.toml)",
                         theme.dim,
                     ));
                     items.push(ModalItem {
@@ -426,6 +446,7 @@ pub(crate) fn models(
                         detail,
                         action: Some(format!("/models {reference}")),
                         run: true,
+                        alt: Some(format!("/models default {reference}")),
                     });
                 }
             }
@@ -437,6 +458,166 @@ pub(crate) fn models(
             title: "Models".into(),
             items,
         }],
+    )
+    .with_alt("save as default")
+}
+
+fn field(theme: &Theme, k: &str, v: String) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("{k:<10}"), theme.dim),
+        Span::raw(v),
+    ])
+}
+
+fn placeholder(label: &str, detail: &str, theme: &Theme) -> ModalItem {
+    ModalItem {
+        label: label.to_owned(),
+        hint: String::new(),
+        detail: vec![Line::styled(detail.to_owned(), theme.dim)],
+        action: None,
+        run: false,
+        alt: None,
+    }
+}
+
+/// The `/resume` modal. `sessions` is `None` while the engine is listing them.
+pub(crate) fn sessions(
+    sessions: Option<&[cutoffharness_protocol::SessionSummary]>,
+    theme: &Theme,
+) -> Modal {
+    let items = match sessions {
+        None => vec![placeholder(
+            "listing sessions…",
+            "Reading this project's sessions.",
+            theme,
+        )],
+        Some([]) => vec![placeholder(
+            "no saved sessions",
+            "Sessions are saved as you work; there are none for this project yet.",
+            theme,
+        )],
+        Some(list) => list
+            .iter()
+            .map(|s| {
+                let title = if s.title.is_empty() {
+                    "(untitled)".to_owned()
+                } else {
+                    s.title.clone()
+                };
+                let mut detail = vec![
+                    Line::styled(title.clone(), theme.accent),
+                    Line::raw(""),
+                    field(theme, "id", s.id.0.clone()),
+                    field(theme, "started", s.started.clone()),
+                    field(theme, "updated", s.age.clone()),
+                    field(theme, "turns", s.turns.to_string()),
+                    field(theme, "model", s.model.clone()),
+                    Line::raw(""),
+                ];
+                detail.push(if s.current {
+                    Line::styled("this session", theme.ok)
+                } else {
+                    Line::styled("⏎ resume it (the current session stays saved)", theme.dim)
+                });
+                ModalItem {
+                    label: if s.current {
+                        format!("{title} ●")
+                    } else {
+                        title
+                    },
+                    hint: format!("{} · {}t", s.age, s.turns),
+                    detail,
+                    action: (!s.current).then(|| format!("/resume {}", s.id)),
+                    run: true,
+                    alt: None,
+                }
+            })
+            .collect(),
+    };
+    Modal::new(
+        "Sessions",
+        vec![ModalTab {
+            title: "Sessions".into(),
+            items,
+        }],
+    )
+}
+
+/// The `/config` modal: every setting with its value and where it came from.
+pub(crate) fn config(
+    rows: &[cutoffharness_config::SettingRow],
+    files: &[(String, String)],
+    theme: &Theme,
+) -> Modal {
+    let settings = rows
+        .iter()
+        .map(|r| {
+            let mut detail = vec![Line::styled(r.key.clone(), theme.accent), Line::raw("")];
+            if !r.description.is_empty() {
+                detail.push(Line::raw(r.description.clone()));
+                detail.push(Line::raw(""));
+            }
+            detail.push(field(theme, "value", r.value.clone()));
+            detail.push(field(theme, "from", r.origin.clone()));
+            detail.push(Line::raw(""));
+            let (action, run) = if r.locked {
+                detail.push(Line::styled("locked by the system policy", theme.warn));
+                (None, false)
+            } else if r.is_bool {
+                let flipped = if r.value == "true" { "false" } else { "true" };
+                detail.push(Line::styled(
+                    format!("⏎ set to {flipped} in the user config.toml"),
+                    theme.dim,
+                ));
+                (Some(format!("/config set {} {flipped}", r.key)), true)
+            } else {
+                detail.push(Line::styled(
+                    "⏎ edit the value, then press ⏎ to save it to the user config.toml",
+                    theme.dim,
+                ));
+                (Some(format!("/config set {} {}", r.key, r.value)), false)
+            };
+            let mut hint: String = r.value.chars().take(24).collect();
+            if r.value.chars().count() > 24 {
+                hint.push('…');
+            }
+            ModalItem {
+                label: r.key.clone(),
+                hint,
+                detail,
+                action,
+                run,
+                alt: None,
+            }
+        })
+        .collect();
+    let layers = files
+        .iter()
+        .map(|(layer, status)| ModalItem {
+            label: layer.clone(),
+            hint: String::new(),
+            detail: vec![
+                Line::styled(layer.clone(), theme.accent),
+                Line::raw(""),
+                Line::raw(status.clone()),
+            ],
+            action: None,
+            run: false,
+            alt: None,
+        })
+        .collect();
+    Modal::new(
+        "Config",
+        vec![
+            ModalTab {
+                title: "Settings".into(),
+                items: settings,
+            },
+            ModalTab {
+                title: "Layers".into(),
+                items: layers,
+            },
+        ],
     )
 }
 
@@ -458,7 +639,7 @@ mod tests {
         assert_eq!(m.selected_item().map(|i| i.label.as_str()), Some("/resume"));
         assert_eq!(
             m.on_key(key(KeyCode::Enter)),
-            ModalOutcome::Insert("/resume".into())
+            ModalOutcome::Insert("/resume ".into())
         );
         assert_eq!(
             m.on_key(key(KeyCode::Esc)),

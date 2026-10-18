@@ -119,7 +119,7 @@ Compaction prompts are profile-overridable templates (`compact.md` in a profile 
 
 maki's `code_execution` tool lets the model chain tools inside an interpreter so intermediate data never enters context. This is high value but large in scope (a sandboxed interpreter embedded in the binary). It is deferred to post-M5, with candidates Lua (`mlua`), Rhai, or a Wasm Python. It is tracked here because it changes the context math significantly.
 
-## Sub-agents as context isolation (M5)
+## Sub-agents as context isolation (M3)
 
 The `task` tool runs a sub-agent with a fresh context and a restricted tool set. Only its final report enters the parent context. Sub-agents can use the `small` model. Each one shows up in the UI as its own navigable view (maki `/tasks`).
 

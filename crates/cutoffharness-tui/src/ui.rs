@@ -553,6 +553,38 @@ mod tests {
     }
 
     #[test]
+    fn config_modal_100x30() {
+        use cutoffharness_config::SettingRow;
+        let mut app = started_app();
+        let row = |key: &str, value: &str, origin: &str, description: &str, is_bool| SettingRow {
+            key: key.into(),
+            value: value.into(),
+            origin: origin.into(),
+            description: description.into(),
+            is_bool,
+            locked: false,
+        };
+        let rows = vec![
+            row(
+                "model.default",
+                "\"charm/qwen3.8-flash\"",
+                "user: ~/.config/cutoffharness/config.toml",
+                "`<provider-id>/<model-id>` or `<provider-id>/<alias>`. Empty: pick with `/models`.",
+                false,
+            ),
+            row(
+                "ui.ascii",
+                "false",
+                "default",
+                "Use ASCII instead of box-drawing and spinner glyphs.",
+                true,
+            ),
+        ];
+        app.modal = Some(crate::modal::config(&rows, &[], &app.theme));
+        insta::assert_snapshot!(render(&app, 100, 30));
+    }
+
+    #[test]
     fn help_modal_narrow_60x20() {
         let mut app = started_app();
         app.modal = Some(crate::modal::help(&app.theme));

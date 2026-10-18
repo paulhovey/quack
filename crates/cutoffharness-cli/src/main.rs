@@ -9,15 +9,17 @@ mod logging;
 
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Instant;
 
 use clap::Parser;
 use cutoffharness_config::LoadOptions;
 use cutoffharness_core::{Engine, Resume};
 use cutoffharness_exec::exit;
 
-use cli::{Cli, Cmd, ConfigCmd};
+use cli::{Cli, Cmd, ConfigCmd, KeyringCmd};
 
 fn main() -> ExitCode {
+    let started = Instant::now();
     let cli = Cli::parse();
     let cwd = match cli.global.cd.clone().map_or_else(std::env::current_dir, Ok) {
         Ok(dir) => dir,
@@ -42,6 +44,7 @@ fn main() -> ExitCode {
             return code(exit::CONFIG_ERROR);
         }
     };
+    let config_loaded = started.elapsed();
     let _log_guard = logging::init(&loaded.dirs.log_dir());
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "starting");
 
@@ -68,6 +71,10 @@ fn main() -> ExitCode {
         }),
         Cmd::Doctor => code(commands::doctor(&loaded)),
         Cmd::Sessions => code(commands::sessions(&loaded)),
+        Cmd::Keyring { cmd } => code(match cmd {
+            KeyringCmd::Set { name } => commands::keyring_set(&name),
+            KeyringCmd::Delete { name } => commands::keyring_delete(&name),
+        }),
         #[cfg(feature = "acp")]
         Cmd::Acp => {
             eprintln!("ACP support lands in M6 (docs/plan/12-headless-and-acp.md)");
@@ -76,7 +83,15 @@ fn main() -> ExitCode {
         Cmd::Tui => block_on(async move {
             let config = Arc::new(loaded);
             let engine = Engine::spawn_with(config.clone(), resume);
-            match cutoffharness_tui::run(engine, config).await {
+            let trace = cli
+                .global
+                .trace_startup
+                .map(|path| cutoffharness_tui::StartupTrace {
+                    started,
+                    config_loaded,
+                    path,
+                });
+            match cutoffharness_tui::run(engine, config, trace).await {
                 Ok(()) => exit::OK,
                 Err(e) => {
                     eprintln!("error: terminal: {e}");

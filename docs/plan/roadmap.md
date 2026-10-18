@@ -22,7 +22,7 @@ Primary manual test target: **hosted open-model services** (Novita, Fireworks, T
 
 | Spike | Question to answer | Output |
 |---|---|---|
-| Tool-call reliability | Record native tool-call streams from 2+ hosted services for 3–4 models (Qwen3-Coder, GLM-4.x, Kimi K2, gpt-oss), plus llama.cpp `--jinja` and Ollama on CPU with a tiny model. How often do calls leak into content, and do services differ for the same model? | First fixtures in `tests/fixtures/providers/`, list of required text parsers |
+| Tool-call reliability | Record native tool-call streams from 2+ hosted services for 3–4 current coding models (for example Qwen3-Coder or Qwen3.6, GLM-5.x, Kimi K3, DeepSeek V4), plus llama.cpp `--jinja` and Ollama on CPU with a tiny model. How often do calls leak into content, and do services differ for the same model? | First fixtures in `tests/fixtures/providers/`, list of required text parsers |
 | Prefix-cache behaviour | On hosted services: compare `cached_tokens` reporting, cost and TTFT for append-only vs. mid-history edits at 16k/64k/128k. On CPU llama.cpp: confirm cache reuse through `timings`. A GPU measurement is deferred until hardware is available | Numbers that seed the `auto` cache strategy ([05](05-context-management.md)) |
 | Windows process & terminal | Job Objects + ConPTY + crossterm key events + pwsh invocation, in a throwaway binary | Confirmed approach for `cutoffharness-shell` and the TUI input layer |
 | Startup budget | ratatui first frame with tokio + config parse, on Windows and Linux | Baseline numbers for [13](13-testing-and-evals.md) budgets |
@@ -48,7 +48,21 @@ Landed, with tests (unit, mock-server integration, TUI snapshots) and clippy cle
 - Defaults bundle v0: novita, fireworks, together, openrouter, deepinfra, llama-cpp, ollama, vllm, lmstudio, sglang (none tagged verified yet). The bundle folders now use the layer layout (`providers.d/`, `profiles.d/`, …)
 - Verified live against one hosted OpenAI-compatible service (Charm Hyper, `qwen3.8-flash`): a bug-fix task via `exec`, and a shell approval in the TUI
 
-Still open for M1: `/resume` picker and `/config` modal, saving a default model from `/models`, streaming suppression of text tool calls (they are cleaned up after the step), native `ollama` adapter, Windows Job Objects, `estimate` correction from usage, `keyring`, and the exit criteria below. `cargo deny` and the macOS/Windows builds of `aws-lc-sys` (reqwest's TLS crypto) are only checked in CI.
+Round 2 (2026-10-18):
+- `/resume` picker (and `/resume <id>`), `/new` starts a fresh saved session, `/title`. Session switches wait for the running turn, like queued messages
+- `/config` modal: every setting with value, origin and description; `/config set <key> <value>`; Ctrl-S in `/models` saves the default model. Writes keep comments (`toml_edit`), are schema-validated, atomic, and refuse policy-locked keys
+- Text tool calls are held back while streaming, so the raw `<tool_call>` markup never shows
+- Context estimate corrected by each response's reported prompt tokens (per-model ratio); live context figure after tool results and for servers that report no usage
+- Native `ollama` adapter (`proto-ollama`): `/api/chat` NDJSON with `num_ctx` per request, tool calls, `thinking`, discovery via `/api/tags` + `/api/show` (window capped at 32k). The default `ollama.toml` now uses it
+- Windows Job Objects with kill-on-close for every shell command (`taskkill /T` fallback)
+- `keyring` secrets and `cutoffharness keyring set|delete` (feature `keyring`, on by default). Native stores on Windows/macOS (5–6 crates); on Linux the Secret Service through `secret-tool`, with no extra crates
+
+Round 3 (2026-10-18): exit-criteria tests in `crates/cutoffharness-core/tests/invariants.rs` (removal, no egress, resume fidelity), `scripts/no-egress.sh` and `scripts/first-frame.sh` as Linux CI steps, hidden `--trace-startup`. Keyring on Linux moved from zbus to `secret-tool` (131 → 0 crates).
+
+
+Round 4 (2026-10-18): local-server CI (`scripts/local-server-ci.sh`, job `local-servers`). Found by it: llama.cpp discovery reported the trained window (262k) instead of the served one (`-c`); now read from `/props`. Empty replies get one nudge, as planned in [04](04-agent-loop-and-tools.md#loop-guards). Model scope narrowed to current coding families ([03](03-model-profiles.md#why-profiles-exist)).
+
+Still open for M1: the unchecked exit criteria below. `cargo deny`, the macOS/Windows builds of `aws-lc-sys` (reqwest's TLS crypto), the Windows job-kill test and the macOS/Windows keyring stores are only checked in CI or by hand.
 
 - Workspace scaffold, CI matrix (Linux/macOS/Windows), `cargo-deny`, Apache-2.0 + NOTICE
 - `cutoffharness-protocol` (Op/Event), `cutoffharness-core` loop with interrupt and loop guards
@@ -62,40 +76,58 @@ Still open for M1: `/resume` picker and `/config` modal, saving a default model 
 - Defaults bundle v0: `novita`, `fireworks`, `openrouter` (verified), `llama-cpp`, `ollama`, `vllm` (verified for protocol via CI containers; marked `# verified: protocol-only`), `generic` profile
 
 **Exit criteria**
-- [ ] Fix a failing test in a sample repo with Qwen3-Coder on **two hosted services**, on Linux, macOS and Windows (x64 + ARM64, pwsh)
-- [ ] The CPU llama.cpp and Ollama CI jobs complete a scripted tool-call turn
-- [ ] First frame < 50 ms Linux / < 120 ms Windows
-- [ ] Deleting any default provider file leaves startup clean
-- [ ] No-egress invariant test passes
-- [ ] Resume reproduces the context exactly
+- [ ] Fix a failing test in a sample repo with a current Qwen coding model on **two hosted services**, on Linux, macOS and Windows (x64 + ARM64, pwsh)
+- [x] The CPU llama.cpp and Ollama CI jobs complete a scripted tool-call turn: `scripts/local-server-ci.sh` (pinned llama.cpp b11718 and Ollama 0.40.6 images, Qwen3.5-0.8B), the `local-servers` CI job. Passed locally with podman; not yet run on GitHub
+- [ ] First frame < 50 ms Linux / < 120 ms Windows. Linux: median 3–9 ms (release, PTY, defaults bundle) via `scripts/first-frame.sh`, a CI step. Windows: not measured yet (needs a console on the runner, or by hand)
+- [x] Deleting any default provider file leaves startup clean (`tests/invariants.rs`: every file and folder of the bundle, one at a time)
+- [x] No-egress invariant test passes: in-process through a recording proxy, and in CI on Linux with `scripts/no-egress.sh` (loopback-only network namespace plus a `connect()` trace)
+- [x] Resume reproduces the context exactly: the request after a resume equals the live session's request byte for byte, including the shipped `generic` system prompt and tool calls. Re-check in M2 once pruning and compaction exist
+
+## Review 2026-10-18: practices check
+
+Compared against current harnesses (Codex CLI, OpenCode, Goose, Pi/oh-my-pi, Claude Code) and the current specs. AGENTS.md, SKILL.md skills, data-only provider/MCP files, JSONL sessions, permission modes, hooks, checkpoints and per-model evals are all current practice and already planned. Changes that came out of it:
+- **MCP 2026-07-28** (stateless, breaking) is the M3 target; older revisions are a fallback ([09](09-mcp.md#implementation)).
+- **Hash-anchored edits** (`edit.hashline`) join the M2 edit formats, decided per profile by the eval ([04](04-agent-loop-and-tools.md#edit-tools)).
+- **Published compatibility results** become a headline feature ([13](13-testing-and-evals.md#publishing-results)).
+- **First run in under a minute** through local server detection offered from the startup panel (M2, [14](14-packaging-and-distribution.md#first-run-experience)).
+- **Plan mode** and an optional planner/editor model split ([04](04-agent-loop-and-tools.md#plan-mode)).
+- **Speed in the status bar** (tokens per second, prompt processing, cache hits) rather than cost ([06](06-tui.md#layout)).
+- **Worktree sessions** and **bundles** (M3), and sub-agents moved from M5 to M3.
+- **Dependency policy**: keep the crate count low ([00](00-architecture.md#dependency-policy)). The keyring feature went from 131 crates on Linux to none.
+
+Left out on purpose: a hosted marketplace, telemetry-backed features and cloud execution, which conflict with the no-egress promise.
 
 ## M2 — Context & profiles: "it stays useful in small windows"
 
 - Tokenizers: `hf-file`, `tiktoken`, `server`. Context ledger, `/context`, cache-hit display
 - `index` tool (tree-sitter skeletons) + `read` large-file skeleton behaviour + symbol reads; `lang-common` grammars
 - Prune rules 1–6, epoch-based `auto`/`preserve`/`aggressive` strategies, compaction with the `small` model
-- Profiles: `qwen-code`, `codex`, `cc-style`, `swe-agent`, `kimi-code`. Text and grammar tool-calling modes; `edit.apply_patch`, `edit.whole_file`, `edit.search_replace_blocks`
-- Remaining tool-call parsers (mistral, glm, json-block, deepseek, kimi)
+- Profiles for current coding families only ([03](03-model-profiles.md#why-profiles-exist)): `qwen-code`, `codex`, `cc-style`, `swe-agent`, `kimi-code`. Text and grammar tool-calling modes; `edit.apply_patch`, `edit.whole_file`, `edit.search_replace_blocks`, `edit.hashline`
+- Remaining tool-call parsers, only for formats the current families emit (expected: glm, deepseek, kimi, json-block; decided from the M0 fixtures)
 - `anthropic-messages` + `openai-responses` adapters
-- `cutoffharness eval` v1 with about 20 tasks; first `docs/compat.md`
+- `cutoffharness eval` v1 with about 20 tasks; first `docs/compat.md`, published with the release and linked from the default provider files
+- `cutoffharness setup` and local server detection from the startup panel; speed in the status bar
+- Plan mode (`/plan`, `plan` permission mode); optional `[model] planner`
 - AGENTS.md discovery (chain + nested on-demand + imports); memory (`memory` tool, index injection, configurable path)
 
 **Exit criteria**
-- [ ] A 50-step task completes inside a 32k window with Qwen3-Coder-30B on llama.cpp
+- [ ] A 50-step task completes inside a 32k window with a current ~30B Qwen coding model on llama.cpp
 - [ ] Prefix-stability invariant passes for all default profiles
 - [ ] Eval shows profile matching ≥ `generic` for each targeted family, otherwise the profile isn't shipped
 - [ ] Additional hosted services (Together, DeepInfra) work through provider files alone, with no code changes
 
 ## M3 — Ecosystem: "it plugs into everything, safely"
 
-- MCP via rmcp: stdio + streamable HTTP, `mcp.d`, deferred tools + `tool_search`, prompts as commands, resources, sampling (gated), elicitation, `/mcp`
+- MCP via rmcp, targeting spec 2026-07-28 with fallback to older revisions: stdio + streamable HTTP, `mcp.d`, deferred tools + `tool_search`, prompts as commands, resources, sampling (gated), elicitation, `/mcp`
 - Skills (all discovery paths, progressive disclosure, `/skill` invocation); custom commands
 - Permission engine v2: tree-sitter-bash / PowerShell analysis, "always allow" writes to config
 - Project trust flow
 - Hooks (`hooks.d`)
 - Checkpoints: edit pre-images, `/undo`, `/rewind` with file restore; optional gix shadow snapshots
 - Hot reload of config directories
-- `/fork`, `/export`, auto titles
+- `/fork`, `/export`, auto titles; `/fork --worktree` parallel sessions
+- Bundles (`bundles/`, `/bundles`)
+- Sub-agents (`task` tool) with `/tasks` views (moved from M5)
 
 **Exit criteria**
 - [ ] GitHub MCP server works on Windows via `npx` (`.cmd` resolution) and on Linux/macOS
@@ -123,7 +155,6 @@ Still open for M1: `/resume` picker and `/config` modal, saving a default model 
 - `[policy]` locks, audit log, `cutoffharness doctor` enterprise checks
 - mTLS, custom CA, proxy validation; multi-`base_urls` failover
 - Packaging: cargo-dist, MSI (+ signing), deb/rpm, Homebrew, defaults bundle as a separate package, SBOM, `docs/enterprise.md`, air-gapped build recipe
-- Sub-agents (`task` tool) with `/tasks` views
 - Dynamic tree-sitter grammars (`libloading`)
 - MCP OAuth for remote servers
 

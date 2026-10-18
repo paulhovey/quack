@@ -27,6 +27,7 @@ cutoffharness-tools.workspace = true
 cutoffharness-store.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+crossterm.workspace = true
 miette.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
@@ -36,7 +37,7 @@ tracing-subscriber.workspace = true
 
 [features]
 default = ["proto-openai-chat", "proto-openai-responses", "proto-anthropic", "proto-ollama",
-           "lang-common", "tokenizers-hf", "sandbox", "acp"]
+           "lang-common", "tokenizers-hf", "sandbox", "acp", "keyring"]
 proto-openai-chat = ["cutoffharness-providers/proto-openai-chat"]
 proto-openai-responses = ["cutoffharness-providers/proto-openai-responses"]
 proto-anthropic = ["cutoffharness-providers/proto-anthropic"]
@@ -45,6 +46,7 @@ lang-common = ["cutoffharness-context/lang-common"]
 tokenizers-hf = ["cutoffharness-providers/tokenizers"]
 sandbox = ["cutoffharness-tools/sandbox"]
 acp = ["dep:cutoffharness-acp"]
+keyring = ["cutoffharness-config/keyring"]
 
 [dev-dependencies]
 tempfile.workspace = true

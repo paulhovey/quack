@@ -57,11 +57,11 @@ impl ProjectSessions {
             let Ok(e) = serde_json::from_str::<IndexEntry>(&line) else {
                 continue;
             };
-            match by_id.iter_mut().find(|x| x.id == e.id) {
-                Some(x) => *x = e,
-                None => by_id.push(e),
-            }
+            // Keep entries in order of their last write, to break ties within a second.
+            by_id.retain(|x| x.id != e.id);
+            by_id.push(e);
         }
+        by_id.reverse();
         by_id.sort_by_key(|e| std::cmp::Reverse(e.updated));
         by_id
     }
@@ -212,7 +212,7 @@ impl SessionLog {
         self.file.sync_data()?;
         self.entry.updated = time::unix_now();
         self.entry.turns = turns;
-        if let Some(t) = title.filter(|_| self.entry.title.is_empty()) {
+        if let Some(t) = title {
             self.entry.title = t.to_owned();
         }
         self.project.append_index(&self.entry)

@@ -1,5 +1,6 @@
 ---
 source: crates/cutoffharness-tui/src/ui.rs
+assertion_line: 625
 expression: "render(&app, 80, 24)"
 ---
 " cutoffharness 0.1.0 · ~/src/project                                            "
@@ -16,7 +17,7 @@ expression: "render(&app, 80, 24)"
 "                                                                                "
 "                                                                                "
 "+----------------------------------------------------------------------+        "
-"| /resume         Browse and resume past sessions (M1)                 |        "
+"| /resume [id]    Browse and resume past sessions; with an id, resume …|        "
 "| /rewind         Go back to an earlier message: conversation, fi… (M3)|        "
 "| /reload         Reload config, instructions and skills (M1)          |        "
 "| /providers      Provider state, auth and connection tests; add … (M1)|        "

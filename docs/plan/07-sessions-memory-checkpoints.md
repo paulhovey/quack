@@ -58,6 +58,10 @@ Rules:
 - `/export [md|json]` writes a readable transcript.
 - `cutoffharness sessions prune --older-than 30d` cleans up. `[sessions] retention_days` does the same automatically.
 
+### Parallel sessions in worktrees
+
+`/fork --worktree` (and `cutoffharness --worktree <name>`) creates a git worktree under `<repo>/.cutoffharness/worktrees/<name>` on a new branch and starts a session there, so several tasks can run side by side without touching each other's files. `/sessions` shows which worktree each session belongs to; finishing offers to merge, keep or delete the worktree. It uses `gix` when possible and falls back to the `git` CLI. Planned for M3 with `/fork`.
+
 ### Resume semantics
 
 Replay `events.jsonl` → rebuild history → apply `prune` and `compaction` ops in order → re-render the system prompt.

@@ -109,3 +109,74 @@ async fn discovers_models() {
     assert_eq!(models.len(), 1);
     assert_eq!(models[0].context_window, Some(131072));
 }
+
+#[cfg(feature = "proto-ollama")]
+#[tokio::test]
+async fn ollama_native_discovers_and_streams() {
+    use wiremock::matchers::body_string_contains;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/tags"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"models":[{"name":"qwen3:8b"},{"name":"tiny:1b"}]}"#),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/show"))
+        .and(body_string_contains("qwen3:8b"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"model_info":{"qwen3.context_length":40960}}"#),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/show"))
+        .respond_with(ResponseTemplate::new(404).set_body_string(r#"{"error":"not found"}"#))
+        .mount(&server)
+        .await;
+    // num_ctx must reach the server: that is the point of the native adapter.
+    Mock::given(method("POST"))
+        .and(path("/api/chat"))
+        .and(body_string_contains(r#""num_ctx":32768"#))
+        .respond_with(ResponseTemplate::new(200).set_body_string(concat!(
+            "{\"message\":{\"role\":\"assistant\",\"content\":\"Hel\"},\"done\":false}\n",
+            "{\"message\":{\"role\":\"assistant\",\"content\":\"lo\"},\"done\":false}\n",
+            "{\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true,\"done_reason\":\"stop\",\"prompt_eval_count\":11,\"eval_count\":2}\n",
+        )))
+        .mount(&server)
+        .await;
+
+    // The OpenAI-style `/v1` base URL works for the native API too.
+    let file: ProviderFile = toml::from_str(&format!(
+        "base_url = \"{}/v1\"\napi = \"ollama\"\n",
+        server.uri()
+    ))
+    .expect("provider toml");
+    let p =
+        Provider::new("ollama", file, &NetworkSettings::default(), &|_| None).expect("provider");
+    let models = p.list_models().await.expect("models");
+    assert_eq!(models.len(), 2);
+    assert_eq!(
+        models[0].context_window,
+        Some(32_768),
+        "capped trained length"
+    );
+    assert_eq!(
+        models[1].context_window,
+        Some(32_768),
+        "default when unknown"
+    );
+
+    let mut req = request();
+    req.context_window = models[0].context_window;
+    let mut rx = p.stream(req, ReasoningFormat::Auto, CancellationToken::new());
+    let mut b = ResponseBuilder::default();
+    while let Some(ev) = rx.recv().await {
+        b.push(&ev.expect("event"));
+    }
+    assert_eq!(b.usage.map(|u| u.prompt_tokens), Some(11));
+    assert!(matches!(b.into_message(), Message::Assistant { content, .. } if content == "Hello"));
+}

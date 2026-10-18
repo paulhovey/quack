@@ -9,7 +9,8 @@ use cutoffharness_protocol::{
     TurnId, Usage,
 };
 use cutoffharness_providers::{
-    ChatRequest, ErrorKind, Message, ResponseBuilder, StreamEvent, ToolCall, ToolSpec, toolparse,
+    ChatRequest, ErrorKind, Message, ResponseBuilder, StreamEvent, ToolCall, ToolSpec, tokens,
+    toolparse,
 };
 use cutoffharness_tools::{Decision, Permissions, ToolOutput};
 use serde_json::Value;
@@ -47,6 +48,17 @@ impl TurnCtx {
         let _ = self.tx.send(e);
     }
 
+    /// Emit the corrected estimate of what the next request will cost.
+    fn context_estimate(&self, history: &[Message]) {
+        let raw = raw_estimate(&self.setup, history);
+        let used = self.setup.estimator.lock().map_or(raw, |e| e.scale(raw));
+        self.emit(Event::ContextUpdate {
+            used,
+            budget: self.setup.budget.unwrap_or(0),
+            cache_hit_tokens: None,
+        });
+    }
+
     fn error(&self, kind: EngineErrorKind, message: impl Into<String>) {
         self.emit(Event::Error {
             error: EngineError {
@@ -56,6 +68,10 @@ impl TurnCtx {
         });
     }
 }
+
+/// Sent once per turn after an empty reply.
+const EMPTY_NUDGE: &str =
+    "Your last reply was empty. Continue: call a tool if you need one, otherwise answer.";
 
 enum StepEnd {
     Done,
@@ -68,15 +84,20 @@ pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: String)
     ctx.push(&mut history, Message::User { content: prompt });
     let mut total = Usage::default();
     let mut recent: Vec<(String, String)> = Vec::new();
+    let mut nudged = false;
 
     let end = 'steps: {
         for _ in 0..MAX_STEPS {
+            let estimated = raw_estimate(&ctx.setup, &history);
             let (msg, usage) = match stream_step(&ctx, &history).await {
                 Ok(r) => r,
                 Err(StepEnd::Aborted(reason)) => break 'steps StepEnd::Aborted(reason),
                 Err(StepEnd::Done) => break 'steps StepEnd::Done,
             };
             if let Some(u) = usage {
+                if let Ok(mut e) = ctx.setup.estimator.lock() {
+                    e.observe(estimated, u.prompt_tokens);
+                }
                 session::record_usage(ctx.log.as_ref(), &u);
                 total.prompt_tokens = u.prompt_tokens;
                 total.completion_tokens += u.completion_tokens;
@@ -93,7 +114,27 @@ pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: String)
             };
             let empty =
                 matches!(&msg, Message::Assistant { content, .. } if content.trim().is_empty());
+            let reported = usage.is_some();
+            // An empty reply (common with small models after a tool result) gets one nudge.
+            // The empty message itself is dropped: some chat templates reject it.
+            if calls.is_empty() && empty && !nudged {
+                nudged = true;
+                ctx.emit(Event::Warning {
+                    message: "the model returned an empty response; asking it to continue".into(),
+                });
+                ctx.push(
+                    &mut history,
+                    Message::User {
+                        content: EMPTY_NUDGE.into(),
+                    },
+                );
+                continue;
+            }
             ctx.push(&mut history, msg);
+            if !reported {
+                // Servers that do not report usage still get a live context figure.
+                ctx.context_estimate(&history);
+            }
             if calls.is_empty() {
                 if empty {
                     ctx.emit(Event::Warning {
@@ -137,6 +178,8 @@ pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: String)
                     },
                 );
             }
+            // Tool output can be large; show its weight before the next request.
+            ctx.context_estimate(&history);
         }
         ctx.emit(Event::Warning {
             message: format!("stopped after {MAX_STEPS} steps; send a message to continue"),
@@ -155,6 +198,20 @@ pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: String)
         }),
     }
     history
+}
+
+/// Uncorrected estimate of a request's prompt: system prompt, history and tool definitions.
+fn raw_estimate(s: &Setup, history: &[Message]) -> u32 {
+    let history = serde_json::to_string(history).unwrap_or_default();
+    let tools: usize = s
+        .surface
+        .tools
+        .iter()
+        .map(|t| t.description.len() + t.name.len() + t.schema.to_string().len())
+        .sum();
+    tokens::estimate(&s.system)
+        .saturating_add(tokens::estimate(&history))
+        .saturating_add(u32::try_from(tools * 2 / 7).unwrap_or(u32::MAX))
 }
 
 /// One model call. Streams deltas to clients and returns the assembled message.
@@ -190,6 +247,7 @@ async fn stream_step(
                 parameters: t.schema.clone(),
             })
             .collect(),
+        context_window: s.model.context_window,
         max_tokens: s.model.max_output,
         sampling,
         reasoning_effort: Some(s.model.reasoning.effort.clone()).filter(|e| !e.is_empty()),
@@ -207,6 +265,8 @@ async fn stream_step(
         .unwrap_or(s.model.reasoning.format);
     let mut rx = s.provider.stream(req, reasoning, ctx.cancel.child_token());
     let mut b = ResponseBuilder::default();
+    let format = toolparse::TextFormat::parse(&s.model.tool_calling.text_format);
+    let mut gate = toolparse::TextGate::new(format);
     loop {
         let item = tokio::select! {
             () = ctx.cancel.cancelled() => None,
@@ -222,7 +282,10 @@ async fn stream_step(
             Ok(ev) => {
                 match &ev {
                     StreamEvent::TextDelta(t) => {
-                        ctx.emit(Event::AssistantDelta { text: t.clone() })
+                        let text = gate.feed(t);
+                        if !text.is_empty() {
+                            ctx.emit(Event::AssistantDelta { text });
+                        }
                     }
                     StreamEvent::ReasoningDelta(t) => {
                         ctx.emit(Event::ReasoningDelta { text: t.clone() })
@@ -247,6 +310,10 @@ async fn stream_step(
             }
         }
     }
+    let tail = gate.finish();
+    if !tail.is_empty() {
+        ctx.emit(Event::AssistantDelta { text: tail });
+    }
     let usage = b.usage;
     let mut msg = b.into_message();
     if let Message::Assistant {
@@ -256,15 +323,20 @@ async fn stream_step(
     } = &mut msg
     {
         // Fallback chain: a model that printed its tool call as text still gets it run.
-        if tool_calls.is_empty() {
-            let names: Vec<&str> = s.surface.tools.iter().map(|t| t.name.as_str()).collect();
-            let format = toolparse::TextFormat::parse(&s.model.tool_calling.text_format);
-            if let Some((rest, calls)) = toolparse::extract(content, format, &names) {
+        let names: Vec<&str> = s.surface.tools.iter().map(|t| t.name.as_str()).collect();
+        let promoted = tool_calls.is_empty()
+            && toolparse::extract(content, format, &names).is_some_and(|(rest, calls)| {
                 tracing::debug!(count = calls.len(), "promoted text tool calls");
-                ctx.emit(Event::AssistantRewrite { text: rest.clone() });
                 *content = rest;
                 *tool_calls = calls;
-            }
+                true
+            });
+        if promoted || gate.hid() {
+            // Promoted: show the text without the calls. Otherwise it only looked like a
+            // call, so show what the gate held back.
+            ctx.emit(Event::AssistantRewrite {
+                text: content.clone(),
+            });
         }
         dedupe_ids(tool_calls, history);
     }

@@ -35,6 +35,36 @@ jobs:
       - name: minimal enterprise feature set builds
         if: matrix.name == 'linux-x64'
         run: cargo build -p cutoffharness-cli --locked --no-default-features --features proto-openai-chat,lang-common,sandbox
+      - name: no-egress invariant (network namespace + connect() trace)
+        if: matrix.name == 'linux-x64'
+        run: |
+          sudo apt-get install -y --no-install-recommends strace
+          scripts/no-egress.sh
+      - name: first-frame budget
+        if: matrix.name == 'linux-x64'
+        run: scripts/first-frame.sh 50
+
+  # A scripted tool-call turn against real local servers on CPU, with a tiny model.
+  local-servers:
+    name: local server (${{ matrix.server }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        server: [llama-cpp, ollama]
+    env:
+      MODELS_DIR: ${{ github.workspace }}/.ci-models
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: .ci-models
+          # Bump when the model or image pins in scripts/local-server-ci.sh change.
+          key: local-models-${{ matrix.server }}-${{ hashFiles('scripts/local-server-ci.sh') }}
+      - run: cargo build --locked -p cutoffharness-cli
+      - run: scripts/local-server-ci.sh ${{ matrix.server }}
 
   msrv:
     runs-on: ubuntu-latest

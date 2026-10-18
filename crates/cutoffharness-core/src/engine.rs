@@ -1,9 +1,10 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use cutoffharness_config::Loaded;
+use cutoffharness_config::{LayerKind, Loaded};
 use cutoffharness_protocol::{
-    EngineError, EngineErrorKind, Event, InputItem, Op, SessionId, SessionInfo, TurnId,
+    EngineError, EngineErrorKind, Event, InputItem, Op, SessionId, SessionInfo, SessionSummary,
+    TurnId, WriteScope,
 };
 use cutoffharness_providers::Message;
 use cutoffharness_tools::Permissions;
@@ -44,6 +45,14 @@ impl EngineHandle {
     }
 }
 
+/// Work that waits for startup or the running turn.
+#[derive(Debug)]
+enum Queued {
+    Turn(Vec<InputItem>),
+    /// Resume a saved session, or start a new one with `None`.
+    Switch(Option<SessionId>),
+}
+
 /// The conversation once a model is ready.
 #[derive(Debug)]
 struct Conversation {
@@ -62,7 +71,7 @@ pub struct Engine {
     problem: Option<String>,
     convo: Option<Conversation>,
     next_turn: u64,
-    queued: VecDeque<Vec<InputItem>>,
+    queued: VecDeque<Queued>,
     running: Option<(TurnId, CancellationToken)>,
     approvals: Approvals,
     resume: Resume,
@@ -174,7 +183,15 @@ impl Engine {
         };
         self.session.model = Some(setup.model_ref.clone());
         self.session.profile = setup.profile.id.clone();
-        let history = self.resume_history(&setup.model_ref);
+        let resume = std::mem::take(&mut self.resume);
+        let history = self
+            .open_saved(&resume, &setup.model_ref)
+            .unwrap_or_else(|| {
+                if resume != Resume::New {
+                    self.warn("starting a new session".into());
+                }
+                Vec::new()
+            });
         self.emit(Event::SessionConfigured {
             session: self.session.clone(),
         });
@@ -185,28 +202,27 @@ impl Engine {
         });
     }
 
-    /// Load the requested session, if any, and reopen its log for appending.
-    fn resume_history(&mut self, model: &str) -> Vec<Message> {
-        let entry = match session::find(&self.config, &self.resume) {
+    /// Load the requested session, if any, and reopen its log for appending. `None` when
+    /// there is nothing to load or it failed (with a warning).
+    fn open_saved(&mut self, resume: &Resume, model: &str) -> Option<Vec<Message>> {
+        let entry = match session::find(&self.config, resume) {
             Ok(Some(e)) => e,
-            Ok(None) => return Vec::new(),
+            Ok(None) => return None,
             Err(e) => {
-                self.warn(format!("cannot resume: {e}; starting a new session"));
-                return Vec::new();
+                self.warn(format!("cannot resume: {e}"));
+                return None;
             }
         };
         let ps = session::project_sessions(&self.config);
         let records = match ps.read(&entry) {
             Ok(r) => r,
             Err(e) => {
-                self.warn(format!(
-                    "cannot read session {}: {e}; starting a new session",
-                    entry.id
-                ));
-                return Vec::new();
+                self.warn(format!("cannot read session {}: {e}", entry.id));
+                return None;
             }
         };
         let (history, items, turns) = session::replay(&records);
+        self.log = None;
         match ps.reopen(entry.clone()) {
             Ok(log) => {
                 let log = Arc::new(Mutex::new(log));
@@ -228,7 +244,84 @@ impl Engine {
             session: self.session.clone(),
             items,
         });
-        history
+        Some(history)
+    }
+
+    /// Replace the conversation with a saved session or an empty one, keeping the model.
+    fn switch_session(&mut self, target: Option<SessionId>) {
+        let Some(model) = self.convo.as_ref().map(|c| c.setup.model_ref.clone()) else {
+            return self.warn("no model is ready; sessions open once one is".into());
+        };
+        if target.as_ref() == Some(&self.session.id) {
+            return self.warn("already in this session".into());
+        }
+        let history = match target {
+            Some(id) => {
+                self.sync_log();
+                match self.open_saved(&Resume::Id(id.0), &model) {
+                    Some(h) => h,
+                    None => return,
+                }
+            }
+            None => {
+                self.sync_log();
+                self.log = None;
+                self.session.id = new_session_id();
+                self.turns = 0;
+                self.title = None;
+                Vec::new()
+            }
+        };
+        if let Some(c) = &mut self.convo {
+            // Session approvals belong to the session they were given in.
+            c.perms = Arc::new(Mutex::new(c.setup.permissions.clone()));
+            c.history = Some(history);
+        }
+        self.emit(Event::SessionConfigured {
+            session: self.session.clone(),
+        });
+    }
+
+    fn list_sessions(&self) {
+        let now = cutoffharness_store::time::unix_now();
+        let sessions = session::project_sessions(&self.config)
+            .list()
+            .into_iter()
+            .map(|e| SessionSummary {
+                current: e.id == self.session.id.0,
+                id: SessionId(e.id),
+                title: e.title,
+                model: e.model,
+                turns: e.turns,
+                age: cutoffharness_store::time::age(e.updated, now),
+                started: cutoffharness_store::time::date(e.started),
+            })
+            .collect();
+        self.emit(Event::SessionList { sessions });
+    }
+
+    fn save_setting(&self, key: &str, value: &str, scope: &WriteScope) {
+        let layer = match scope {
+            WriteScope::User => LayerKind::User,
+            WriteScope::Project => LayerKind::Project,
+            WriteScope::Session => {
+                return self.warn("settings are saved to the user or project layer".into());
+            }
+        };
+        match self.config.save_setting(layer, key, value) {
+            Ok((path, note)) => self.emit(Event::SettingSaved {
+                key: key.to_owned(),
+                value: value.to_owned(),
+                path: path.display().to_string(),
+                note,
+            }),
+            Err(message) => self.emit(Event::Error {
+                error: EngineError {
+                    kind: EngineErrorKind::Config,
+                    message: format!("cannot save {key}: {message}"),
+                },
+            }),
+        }
     }
 
     fn on_switched(&mut self, result: Result<Setup, String>) {
@@ -319,12 +412,12 @@ impl Engine {
                     self.emit(Event::TurnQueued {
                         waiting_for: "startup".into(),
                     });
-                    self.queued.push_back(items);
+                    self.queued.push_back(Queued::Turn(items));
                 } else if self.running.is_some() {
                     self.emit(Event::TurnQueued {
                         waiting_for: "the current turn".into(),
                     });
-                    self.queued.push_back(items);
+                    self.queued.push_back(Queued::Turn(items));
                 } else {
                     self.start_turn(items, done.clone());
                 }
@@ -371,6 +464,22 @@ impl Engine {
                     });
                 }
             }
+            // A client may send these the moment it sees `TurnComplete`, before the turn
+            // task has handed the history back, so they wait in the queue like turns do.
+            Op::ResumeSession { id } => self.queue_switch(Some(id), done),
+            Op::NewSession => self.queue_switch(None, done),
+            Op::ListSessions => self.list_sessions(),
+            Op::SetTitle { title } => {
+                let title = title.trim().to_owned();
+                session::record(
+                    self.log.as_ref(),
+                    "title",
+                    serde_json::json!({ "title": title }),
+                );
+                self.title = Some(title).filter(|t| !t.is_empty());
+                self.sync_log();
+            }
+            Op::SaveSetting { key, value, scope } => self.save_setting(&key, &value, &scope),
             Op::Shutdown => return false,
             other => self.emit(Event::Warning {
                 message: format!("{} is not implemented yet", op_name(&other)),
@@ -379,11 +488,22 @@ impl Engine {
         true
     }
 
+    fn queue_switch(
+        &mut self,
+        target: Option<SessionId>,
+        done: &mpsc::Sender<(TurnId, Vec<Message>)>,
+    ) {
+        self.queued.push_back(Queued::Switch(target));
+        self.next_queued(done);
+    }
+
     fn next_queued(&mut self, done: &mpsc::Sender<(TurnId, Vec<Message>)>) {
-        if self.running.is_none()
-            && let Some(items) = self.queued.pop_front()
-        {
-            self.start_turn(items, done.clone());
+        while self.started && self.running.is_none() {
+            match self.queued.pop_front() {
+                Some(Queued::Turn(items)) => self.start_turn(items, done.clone()),
+                Some(Queued::Switch(target)) => self.switch_session(target),
+                None => break,
+            }
         }
     }
 
@@ -462,6 +582,10 @@ fn op_name(op: &Op) -> &'static str {
         Op::Compact => "compact",
         Op::Undo { .. } => "undo",
         Op::ResumeSession { .. } => "resume_session",
+        Op::NewSession => "new_session",
+        Op::ListSessions => "list_sessions",
+        Op::SetTitle { .. } => "set_title",
+        Op::SaveSetting { .. } => "save_setting",
         Op::ForkSession { .. } => "fork_session",
         Op::ReloadConfig => "reload_config",
         Op::Shutdown => "shutdown",

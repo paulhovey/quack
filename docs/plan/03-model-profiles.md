@@ -4,11 +4,15 @@
 
 Open-weight coding models are post-trained (often with RL) inside a specific agent harness. Each one learned a particular system prompt shape, set of tool names, parameter names, edit tool and message layout:
 
-- Qwen3-Coder ↔ Qwen Code (a Gemini-CLI-derived tool set: `read_file`, `edit`, `run_shell_command`, …)
-- Kimi K2 ↔ Kimi Code / Kimi CLI (`ReadFile`, `StrReplaceFile`, `Shell`, …)
-- GLM-4.x ↔ Claude-Code-style tools (`Read`, `Edit`, `Bash`, …)
+- Qwen (Qwen3-Coder, Qwen3.5/3.6) ↔ Qwen Code (a Gemini-CLI-derived tool set: `read_file`, `edit`, `run_shell_command`, …)
+- Kimi (K2 → K3) ↔ Kimi Code / Kimi CLI (`ReadFile`, `StrReplaceFile`, `Shell`, …)
+- GLM (4.x → 5.x) ↔ Claude-Code-style tools (`Read`, `Edit`, `Bash`, …)
 - gpt-oss ↔ Codex-style tools (`shell`, `apply_patch`) in the harmony format
 - Small or weak models ↔ SWE-agent-style plain-text commands, with no tool schemas at all
+
+These pairings were written in 2026-10 and must be re-checked against each family's current release before a profile is built.
+
+**Scope: current coding models only (decided 2026-10-18).** Profiles, text tool-call parsers and fixtures are built only for the model families programmers are using now for coding. As of 2026-10 that is Qwen, Kimi, GLM, DeepSeek, MiniMax and Xiaomi MiMo, plus gpt-oss. Older generations and other families get `generic` and the text fallbacks, nothing more. When a family ships a new generation, its profile follows the new one; the old generation is not kept working at extra cost. The eval ([13](13-testing-and-evals.md)) decides which families make the list.
 
 A model performs measurably better when its harness looks like the one it was trained in. Open Interpreter puts this into practice with per-model "harnesses" that change the system prompt, tool definitions, message formatting, reasoning configuration and headers ([docs](https://www.openinterpreter.com/docs/terminal/harness#what-each-cutoffharness-changes)). Its harnesses are compiled into the binary. **Ours are data files**, in keeping with the "nothing built in" principle: a profile can be added, edited or deleted without a rebuild.
 
@@ -162,12 +166,11 @@ The system prompt and env templates use `minijinja` and these variables:
 | Profile | Target | Basis / provenance |
 |---|---|---|
 | `generic` | Unknown models; our own house style | Original. Short prompt, our native tool names |
-| `qwen-code` | Qwen3-Coder family | QwenLM/qwen-code (Apache-2.0); verify licence at time of derivation |
-| `kimi-code` | Kimi K2 family | MoonshotAI kimi-cli; verify licence |
+| `qwen-code` | Qwen3-Coder, Qwen3.5/3.6 | QwenLM/qwen-code (Apache-2.0); verify licence at time of derivation |
+| `kimi-code` | Kimi K3 (and K2) | MoonshotAI kimi-cli; verify licence |
 | `codex` | gpt-oss | openai/codex prompts and `apply_patch` (Apache-2.0) |
-| `cc-style` | GLM-4.x, MiniMax, DeepSeek | Original prompt text written by us. Only the tool *names and shapes* follow Claude-Code conventions. Claude Code's prompt is not openly licensed, so it is **not** copied |
+| `cc-style` | GLM-5.x, MiniMax, DeepSeek V4, MiMo (verify each) | Original prompt text written by us. Only the tool *names and shapes* follow Claude-Code conventions. Claude Code's prompt is not openly licensed, so it is **not** copied |
 | `swe-agent` | Small/weak models (≤14B) | SWE-agent (MIT). Text-only commands, observation loop |
-| `devstral` | Mistral Devstral | OpenHands (MIT) tool shapes; verify |
 
 Licensing rule: every profile's `source` field states where the prompt and tool descriptions come from, and the shipped defaults must only derive from permissively licensed material. CI checks that `source` is present.
 

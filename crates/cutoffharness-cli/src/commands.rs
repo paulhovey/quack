@@ -164,3 +164,79 @@ pub(crate) fn sessions(loaded: &Loaded) -> i32 {
     println!("\nresume with: cutoffharness --resume <id>   (or --continue for the latest)");
     exit::OK
 }
+
+pub(crate) fn keyring_set(name: &str) -> i32 {
+    let (service, user) = cutoffharness_config::keyring_parts(name);
+    let secret = match read_secret(&format!("secret for {service}/{user} (input hidden): ")) {
+        Ok(s) if !s.is_empty() => s,
+        Ok(_) => {
+            eprintln!("nothing entered; nothing stored");
+            return exit::CONFIG_ERROR;
+        }
+        Err(e) => {
+            eprintln!("cannot read the secret: {e}");
+            return exit::CONFIG_ERROR;
+        }
+    };
+    match cutoffharness_config::keyring_set(name, &secret) {
+        Ok(()) => {
+            eprintln!(
+                "stored. Use it in a provider file with:\n  api_key = {{ keyring = \"{name}\" }}"
+            );
+            exit::OK
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            exit::CONFIG_ERROR
+        }
+    }
+}
+
+pub(crate) fn keyring_delete(name: &str) -> i32 {
+    match cutoffharness_config::keyring_delete(name) {
+        Ok(()) => {
+            eprintln!("removed {name}");
+            exit::OK
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            exit::CONFIG_ERROR
+        }
+    }
+}
+
+/// Read one line without echo from a terminal, or all of stdin when piped.
+fn read_secret(prompt: &str) -> std::io::Result<String> {
+    use std::io::IsTerminal;
+    if !std::io::stdin().is_terminal() {
+        let mut s = String::new();
+        std::io::stdin().read_to_string(&mut s)?;
+        return Ok(s.trim().to_owned());
+    }
+    use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+    eprint!("{prompt}");
+    crossterm::terminal::enable_raw_mode()?;
+    let mut s = String::new();
+    let result = loop {
+        match event::read() {
+            Ok(Event::Key(k)) if k.kind != KeyEventKind::Release => match k.code {
+                KeyCode::Enter => break Ok(()),
+                KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                    s.clear();
+                    break Ok(());
+                }
+                KeyCode::Backspace => {
+                    s.pop();
+                }
+                KeyCode::Char(c) => s.push(c),
+                _ => {}
+            },
+            Ok(Event::Paste(p)) => s.push_str(&p),
+            Ok(_) => {}
+            Err(e) => break Err(e),
+        }
+    };
+    crossterm::terminal::disable_raw_mode()?;
+    eprintln!();
+    result.map(|()| s.trim().to_owned())
+}

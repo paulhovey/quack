@@ -10,6 +10,8 @@ pub struct ChatRequest {
     pub model: String,
     pub messages: Vec<Message>,
     pub tools: Vec<ToolSpec>,
+    /// The window the session plans for. Servers that must be told (Ollama) get it.
+    pub context_window: Option<u32>,
     pub max_tokens: Option<u32>,
     pub sampling: Sampling,
     pub reasoning_effort: Option<String>,

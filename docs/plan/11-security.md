@@ -18,6 +18,7 @@
 | Mode | Reads | Edits in workspace | Shell | Outside workspace |
 |---|---|---|---|---|
 | `read-only` | allow | deny | read-only commands only | deny |
+| `plan` | allow | deny | read-only commands only | deny |
 | `ask` (default) | allow | ask | ask unless allow-listed | ask |
 | `auto-edit` | allow | allow | ask unless allow-listed | ask |
 | `full-auto` | allow | allow | allow (sandboxed if available) | ask |
