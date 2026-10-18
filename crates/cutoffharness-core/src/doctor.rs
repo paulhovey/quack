@@ -1,0 +1,231 @@
+//! Environment checks for `cutoffharness doctor` and `/doctor`
+//! (docs/plan/01-configuration.md#validation-and-diagnostics).
+
+use std::path::Path;
+use std::process::{Command, Stdio};
+use std::sync::Arc;
+
+use cutoffharness_config::{Loaded, ProjectStatus};
+use cutoffharness_protocol::{CheckStatus, DoctorCheck};
+use cutoffharness_shell::ShellKind;
+use cutoffharness_store::memory::Scope;
+
+fn check(name: &str, status: CheckStatus, detail: impl Into<String>) -> DoctorCheck {
+    DoctorCheck {
+        name: name.into(),
+        status,
+        detail: detail.into(),
+    }
+}
+
+/// Every check, in display order. Contacts each configured provider (nothing else).
+pub async fn run(config: Arc<Loaded>) -> Vec<DoctorCheck> {
+    let providers = crate::models::catalog(config.clone()).await;
+    let cfg = config.clone();
+    let mut checks = tokio::task::spawn_blocking(move || local(&cfg))
+        .await
+        .unwrap_or_default();
+
+    let usable = providers.iter().filter(|p| p.available).count();
+    checks.insert(
+        2,
+        match providers.len() {
+            0 => check(
+                "providers",
+                CheckStatus::Fail,
+                "none configured: add a file to providers.d (see `config paths`)",
+            ),
+            n => check(
+                "providers",
+                if usable == 0 {
+                    CheckStatus::Fail
+                } else if usable < n {
+                    CheckStatus::Warn
+                } else {
+                    CheckStatus::Ok
+                },
+                format!("{usable} of {n} usable"),
+            ),
+        },
+    );
+    for (i, p) in providers.iter().enumerate() {
+        let detail = if p.note.is_empty() {
+            format!("{} models", p.models.len())
+        } else {
+            p.note.clone()
+        };
+        checks.insert(
+            3 + i,
+            check(
+                &format!("  {}", p.id),
+                if p.available {
+                    CheckStatus::Ok
+                } else {
+                    CheckStatus::Warn
+                },
+                detail,
+            ),
+        );
+    }
+    checks
+}
+
+/// Checks that need no network.
+fn local(config: &Loaded) -> Vec<DoctorCheck> {
+    let d = &config.dirs;
+    let mut out = Vec::new();
+    out.push(if config.diagnostics.is_empty() {
+        check(
+            "config",
+            CheckStatus::Ok,
+            format!("{} layers read", config.layers.len()),
+        )
+    } else {
+        let files: Vec<String> = config.diagnostics.iter().map(|d| d.one_line()).collect();
+        check("config", CheckStatus::Fail, files.join("\n"))
+    });
+    out.push(match &d.defaults {
+        Some(p) => check("defaults", CheckStatus::Ok, p.display().to_string()),
+        None => check(
+            "defaults",
+            CheckStatus::Info,
+            "no defaults bundle; only your own provider and profile files are used",
+        ),
+    });
+    // Providers are inserted here by `run`.
+    out.push(match config.settings.model.default.as_str() {
+        "" => check(
+            "model",
+            CheckStatus::Info,
+            "no [model] default; the first usable model is picked",
+        ),
+        m => check("model", CheckStatus::Ok, m),
+    });
+    let (status, project) = match config.project {
+        ProjectStatus::None => (CheckStatus::Ok, "no .cutoffharness/"),
+        ProjectStatus::Trusted => (CheckStatus::Ok, "trusted"),
+        ProjectStatus::SettingsOnly => (CheckStatus::Ok, "trusted (settings only)"),
+        ProjectStatus::Untrusted => (CheckStatus::Warn, "config found but not trusted; skipped"),
+        ProjectStatus::Ignored => (CheckStatus::Info, "ignored (trust.toml)"),
+        ProjectStatus::DisabledByPolicy => (CheckStatus::Info, "disabled by policy"),
+    };
+    out.push(check(
+        "project",
+        status,
+        format!("{project} · {}", d.workspace_root.display()),
+    ));
+
+    let instructions = crate::env::instructions(config);
+    out.push(check(
+        "instructions",
+        if instructions.sources.is_empty() {
+            CheckStatus::Info
+        } else {
+            CheckStatus::Ok
+        },
+        if instructions.sources.is_empty() {
+            "no AGENTS.md".to_owned()
+        } else {
+            instructions.sources.join(", ")
+        },
+    ));
+
+    let shell = ShellKind::detect(
+        &config.settings.tools.shell,
+        std::env::var("SHELL").ok().as_deref(),
+    );
+    let program = shell.program();
+    out.push(if runs(program, &[version_flag(&shell)]) {
+        check(
+            "shell",
+            CheckStatus::Ok,
+            format!("{} · {}", shell.label(), program.display()),
+        )
+    } else {
+        check(
+            "shell",
+            CheckStatus::Fail,
+            format!("{} does not run; set [tools] shell", program.display()),
+        )
+    });
+    out.push(if runs(Path::new("git"), &["--version"]) {
+        check("git", CheckStatus::Ok, "found")
+    } else {
+        check(
+            "git",
+            CheckStatus::Warn,
+            "not found: the workspace root is the current directory and there is no branch info",
+        )
+    });
+    if cfg!(not(any(windows, target_os = "macos"))) {
+        out.push(if runs(Path::new("secret-tool"), &["--version"]) {
+            check("keyring", CheckStatus::Ok, "secret-tool found")
+        } else {
+            check(
+                "keyring",
+                CheckStatus::Info,
+                "secret-tool not found; `keyring` secrets need libsecret-tools (Debian/Ubuntu) or libsecret",
+            )
+        });
+    }
+
+    let sessions = crate::session::project_sessions(config).dir;
+    out.push(match writable(&sessions) {
+        Ok(()) => check("sessions", CheckStatus::Ok, sessions.display().to_string()),
+        Err(e) => check(
+            "sessions",
+            CheckStatus::Fail,
+            format!("{}: {e}; sessions will not be saved", sessions.display()),
+        ),
+    });
+    let memory = crate::env::memory_store(config);
+    let notes = memory.list(Scope::Global).len() + memory.list(Scope::Project).len();
+    out.push(check(
+        "memory",
+        CheckStatus::Ok,
+        format!("{notes} notes · {}", memory.project.display()),
+    ));
+
+    let var = |k: &str| std::env::var(k).unwrap_or_default();
+    out.push(check(
+        "terminal",
+        CheckStatus::Info,
+        format!(
+            "TERM={} COLORTERM={}{}",
+            var("TERM"),
+            var("COLORTERM"),
+            if std::env::var_os("NO_COLOR").is_some() {
+                " NO_COLOR"
+            } else {
+                ""
+            }
+        ),
+    ));
+    out
+}
+
+fn version_flag(shell: &ShellKind) -> &'static str {
+    match shell {
+        ShellKind::Cmd(_) => "/?",
+        ShellKind::Pwsh(_) | ShellKind::PowerShell(_) => "-Version",
+        _ => "--version",
+    }
+}
+
+fn runs(program: &Path, args: &[&str]) -> bool {
+    Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok()
+}
+
+/// Create the directory if needed and write a probe file into it.
+fn writable(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let probe = dir.join(".doctor-probe");
+    std::fs::write(&probe, b"")?;
+    std::fs::remove_file(probe)
+}

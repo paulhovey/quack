@@ -11,6 +11,8 @@ publish.workspace = true
 
 [dependencies]
 cutoffharness-protocol.workspace = true
+cutoffharness-providers.workspace = true
+serde.workspace = true
 
 [features]
 lang-common = []

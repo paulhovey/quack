@@ -4,15 +4,18 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cutoffharness_config::provider::ModelEntry;
+use cutoffharness_config::settings::MemoryWrites;
 use cutoffharness_config::{
     Item, ItemState, Loaded, ProjectStatus, ProviderFile, glob_match, load_providers,
 };
+use cutoffharness_instructions::skills;
 use cutoffharness_profiles::{
     InternalTool, Profile, PromptVars, ToolSurface, load_profiles, select,
 };
-use cutoffharness_protocol::{Event, LoadState, Subsystem};
+use cutoffharness_protocol::{Event, LoadState, SkillInfo, Subsystem};
 use cutoffharness_providers::{DiscoveredModel, Provider};
 use cutoffharness_shell::ShellKind;
+use cutoffharness_store::memory::Scope;
 use cutoffharness_tools::{Permissions, ReadTracker, Registry, ToolCtx};
 use tokio::sync::broadcast;
 use tokio::task::JoinSet;
@@ -41,6 +44,15 @@ pub(crate) struct Setup {
     pub budget: Option<u32>,
     /// Byte estimate corrected by this model's reported usage.
     pub estimator: std::sync::Mutex<cutoffharness_providers::tokens::Estimator>,
+    pub context: cutoffharness_config::settings::ContextSettings,
+    /// Directories whose AGENTS.md is in the system prompt (or that have none).
+    pub instruction_dirs: Vec<std::path::PathBuf>,
+}
+
+/// Files read from the workspace and config folders that shape the prompt.
+pub(crate) struct Files {
+    pub instructions: cutoffharness_instructions::agents_md::Loaded,
+    pub skills: skills::Found,
 }
 
 /// What startup resolved, for the engine's use.
@@ -86,6 +98,15 @@ pub(crate) async fn run(config: Arc<Loaded>, tx: broadcast::Sender<Event>) -> St
     reporter(Subsystem::Tokenizer).send(LoadState::Ready {
         detail: "estimate, corrected by server usage".into(),
     });
+    let store = env::memory_store(&config);
+    let notes = store.list(Scope::Global).len() + store.list(Scope::Project).len();
+    reporter(Subsystem::Memory).send(LoadState::Ready {
+        detail: format!(
+            "{notes} note{} · {}",
+            if notes == 1 { "" } else { "s" },
+            store.project.display()
+        ),
+    });
 
     let mut placeholders = JoinSet::new();
     for (subsystem, work, milestone) in [
@@ -94,7 +115,6 @@ pub(crate) async fn run(config: Arc<Loaded>, tx: broadcast::Sender<Event>) -> St
             "looking for other harnesses' files",
             "M2",
         ),
-        (Subsystem::Memory, "reading memory index", "M2"),
         (Subsystem::Mcp, "reading mcp.d", "M3"),
         (Subsystem::Lsp, "checking lsp.d binaries", "M4"),
     ] {
@@ -117,6 +137,8 @@ pub(crate) async fn run(config: Arc<Loaded>, tx: broadcast::Sender<Event>) -> St
     });
     let cfg_for_instr = config.clone();
     let instructions = tokio::task::spawn_blocking(move || env::instructions(&cfg_for_instr));
+    let cfg_for_skills = config.clone();
+    let skills = tokio::task::spawn_blocking(move || env::skills(&cfg_for_skills));
 
     // Config + providers.
     let cfg = reporter(Subsystem::Config);
@@ -135,16 +157,23 @@ pub(crate) async fn run(config: Arc<Loaded>, tx: broadcast::Sender<Event>) -> St
     let elapsed = started.elapsed().as_millis();
     report_config(&cfg, &config, &providers, elapsed, &tx);
 
-    let (instructions, sources) = instructions.await.unwrap_or_default();
-    instr.send(if sources.is_empty() {
+    let instructions = instructions.await.unwrap_or_default();
+    instr.send(if instructions.sources.is_empty() {
         LoadState::Disabled {
             reason: "no AGENTS.md found".into(),
         }
     } else {
         LoadState::Ready {
-            detail: format!("{} · {} bytes", sources.join(", "), instructions.len()),
+            detail: format!(
+                "{} · {} bytes",
+                instructions.sources.join(", "),
+                instructions.text.len()
+            ),
         }
     });
+
+    let skills = skills.await.unwrap_or_default();
+    report_skills(&tx, &skills);
 
     let resolved = resolve_model(&config, &providers, &prov, &tx).await;
     let (provider, model, auto_picked) = match resolved {
@@ -182,7 +211,10 @@ pub(crate) async fn run(config: Arc<Loaded>, tx: broadcast::Sender<Event>) -> St
         provider,
         model,
         model_ref,
-        instructions,
+        Files {
+            instructions,
+            skills,
+        },
         &reporter(Subsystem::Profile),
         &tx,
     )
@@ -241,15 +273,19 @@ pub(crate) async fn switch(
         detail: format!("{model_ref} ({ctx})"),
     });
     let cfg = config.clone();
-    let (instructions, _) = tokio::task::spawn_blocking(move || env::instructions(&cfg))
-        .await
-        .unwrap_or_default();
+    let (instructions, skills) =
+        tokio::task::spawn_blocking(move || (env::instructions(&cfg), env::skills(&cfg)))
+            .await
+            .unwrap_or_default();
     build_setup(
         &config,
         provider,
         model,
         model_ref,
-        instructions,
+        Files {
+            instructions,
+            skills,
+        },
         &reporter(Subsystem::Profile),
         &tx,
     )
@@ -479,7 +515,10 @@ async fn build_setup(
     provider: Provider,
     model: ModelEntry,
     model_ref: String,
-    instructions: String,
+    Files {
+        instructions,
+        skills: found,
+    }: Files,
     rep: &Reporter,
     tx: &broadcast::Sender<Event>,
 ) -> Option<Setup> {
@@ -517,10 +556,13 @@ async fn build_setup(
         cancel: CancellationToken::new(),
         on_output: None,
         reads: Arc::new(ReadTracker::default()),
+        memory: Some(Arc::new(env::memory_store(config))),
+        skills: Arc::new(found.skills),
     };
     let registry = Arc::new(Registry::builtin());
     let internal: Vec<InternalTool> = registry
         .iter()
+        .filter(|t| t.available(&tool_ctx))
         .map(|t| InternalTool {
             name: t.name().to_owned(),
             description: t.description(&tool_ctx),
@@ -535,14 +577,22 @@ async fn build_setup(
     let vars = PromptVars {
         os: std::env::consts::OS.into(),
         shell: shell.label().into(),
-        cwd: root.display().to_string(),
+        cwd: config.dirs.cwd.display().to_string(),
         workspace_root: root.display().to_string(),
         date: env::today(),
         model: model.id.clone(),
         context_window: model.context_window,
-        instructions,
+        instructions: instructions.text,
         folder_listing: env::folder_listing(&root),
         git_branch: env::git_branch(&root),
+        skills: skills::index(
+            &tool_ctx.skills,
+            config.settings.skills.index_max_tokens as usize * 7 / 2,
+        ),
+        memory_index: tool_ctx.memory.as_ref().map_or_else(String::new, |m| {
+            // About 3.5 bytes per token.
+            m.index_text(config.settings.memory.index_max_tokens as usize * 7 / 2)
+        }),
     };
     let system = match profile.render_system(&vars) {
         Ok(s) => s,
@@ -555,7 +605,8 @@ async fn build_setup(
     if let Some(cap) = config.settings.policy.max_permission_mode {
         settings.mode = settings.mode.min(cap);
     }
-    let (permissions, perm_warnings) = Permissions::new(&settings, &root);
+    let (mut permissions, perm_warnings) = Permissions::new(&settings, &root);
+    permissions.memory_writes_ask = config.settings.memory.writes == MemoryWrites::Ask;
     for w in perm_warnings {
         warn(tx, format!("[permissions]: {w}"));
     }
@@ -591,7 +642,45 @@ async fn build_setup(
         permissions,
         budget,
         estimator: std::sync::Mutex::default(),
+        context: config.settings.context.clone(),
+        instruction_dirs: instructions.dirs,
     })
+}
+
+fn report_skills(tx: &broadcast::Sender<Event>, found: &skills::Found) {
+    let rep = Reporter {
+        tx: tx.clone(),
+        subsystem: Subsystem::Skills,
+    };
+    for f in &found.failed {
+        warn(tx, format!("skill skipped: {f}"));
+    }
+    rep.send(match (found.skills.len(), found.failed.len()) {
+        (0, 0) => LoadState::Disabled {
+            reason: "no skills found".into(),
+        },
+        (0, n) => LoadState::Failed {
+            error: format!("{n} invalid skill(s); see the warnings"),
+        },
+        (n, 0) => LoadState::Ready {
+            detail: format!("{n} skill{}", if n == 1 { "" } else { "s" }),
+        },
+        (n, bad) => LoadState::NeedsAttention {
+            detail: format!("{n} loaded, {bad} invalid (see the warnings)"),
+        },
+    });
+    let _ = tx.send(Event::Skills {
+        skills: found
+            .skills
+            .iter()
+            .map(|s| SkillInfo {
+                name: s.name.clone(),
+                description: s.description.clone(),
+                source: s.source.clone(),
+                dir: s.dir.display().to_string(),
+            })
+            .collect(),
+    });
 }
 
 fn project_state(status: ProjectStatus) -> LoadState {

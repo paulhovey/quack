@@ -1,7 +1,8 @@
+use cutoffharness_core::protocol::{CheckStatus, DoctorCheck};
 use std::io::Read;
 use std::path::PathBuf;
 
-use cutoffharness_config::{ItemState, LayerStatus, Loaded, load_providers, schema};
+use cutoffharness_config::{ItemState, Loaded, load_providers, schema};
 use cutoffharness_exec::exit;
 
 pub(crate) fn config_check(loaded: &Loaded) -> i32 {
@@ -101,33 +102,35 @@ pub(crate) fn config_paths(loaded: &Loaded) -> i32 {
     exit::OK
 }
 
-pub(crate) fn doctor(loaded: &Loaded) -> i32 {
-    println!("cutoffharness {}\n", env!("CARGO_PKG_VERSION"));
-    println!("config layers:");
-    for layer in &loaded.layers {
-        let dir = layer
-            .dir
-            .as_ref()
-            .map_or_else(|| "-".into(), |p| p.display().to_string());
-        let status = match &layer.status {
-            LayerStatus::Loaded => "loaded".to_owned(),
-            LayerStatus::Missing => "no config.toml".to_owned(),
-            LayerStatus::Failed => "FAILED (run `config check`)".to_owned(),
-            LayerStatus::Skipped(why) => format!("skipped: {why}"),
+/// Print the checks; non-zero exit when any failed. Output errors (a closed pipe) are
+/// ignored.
+pub(crate) fn doctor(checks: &[DoctorCheck]) -> i32 {
+    use std::io::Write;
+    let mut out = std::io::stdout().lock();
+    let _ = writeln!(out, "cutoffharness {}\n", env!("CARGO_PKG_VERSION"));
+    let width = checks.iter().map(|c| c.name.len()).max().unwrap_or(0);
+    for c in checks {
+        let mark = match c.status {
+            CheckStatus::Ok => "ok  ",
+            CheckStatus::Info => "info",
+            CheckStatus::Warn => "warn",
+            CheckStatus::Fail => "FAIL",
         };
-        println!("  {:<9} {status:<28} {dir}", layer.kind.label());
+        let mut lines = c.detail.lines();
+        let _ = writeln!(
+            out,
+            "{mark}  {:<width$}  {}",
+            c.name,
+            lines.next().unwrap_or_default()
+        );
+        for l in lines {
+            let _ = writeln!(out, "      {:<width$}  {l}", "");
+        }
     }
-    println!("\nproject: {:?}", loaded.project);
-    println!(
-        "terminal: TERM={} NO_COLOR={}",
-        std::env::var("TERM").unwrap_or_default(),
-        std::env::var_os("NO_COLOR").is_some()
-    );
-    println!("\nProvider reachability, tokenizer, MCP/LSP and Windows checks land in M1.");
-    if loaded.diagnostics.is_empty() {
-        exit::OK
-    } else {
+    if checks.iter().any(|c| c.status == CheckStatus::Fail) {
         exit::CONFIG_ERROR
+    } else {
+        exit::OK
     }
 }
 

@@ -606,6 +606,8 @@ name = "cutoffharness-context"
 version = "0.1.0"
 dependencies = [
  "cutoffharness-protocol",
+ "cutoffharness-providers",
+ "serde",
 ]
 
 [[package]]
@@ -647,6 +649,7 @@ version = "0.1.0"
 dependencies = [
  "cutoffharness-config",
  "cutoffharness-protocol",
+ "tempfile",
 ]
 
 [[package]]
@@ -738,10 +741,12 @@ name = "cutoffharness-tools"
 version = "0.1.0"
 dependencies = [
  "cutoffharness-config",
+ "cutoffharness-instructions",
  "cutoffharness-lsp",
  "cutoffharness-protocol",
  "cutoffharness-sandbox",
  "cutoffharness-shell",
+ "cutoffharness-store",
  "futures",
  "globset",
  "ignore",

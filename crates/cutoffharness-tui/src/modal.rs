@@ -621,6 +621,436 @@ pub(crate) fn config(
     )
 }
 
+/// The `/context` modal. `report` is `None` until the engine answers.
+pub(crate) fn context(
+    report: Option<&cutoffharness_protocol::ContextReport>,
+    theme: &Theme,
+) -> Modal {
+    let tabs = |items| {
+        Modal::new(
+            "Context",
+            vec![ModalTab {
+                title: "Context".into(),
+                items,
+            }],
+        )
+    };
+    let Some(r) = report else {
+        return tabs(vec![placeholder(
+            "measuring…",
+            "Estimating what the next request will hold.",
+            theme,
+        )]);
+    };
+    let k = |n: u32| {
+        if n >= 10_000 {
+            format!("{}k", n / 1000)
+        } else {
+            n.to_string()
+        }
+    };
+    let share = |n: u32| match r.budget {
+        Some(b) if b > 0 => format!("{}%", u64::from(n) * 100 / u64::from(b)),
+        _ => String::new(),
+    };
+    let mut total = vec![Line::styled(r.model.clone(), theme.accent), Line::raw("")];
+    if let Some(b) = r.budget.filter(|b| *b > 0) {
+        const WIDTH: u32 = 30;
+        let filled = (r.used.min(b) * WIDTH / b) as usize;
+        total.push(Line::raw(format!(
+            "{}{} {}",
+            "█".repeat(filled),
+            "░".repeat(WIDTH as usize - filled),
+            share(r.used)
+        )));
+        total.push(Line::raw(""));
+    }
+    let unknown = || "unknown".to_owned();
+    total.extend([
+        field(theme, "used", format!("~{} tokens", r.used)),
+        field(
+            theme,
+            "budget",
+            r.budget.map_or_else(unknown, |b| b.to_string()),
+        ),
+        field(
+            theme,
+            "window",
+            r.window.map_or_else(unknown, |w| w.to_string()),
+        ),
+        field(
+            theme,
+            "compacts",
+            r.threshold
+                .map_or_else(|| "on overflow only".into(), |t| format!("above ~{t}")),
+        ),
+        field(theme, "strategy", r.strategy.clone()),
+        Line::raw(""),
+        Line::styled("/compact [focus] summarizes earlier turns now", theme.dim),
+    ]);
+    if let Some(n) = &r.note {
+        total.insert(2, Line::styled(n.clone(), theme.warn));
+        total.insert(3, Line::raw(""));
+    }
+    let mut items = vec![ModalItem {
+        label: "Total".into(),
+        hint: match r.budget {
+            Some(b) => format!("{} / {}", k(r.used), k(b)),
+            None => k(r.used),
+        },
+        detail: total,
+        action: None,
+        run: false,
+        alt: None,
+    }];
+    items.extend(r.segments.iter().map(|s| {
+        ModalItem {
+            label: s.name.clone(),
+            hint: format!("{} {}", k(s.tokens), share(s.tokens))
+                .trim()
+                .to_owned(),
+            detail: vec![
+                Line::styled(s.name.clone(), theme.accent),
+                Line::raw(""),
+                field(theme, "tokens", format!("~{}", s.tokens)),
+                field(theme, "of budget", share(s.tokens)),
+                Line::raw(""),
+                Line::raw(s.detail.clone()),
+            ],
+            action: None,
+            run: false,
+            alt: None,
+        }
+    }));
+    tabs(items)
+}
+
+/// The `/memory` modal. `notes` is `None` while the engine reads them.
+pub(crate) fn memory(notes: Option<&[cutoffharness_protocol::MemoryNote]>, theme: &Theme) -> Modal {
+    let items = match notes {
+        None => vec![placeholder(
+            "reading notes…",
+            "Reading memory notes.",
+            theme,
+        )],
+        Some([]) => vec![placeholder(
+            "no notes yet",
+            "The model saves notes with the memory tool when something will matter in later \
+             sessions. Notes are markdown files you can edit.",
+            theme,
+        )],
+        Some(list) => list
+            .iter()
+            .map(|n| {
+                let mut detail = vec![
+                    Line::styled(n.name.clone(), theme.accent),
+                    Line::raw(""),
+                    Line::raw(n.description.clone()),
+                    Line::raw(""),
+                    field(theme, "scope", n.scope.clone()),
+                    field(theme, "file", n.path.clone()),
+                    Line::raw(""),
+                ];
+                // The body, without the front matter shown above.
+                let body = n
+                    .text
+                    .strip_prefix("---")
+                    .and_then(|r| r.split_once("\n---"))
+                    .map_or(n.text.as_str(), |(_, b)| b);
+                detail.extend(body.trim().lines().map(|l| Line::raw(l.to_owned())));
+                ModalItem {
+                    label: n.name.clone(),
+                    hint: n.scope.clone(),
+                    detail,
+                    action: None,
+                    run: false,
+                    alt: Some(format!("/memory delete {}/{}", n.scope, n.name)),
+                }
+            })
+            .collect(),
+    };
+    Modal::new(
+        "Memory",
+        vec![ModalTab {
+            title: "Notes".into(),
+            items,
+        }],
+    )
+    .with_alt("delete")
+}
+
+/// The `/permissions` modal: modes to switch to, and the configured rules.
+pub(crate) fn permissions(current: &str, rules: &[(String, String)], theme: &Theme) -> Modal {
+    const MODES: &[(&str, &str)] = &[
+        (
+            "read-only",
+            "Reads only. Edits are refused; commands run only when an allow rule matches.",
+        ),
+        (
+            "plan",
+            "Look around and propose a plan. Edits are refused; read-only commands run.",
+        ),
+        (
+            "ask",
+            "Reads in the workspace run; edits and commands ask first.",
+        ),
+        (
+            "auto-edit",
+            "Edits inside the workspace run; commands ask first.",
+        ),
+        (
+            "full-auto",
+            "Everything runs without asking, except the built-in deny list and deny rules.",
+        ),
+    ];
+    let modes = MODES
+        .iter()
+        .map(|(name, what)| ModalItem {
+            label: if *name == current {
+                format!("{name} ●")
+            } else {
+                (*name).to_owned()
+            },
+            hint: String::new(),
+            detail: vec![
+                Line::styled(*name, theme.accent),
+                Line::raw(""),
+                Line::raw(*what),
+                Line::raw(""),
+                Line::styled(
+                    if *name == current {
+                        "the current mode"
+                    } else {
+                        "⏎ switch to it for this session"
+                    },
+                    theme.dim,
+                ),
+            ],
+            action: Some(format!("/permissions {name}")),
+            run: true,
+            alt: None,
+        })
+        .collect();
+    let rule_items = if rules.is_empty() {
+        vec![placeholder(
+            "no rules",
+            "Add allow, ask and deny rules under [permissions] in config.toml, e.g. \
+             allow = [\"shell:cargo test*\"]. /config shows where each setting comes from.",
+            theme,
+        )]
+    } else {
+        rules
+            .iter()
+            .map(|(list, rule)| ModalItem {
+                label: rule.clone(),
+                hint: list.clone(),
+                detail: vec![
+                    Line::styled(rule.clone(), theme.accent),
+                    Line::raw(""),
+                    field(theme, "list", list.clone()),
+                    Line::raw(""),
+                    Line::styled(
+                        "Order: built-in deny list, deny, session approvals, allow, ask, then the mode.",
+                        theme.dim,
+                    ),
+                ],
+                action: None,
+                run: false,
+                alt: None,
+            })
+            .collect()
+    };
+    Modal::new(
+        "Permissions",
+        vec![
+            ModalTab {
+                title: "Mode".into(),
+                items: modes,
+            },
+            ModalTab {
+                title: "Rules".into(),
+                items: rule_items,
+            },
+        ],
+    )
+}
+
+/// The `/doctor` modal. `checks` is `None` while they run.
+pub(crate) fn doctor(
+    checks: Option<&[cutoffharness_protocol::DoctorCheck]>,
+    theme: &Theme,
+) -> Modal {
+    use cutoffharness_protocol::CheckStatus;
+    let items = match checks {
+        None => vec![placeholder(
+            "checking…",
+            "Running environment checks and contacting each configured provider.",
+            theme,
+        )],
+        Some(list) => list
+            .iter()
+            .map(|c| {
+                let (hint, style) = match c.status {
+                    CheckStatus::Ok => ("ok", theme.ok),
+                    CheckStatus::Info => ("info", theme.dim),
+                    CheckStatus::Warn => ("warn", theme.warn),
+                    CheckStatus::Fail => ("FAIL", theme.error),
+                };
+                let mut detail = vec![
+                    Line::styled(c.name.trim().to_owned(), theme.accent),
+                    Line::raw(""),
+                    Line::styled(hint, style),
+                    Line::raw(""),
+                ];
+                detail.extend(c.detail.lines().map(|l| Line::raw(l.to_owned())));
+                ModalItem {
+                    label: c.name.clone(),
+                    hint: hint.to_owned(),
+                    detail,
+                    action: None,
+                    run: false,
+                    alt: None,
+                }
+            })
+            .collect(),
+    };
+    Modal::new(
+        "Doctor",
+        vec![ModalTab {
+            title: "Checks".into(),
+            items,
+        }],
+    )
+}
+
+/// The `/providers` modal: each provider file with its state. `None` while probing.
+pub(crate) fn providers(
+    catalog: Option<&[cutoffharness_protocol::ProviderModels]>,
+    current: Option<&str>,
+    theme: &Theme,
+) -> Modal {
+    let items = match catalog {
+        None => vec![placeholder(
+            "checking providers…",
+            "Asking each provider for its models.",
+            theme,
+        )],
+        Some([]) => vec![placeholder(
+            "no providers",
+            "Add a TOML file with a base_url to providers.d in your config folder \
+             (`cutoffharness config paths` shows where). Shipped examples are in the \
+             defaults bundle.",
+            theme,
+        )],
+        Some(list) => list
+            .iter()
+            .map(|p| {
+                let in_use = current.is_some_and(|c| c.starts_with(&format!("{}/", p.id)));
+                let mut detail = vec![
+                    Line::styled(p.id.clone(), theme.accent),
+                    Line::raw(""),
+                    if p.available {
+                        Line::styled("usable", theme.ok)
+                    } else {
+                        Line::styled("unavailable", theme.warn)
+                    },
+                ];
+                if !p.note.is_empty() {
+                    detail.push(Line::raw(p.note.clone()));
+                }
+                if in_use {
+                    detail.push(Line::styled("the current model is from here", theme.dim));
+                }
+                detail.push(Line::raw(""));
+                detail.extend(p.models.iter().take(30).map(|m| {
+                    Line::raw(format!(
+                        "  {}{}",
+                        m.alias
+                            .as_ref()
+                            .map_or_else(|| m.id.clone(), |a| format!("{a} ({})", m.id)),
+                        m.context_window.map_or_else(String::new, |c| format!(
+                            " · {}",
+                            crate::theme::tokens(c)
+                        ))
+                    ))
+                }));
+                if p.models.len() > 30 {
+                    detail.push(Line::styled(
+                        format!("  … {} more in /models", p.models.len() - 30),
+                        theme.dim,
+                    ));
+                }
+                ModalItem {
+                    label: if in_use {
+                        format!("{} ●", p.id)
+                    } else {
+                        p.id.clone()
+                    },
+                    hint: if p.available {
+                        format!("{} models", p.models.len())
+                    } else {
+                        "unavailable".into()
+                    },
+                    detail,
+                    action: None,
+                    run: false,
+                    alt: None,
+                }
+            })
+            .collect(),
+    };
+    Modal::new(
+        "Providers",
+        vec![ModalTab {
+            title: "Providers".into(),
+            items,
+        }],
+    )
+}
+
+/// The `/skills` modal: installed skills; ⏎ puts `/<name> ` in the input.
+pub(crate) fn skills(skills: &[cutoffharness_protocol::SkillInfo], theme: &Theme) -> Modal {
+    let items = if skills.is_empty() {
+        vec![placeholder(
+            "no skills",
+            "Put a skill folder with a SKILL.md in .agents/skills (this project), \
+             ~/.agents/skills or skills/ in your config folder.",
+            theme,
+        )]
+    } else {
+        skills
+            .iter()
+            .map(|s| ModalItem {
+                label: s.name.clone(),
+                hint: s.source.split(' ').next().unwrap_or_default().to_owned(),
+                detail: vec![
+                    Line::styled(format!("/{}", s.name), theme.accent),
+                    Line::raw(""),
+                    Line::raw(s.description.clone()),
+                    Line::raw(""),
+                    field(theme, "from", s.source.clone()),
+                    field(theme, "folder", s.dir.clone()),
+                    Line::raw(""),
+                    Line::styled(
+                        "⏎ run it with a request; the model also loads it when relevant",
+                        theme.dim,
+                    ),
+                ],
+                action: Some(format!("/{} ", s.name)),
+                run: false,
+                alt: None,
+            })
+            .collect()
+    };
+    Modal::new(
+        "Skills",
+        vec![ModalTab {
+            title: "Skills".into(),
+            items,
+        }],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

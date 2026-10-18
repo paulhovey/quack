@@ -91,6 +91,13 @@ deny  = ["shell:rm -rf /*"]
 [memory]
 path = "~/notes/cutoffharness-memory"   # default: <user data>/memory
 project_scope = "data-dir"        # data-dir | repo (store under .cutoffharness/memory and commit it)
+writes = "auto"                   # auto | ask: approve the model's memory writes
+index_max_tokens = 1500           # cap on the note index in the system prompt
+
+[skills]
+compat_paths = []                 # more skill folders, e.g. ".claude/skills" once accepted
+disabled = []                     # skill names to skip
+index_max_tokens = 1500           # cap on the skill list in the system prompt
 
 [sessions]
 path = ""                         # default: <user data>/sessions

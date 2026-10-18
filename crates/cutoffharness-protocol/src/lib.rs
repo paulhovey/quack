@@ -32,9 +32,17 @@ pub enum Op {
     },
     /// Ask for the model catalogue; answered with `Event::ModelCatalog`.
     ListModels,
-    Compact,
+    /// Summarize older history now. `focus` says what the summary should keep.
+    Compact {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        focus: Option<String>,
+    },
+    /// Revert the files changed by the last edit call. `force` also overwrites files that
+    /// changed again since.
     Undo {
         checkpoint: Option<CheckpointId>,
+        #[serde(default)]
+        force: bool,
     },
     /// Switch to a saved session (the current one stays saved).
     ResumeSession {
@@ -44,6 +52,21 @@ pub enum Op {
     NewSession,
     /// Ask for this project's saved sessions; answered with `Event::SessionList`.
     ListSessions,
+    /// Ask what is using the context; answered with `Event::ContextReport`.
+    GetContext,
+    /// `read-only`, `ask`, `auto-edit`, `full-auto` (capped by policy), or `plan`.
+    SetPermissionMode {
+        mode: String,
+    },
+    /// Run the environment checks; answered with `Event::DoctorReport`.
+    RunDoctor,
+    /// Ask for the memory notes; answered with `Event::MemoryNotes`.
+    ListMemory,
+    /// Delete a memory note. `scope` is `global` or `project`.
+    DeleteMemory {
+        scope: String,
+        name: String,
+    },
     SetTitle {
         title: String,
     },
@@ -147,8 +170,45 @@ pub enum Event {
     ContextPruned {
         report: PruneReport,
     },
+    /// Timing of one model call: time to the first token, and generation speed after it.
+    Speed {
+        ttft_ms: u32,
+        /// Output tokens per second; `None` when the reply was too short to measure.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tokens_per_sec: Option<f32>,
+    },
+    /// A summary is being written; `reason` says why (e.g. `/compact`, the threshold).
+    Compacting {
+        reason: String,
+    },
+    /// What is using the context, segment by segment.
+    ContextReport {
+        report: ContextReport,
+    },
+    MemoryNotes {
+        notes: Vec<MemoryNote>,
+    },
+    DoctorReport {
+        checks: Vec<DoctorCheck>,
+    },
+    /// Skills the model can load, and the user can run as `/<name> [args]`.
+    Skills {
+        skills: Vec<SkillInfo>,
+    },
+    /// Files put back by `/undo`; `conflicts` changed since and were left alone.
+    FilesRestored {
+        restored: Vec<String>,
+        conflicts: Vec<String>,
+    },
+    /// The session's permission mode, e.g. `ask` or `plan`.
+    PermissionMode {
+        mode: String,
+    },
     Compacted {
         summary_tokens: u32,
+        /// History messages the summary replaced.
+        #[serde(default)]
+        replaced: u32,
     },
     // diagnostics
     Warning {
@@ -273,6 +333,8 @@ pub enum ReplayItem {
         ok: bool,
         result: String,
     },
+    /// Earlier history was summarized here.
+    Compacted,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -281,6 +343,72 @@ pub struct Usage {
     pub completion_tokens: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cached_prompt_tokens: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextReport {
+    /// `<provider>/<model>`.
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<u32>,
+    /// Requests estimated above this get pruned, then compacted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<u32>,
+    /// Estimated prompt tokens of the next request.
+    pub used: u32,
+    /// `[context] cache_strategy`.
+    pub strategy: String,
+    pub segments: Vec<ContextSegment>,
+    /// Caveats, e.g. that the history is in use by a running turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillInfo {
+    pub name: String,
+    pub description: String,
+    /// Where it was found, e.g. `user` or `project (.agents/skills)`.
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub dir: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DoctorCheck {
+    pub name: String,
+    pub status: CheckStatus,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckStatus {
+    Ok,
+    Info,
+    Warn,
+    Fail,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryNote {
+    /// `global` or `project`.
+    pub scope: String,
+    pub name: String,
+    pub description: String,
+    pub path: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextSegment {
+    pub name: String,
+    pub tokens: u32,
+    /// One line, e.g. `12 messages, 3 pruned`.
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

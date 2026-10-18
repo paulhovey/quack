@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+use cutoffharness_config::settings::PermissionMode;
 use cutoffharness_config::{LayerKind, Loaded};
 use cutoffharness_protocol::{
     EngineError, EngineErrorKind, Event, InputItem, Op, SessionId, SessionInfo, SessionSummary,
@@ -15,8 +16,17 @@ use tokio_util::sync::CancellationToken;
 use crate::session::{self, Resume, SharedLog};
 use crate::startup::{self, Setup, StartupOutcome};
 use crate::turn::{self, Approvals, TurnCtx};
+use cutoffharness_instructions::agents_md::Nested;
+use cutoffharness_protocol::MemoryNote;
+use cutoffharness_store::checkpoint::Checkpoints;
+use cutoffharness_store::memory::Scope;
 
 const EVENT_CAPACITY: usize = 4096;
+
+/// Appended to user messages in plan mode when the profile has no `plan.md`.
+const PLAN_PROMPT: &str = "[Plan mode] Do not change anything yet. Explore with read-only \
+tools, then reply with a short numbered plan: which files to change, what to change in each, \
+and how to check the result. The user will accept the plan or ask for changes.";
 const OP_CAPACITY: usize = 64;
 
 /// A client's connection to a running engine.
@@ -51,6 +61,8 @@ enum Queued {
     Turn(Vec<InputItem>),
     /// Resume a saved session, or start a new one with `None`.
     Switch(Option<SessionId>),
+    /// `/compact`, with an optional focus.
+    Compact(Option<String>),
 }
 
 /// The conversation once a model is ready.
@@ -58,8 +70,26 @@ enum Queued {
 struct Conversation {
     setup: Arc<Setup>,
     perms: Arc<Mutex<Permissions>>,
+    /// Nested AGENTS.md files already shown in this session.
+    nested: Arc<Nested>,
     /// `None` while a turn task owns it.
     history: Option<Vec<Message>>,
+}
+
+/// Nested instruction tracking for a session: the startup chain, plus any nested file
+/// already attached to a tool result in `history` (after a resume).
+fn nested(config: &Loaded, setup: &Setup, history: &[Message]) -> Arc<Nested> {
+    let n = Nested::new(
+        &config.dirs.workspace_root,
+        crate::env::rules(config),
+        setup.instruction_dirs.iter().cloned(),
+    );
+    for m in history {
+        if let Message::Tool { content, .. } = m {
+            n.mark_shown(content);
+        }
+    }
+    Arc::new(n)
 }
 
 #[derive(Debug)]
@@ -80,6 +110,10 @@ pub struct Engine {
     turns: u32,
     title: Option<String>,
     switch_tx: Option<mpsc::Sender<Result<Setup, String>>>,
+    /// A mode set before startup finished, applied once a model is ready.
+    pending_mode: Option<String>,
+    /// Told to the model at the start of the next turn, e.g. that the user undid an edit.
+    notes: Vec<String>,
 }
 
 impl Engine {
@@ -115,6 +149,8 @@ impl Engine {
             turns: 0,
             title: None,
             switch_tx: None,
+            pending_mode: None,
+            notes: Vec::new(),
         };
         let task = tokio::spawn(engine.run(ops_rx));
         EngineHandle {
@@ -197,9 +233,14 @@ impl Engine {
         });
         self.convo = Some(Conversation {
             perms: Arc::new(Mutex::new(setup.permissions.clone())),
+            nested: nested(&self.config, &setup, &history),
             setup: Arc::new(setup),
             history: Some(history),
         });
+        match self.pending_mode.take() {
+            Some(mode) => self.set_mode(&mode),
+            None => self.emit_mode(),
+        }
     }
 
     /// Load the requested session, if any, and reopen its log for appending. `None` when
@@ -275,8 +316,10 @@ impl Engine {
         if let Some(c) = &mut self.convo {
             // Session approvals belong to the session they were given in.
             c.perms = Arc::new(Mutex::new(c.setup.permissions.clone()));
+            c.nested = nested(&self.config, &c.setup, &history);
             c.history = Some(history);
         }
+        self.emit_mode();
         self.emit(Event::SessionConfigured {
             session: self.session.clone(),
         });
@@ -298,6 +341,128 @@ impl Engine {
             })
             .collect();
         self.emit(Event::SessionList { sessions });
+    }
+
+    fn set_mode(&mut self, mode: &str) {
+        let Some(c) = &self.convo else {
+            return self.warn("no model is ready; the mode applies once one is".into());
+        };
+        let parsed = match mode {
+            "plan" => None,
+            m => match serde_json::from_value::<PermissionMode>(serde_json::Value::from(m)) {
+                Ok(p) => Some(p),
+                Err(_) => {
+                    return self.warn(format!(
+                        "unknown mode `{m}`; use read-only, ask, auto-edit, full-auto or plan"
+                    ));
+                }
+            },
+        };
+        if let Ok(mut p) = c.perms.lock() {
+            match parsed {
+                None => p.plan = true,
+                Some(m) => {
+                    let capped = self
+                        .config
+                        .settings
+                        .policy
+                        .max_permission_mode
+                        .map_or(m, |cap| m.min(cap));
+                    if capped != m {
+                        self.warn(format!(
+                            "{} is not allowed by policy; using {}",
+                            m.label(),
+                            capped.label()
+                        ));
+                    }
+                    p.mode = capped;
+                    p.plan = false;
+                }
+            }
+        }
+        self.emit_mode();
+    }
+
+    fn emit_mode(&self) {
+        let Some(mode) = self.convo.as_ref().and_then(|c| {
+            c.perms.lock().ok().map(|p| {
+                if p.plan {
+                    "plan".to_owned()
+                } else {
+                    p.mode.label().to_owned()
+                }
+            })
+        }) else {
+            return;
+        };
+        self.emit(Event::PermissionMode { mode });
+    }
+
+    fn checkpoints(&self) -> Option<Arc<Checkpoints>> {
+        let dir = self.log.as_ref()?.lock().ok()?.dir().join("checkpoints");
+        Some(Arc::new(Checkpoints::open(dir)))
+    }
+
+    fn undo(&mut self, force: bool) {
+        if self.running.is_some() {
+            return self.warn("wait for the current turn to finish before /undo".into());
+        }
+        let Some(cp) = self.checkpoints() else {
+            return self.warn("nothing to undo in this session".into());
+        };
+        let last = cp.last_call();
+        if last.is_empty() {
+            return self.warn(
+                "nothing to undo: only changes made with write and edit are tracked, not shell commands"
+                    .into(),
+            );
+        }
+        let root = &self.config.dirs.workspace_root;
+        let show = |p: &std::path::PathBuf| {
+            p.strip_prefix(root)
+                .unwrap_or(p)
+                .display()
+                .to_string()
+                .replace('\\', "/")
+        };
+        match cp.restore(&last, force) {
+            Ok(r) => {
+                let restored: Vec<String> = r.restored.iter().map(show).collect();
+                if !restored.is_empty() {
+                    self.notes.push(format!(
+                        "[The user undid your last change to {}; the file is back to how it was before that change.]",
+                        restored.join(", ")
+                    ));
+                }
+                self.emit(Event::FilesRestored {
+                    restored,
+                    conflicts: r.conflicts.iter().map(show).collect(),
+                });
+            }
+            Err(e) => self.warn(format!("undo failed: {e}")),
+        }
+    }
+
+    fn list_memory(&self) {
+        let store = crate::env::memory_store(&self.config);
+        let mut notes = Vec::new();
+        for scope in [Scope::Project, Scope::Global] {
+            for (name, description) in store.list(scope) {
+                notes.push(MemoryNote {
+                    scope: scope.label().into(),
+                    path: store
+                        .dir(scope)
+                        .join("notes")
+                        .join(format!("{name}.md"))
+                        .display()
+                        .to_string(),
+                    text: store.read(scope, &name).unwrap_or_default(),
+                    name,
+                    description,
+                });
+            }
+        }
+        self.emit(Event::MemoryNotes { notes });
     }
 
     fn save_setting(&self, key: &str, value: &str, scope: &WriteScope) {
@@ -350,6 +515,7 @@ impl Engine {
             None => {
                 self.convo = Some(Conversation {
                     perms: Arc::new(Mutex::new(setup.permissions.clone())),
+                    nested: nested(&self.config, &setup, &[]),
                     setup: Arc::new(setup),
                     history: Some(Vec::new()),
                 });
@@ -468,7 +634,48 @@ impl Engine {
             // task has handed the history back, so they wait in the queue like turns do.
             Op::ResumeSession { id } => self.queue_switch(Some(id), done),
             Op::NewSession => self.queue_switch(None, done),
+            Op::Compact { focus } => {
+                if !self.started || self.running.is_some() {
+                    self.emit(Event::TurnQueued {
+                        waiting_for: if self.started {
+                            "the current turn".into()
+                        } else {
+                            "startup".into()
+                        },
+                    });
+                }
+                self.queued.push_back(Queued::Compact(focus));
+                self.next_queued(done);
+            }
             Op::ListSessions => self.list_sessions(),
+            Op::ListMemory => self.list_memory(),
+            Op::Undo { force, .. } => self.undo(force),
+            Op::RunDoctor => {
+                let config = self.config.clone();
+                let tx = self.tx.clone();
+                tokio::spawn(async move {
+                    let checks = crate::doctor::run(config).await;
+                    let _ = tx.send(Event::DoctorReport { checks });
+                });
+            }
+            Op::SetPermissionMode { mode } if !self.started => self.pending_mode = Some(mode),
+            Op::SetPermissionMode { mode } => self.set_mode(&mode),
+            Op::DeleteMemory { scope, name } => {
+                let store = crate::env::memory_store(&self.config);
+                let result = Scope::parse(&scope)
+                    .ok_or_else(|| format!("unknown scope `{scope}`"))
+                    .and_then(|s| store.delete(s, &name));
+                match result {
+                    Ok(()) => self.list_memory(),
+                    Err(e) => self.warn(format!("cannot delete note: {e}")),
+                }
+            }
+            Op::GetContext => match &self.convo {
+                Some(c) => self.emit(Event::ContextReport {
+                    report: crate::context::report(&c.setup, c.history.as_deref()),
+                }),
+                None => self.warn("no model is ready, so there is no context yet".into()),
+            },
             Op::SetTitle { title } => {
                 let title = title.trim().to_owned();
                 session::record(
@@ -502,9 +709,49 @@ impl Engine {
             match self.queued.pop_front() {
                 Some(Queued::Turn(items)) => self.start_turn(items, done.clone()),
                 Some(Queued::Switch(target)) => self.switch_session(target),
+                Some(Queued::Compact(focus)) => self.start_compact(focus, done.clone()),
                 None => break,
             }
         }
+    }
+
+    /// Run `/compact` like a turn: it owns the history until it is done and Esc stops it.
+    fn start_compact(&mut self, focus: Option<String>, done: mpsc::Sender<(TurnId, Vec<Message>)>) {
+        let Some(convo) = &mut self.convo else {
+            return self.warn("no model is ready to write a summary".into());
+        };
+        let Some(mut history) = convo.history.take() else {
+            return;
+        };
+        self.next_turn += 1;
+        let turn = TurnId(self.next_turn);
+        let cancel = CancellationToken::new();
+        self.running = Some((turn, cancel.clone()));
+        let ctx = TurnCtx {
+            turn,
+            setup: convo.setup.clone(),
+            perms: convo.perms.clone(),
+            nested: convo.nested.clone(),
+            approvals: self.approvals.clone(),
+            tx: self.tx.clone(),
+            cancel,
+            log: self.log.clone(),
+            checkpoints: None,
+        };
+        tokio::spawn(async move {
+            ctx.emit(Event::TurnStarted { turn });
+            let result =
+                crate::context::compact_now(&ctx, &mut history, 1, focus.as_deref(), "/compact")
+                    .await;
+            ctx.emit(match result {
+                Ok(()) => Event::TurnComplete {
+                    turn,
+                    usage: Default::default(),
+                },
+                Err(reason) => Event::TurnAborted { turn, reason },
+            });
+            let _ = done.send((turn, history)).await;
+        });
     }
 
     fn start_turn(&mut self, items: Vec<InputItem>, done: mpsc::Sender<(TurnId, Vec<Message>)>) {
@@ -542,10 +789,28 @@ impl Engine {
         };
         let setup = convo.setup.clone();
         let perms = convo.perms.clone();
+        let nested = convo.nested.clone();
+        let typed = prompt.clone();
+        let (prompt, skill_error) = expand_skill(&setup, prompt);
+        let prompt = if self.notes.is_empty() {
+            prompt
+        } else {
+            format!("{}\n\n{prompt}", std::mem::take(&mut self.notes).join("\n"))
+        };
+        if let Some(e) = skill_error {
+            self.warn(e);
+        }
+        // Plan mode asks for a plan at the end of the message, after the cached prefix.
+        let prompt = if perms.lock().is_ok_and(|p| p.plan) {
+            let note = setup.profile.plan_prompt.as_deref().unwrap_or(PLAN_PROMPT);
+            format!("{prompt}\n\n{note}")
+        } else {
+            prompt
+        };
         self.ensure_log();
         self.turns += 1;
         if self.title.is_none() {
-            let first: String = prompt
+            let first: String = typed
                 .lines()
                 .next()
                 .unwrap_or_default()
@@ -560,15 +825,45 @@ impl Engine {
             turn,
             setup,
             perms,
+            nested,
             approvals: self.approvals.clone(),
             tx: self.tx.clone(),
             cancel,
             log: self.log.clone(),
+            checkpoints: self.checkpoints(),
         };
         tokio::spawn(async move {
             let history = turn::run(ctx, history, prompt).await;
             let _ = done.send((turn, history)).await;
         });
+    }
+}
+
+/// `/<skill> [args]` becomes the skill's instructions followed by the request. Anything
+/// else (including unknown `/words`) is sent as typed.
+fn expand_skill(setup: &Setup, prompt: String) -> (String, Option<String>) {
+    let Some(rest) = prompt.strip_prefix('/') else {
+        return (prompt, None);
+    };
+    let (name, args) = rest
+        .split_once(char::is_whitespace)
+        .map_or((rest, ""), |(n, a)| (n, a.trim()));
+    let Some(skill) = setup.tool_ctx.skills.iter().find(|s| s.name == name) else {
+        return (prompt, None);
+    };
+    match cutoffharness_tools::expand_skill(skill) {
+        Ok(text) => {
+            let request = if args.is_empty() {
+                "Use this skill now."
+            } else {
+                args
+            };
+            (format!("{text}\n\n{request}"), None)
+        }
+        Err(e) => {
+            let message = format!("skill /{name}: {e}");
+            (prompt, Some(message))
+        }
     }
 }
 
@@ -579,11 +874,16 @@ fn op_name(op: &Op) -> &'static str {
         Op::ApprovalResponse { .. } => "approval_response",
         Op::SetModel { .. } => "set_model",
         Op::ListModels => "list_models",
-        Op::Compact => "compact",
+        Op::Compact { .. } => "compact",
         Op::Undo { .. } => "undo",
         Op::ResumeSession { .. } => "resume_session",
         Op::NewSession => "new_session",
         Op::ListSessions => "list_sessions",
+        Op::GetContext => "get_context",
+        Op::ListMemory => "list_memory",
+        Op::RunDoctor => "run_doctor",
+        Op::SetPermissionMode { .. } => "set_permission_mode",
+        Op::DeleteMemory { .. } => "delete_memory",
         Op::SetTitle { .. } => "set_title",
         Op::SaveSetting { .. } => "save_setting",
         Op::ForkSession { .. } => "fork_session",

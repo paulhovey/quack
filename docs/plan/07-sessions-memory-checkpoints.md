@@ -110,6 +110,17 @@ The `server` crate's build.rs invokes protoc...
 - `/memory` opens the memory browser: list, view, edit in `$EDITOR`, delete.
 - User approval for memory writes is configurable: `memory.writes = "ask" | "auto"`, default `auto`, because writes are visible in the transcript and easy to undo.
 
+As implemented (M2, 2026-10-18):
+- The `memory` tool is lenient, because small models get the arguments wrong:
+  - a title such as `Code style` becomes the name `code-style`;
+  - a missing `content` or `description` is filled from the other;
+  - the type defaults to `project` (project scope) or `user` (global scope).
+- `view` without a scope looks in project notes, then global ones.
+- Index lines are replaced in place, and lines the user wrote by hand are kept.
+- `/memory` lists notes from both scopes with their text and file path. Ctrl-S deletes the selected note.
+- The startup panel shows the note count and the project memory folder.
+- Memory writes have their own permission subject. They are outside the workspace, so the edit rules and `read-only` mode don't apply to them; only `memory.writes` does.
+
 ## Checkpoints (file undo)
 
 maki rewinds only chat history. We also restore **files**.
@@ -122,6 +133,14 @@ Two layers:
 2. **Workspace snapshots (optional; `checkpoints.shell = true`).** Before a mutating `shell` call, take a snapshot of the tracked worktree state using `gix` into a **shadow repository** in the session directory (separate `GIT_DIR`, the user's repo is never touched). This catches files changed by shell commands. It can be slow on very large repos, so it is off by default and the time spent is reported.
 
 A checkpoint is created at each **user turn** boundary (grouping all edits in that turn) and before each mutating tool call.
+
+### As implemented (2026-10-18, ahead of M3)
+
+- **Pre-images:** layer 1 only. Before a `write` or `edit` call runs, the file's bytes are copied to `<session>/checkpoints/NNNNNN.pre`, or the manifest notes that the file did not exist.
+- **Manifest:** `manifest.jsonl` records the pre-image, a hash of the file after the call (FNV-1a, used only to spot later changes), and undos. Each pre-image is stored per call, not content-addressed. Sessions are small, and no SHA-256 crate is needed.
+- **`/undo [--force]`** reverts the files of the last successful edit call: new files are deleted and changed ones get their bytes back, CRLF included. A file changed since the call is left alone and reported; `--force` overwrites it.
+- **The model is told** at the start of the next user message ("The user undid your last change to …"), so it doesn't build on the reverted edit.
+- **Not tracked:** shell commands (the shadow-repo snapshots come later). `/rewind` and per-turn checkpoints are not done yet.
 
 ### Commands
 

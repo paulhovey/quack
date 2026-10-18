@@ -115,6 +115,19 @@ Compaction runs when pruning alone can't get usage under the threshold.
 
 Compaction prompts are profile-overridable templates (`compact.md` in a profile directory).
 
+### As implemented (M2, 2026-10-18)
+
+- **When:** before each request, if the corrected estimate is over `compaction_threshold × budget`, rules 1 and 3 run first (rules 2 and 4–6 wait for the index and the eval). If the request is still over, compaction runs. A `ContextLengthExceeded` from the server compacts once and retries; a second overflow ends the turn. `cache_strategy = "aggressive"` prunes before every request. `auto` currently behaves like `preserve`, until the prefill measurements exist.
+- **Pruning** never touches the last 8 messages, results under 400 characters, or results already pruned. Rule 1 counts only the `read` tool; `glob`, `grep` and `list_dir` read many files.
+- **Cut:** automatic compaction keeps up to 3 recent turns that fit in 35% of the budget. `/compact [focus]` keeps only the current turn. If the current turn alone is too big, the cut falls inside it, and the user's request is carried into the summary verbatim.
+- **Summarizer:** the session's model (the `small` model comes later) gets a system prompt (`compact.md`, or a compiled-in default) and the summarized span rendered as plain text.
+  - It gets plain text, not the raw messages, so tool-call templates don't matter.
+  - Tool results are cut to 1,500 characters each, and the oldest messages are dropped above about 60% of the budget.
+  - The reply is capped at `budget / 4` tokens (1,024–8,192). Small thinking models can otherwise loop until the window is full.
+- **Fallback:** if the model returns an error or an empty summary, the summary becomes a plain list of the user's requests and the tool calls, built without a model. The session continues either way.
+- **Log:** `prune` records hold the replaced contents and `compaction` records hold the cut and the summary message. Replay applies them in order, and repairs dangling tool calls at each `resume` record, as the live session did. Resume therefore rebuilds the same history.
+- **Tested** with mock servers (threshold, overflow retry, `/compact`, resume after compaction) and locally with Qwen3.5-0.8B on llama.cpp with a 6k window: three turns, two compactions in one turn, and the facts from the first turn recalled after them.
+
 ## Code-execution sandbox (deferred)
 
 maki's `code_execution` tool lets the model chain tools inside an interpreter so intermediate data never enters context. This is high value but large in scope (a sandboxed interpreter embedded in the binary). It is deferred to post-M5, with candidates Lua (`mlua`), Rhai, or a Wasm Python. It is tracked here because it changes the context math significantly.

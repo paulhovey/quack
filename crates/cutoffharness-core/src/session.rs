@@ -1,12 +1,14 @@
 //! Session persistence: what the engine records, and rebuilding history on resume.
 //!
 //! Record types: `session_start`, `resume`, `message` (one chat message, exactly as sent),
-//! `tool` (UI summary of a tool call), `usage`, `turn_end`.
+//! `tool` (UI summary of a tool call), `usage`, `prune` (tool results replaced),
+//! `compaction` (history before `cut` replaced by `message`).
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use cutoffharness_config::{Loaded, expand_home};
+use cutoffharness_context::{compact, prune};
 use cutoffharness_protocol::{ReplayItem, Usage};
 use cutoffharness_providers::Message;
 use cutoffharness_store::session::{IndexEntry, ProjectSessions, Record, SessionLog};
@@ -103,6 +105,33 @@ pub(crate) fn replay(records: &[Record]) -> (Vec<Message>, Vec<ReplayItem>, u32)
                     result: s("result"),
                 });
             }
+            "prune" => {
+                if let Some(ops) = r
+                    .data
+                    .get("ops")
+                    .and_then(|v| serde_json::from_value::<Vec<prune::PruneOp>>(v.clone()).ok())
+                {
+                    prune::apply(&mut history, &ops);
+                }
+            }
+            "compaction" => {
+                let cut = r.data.get("cut").and_then(serde_json::Value::as_u64);
+                let msg = r
+                    .data
+                    .get("message")
+                    .and_then(|v| serde_json::from_value::<Message>(v.clone()).ok());
+                if let (Some(cut), Some(msg)) = (cut, msg) {
+                    compact::apply(
+                        &mut history,
+                        usize::try_from(cut).unwrap_or(usize::MAX),
+                        msg,
+                    );
+                    items.push(ReplayItem::Compacted);
+                }
+            }
+            // The live session repaired its history when it resumed; do the same at the
+            // same point so later prune and compaction records line up.
+            "resume" => repair_dangling_calls(&mut history),
             _ => {}
         }
     }
@@ -168,6 +197,44 @@ pub(crate) fn record_usage(log: Option<&SharedLog>, u: &Usage) {
 mod tests {
     use super::*;
     use cutoffharness_providers::ToolCall;
+
+    fn rec(kind: &str, data: serde_json::Value) -> Record {
+        Record {
+            kind: kind.into(),
+            ts: String::new(),
+            data: data.as_object().cloned().unwrap_or_default(),
+        }
+    }
+
+    #[test]
+    fn replay_applies_prune_and_compaction_in_order() {
+        let msg = |m: Message| rec("message", json!({ "message": m }));
+        let user = |s: &str| Message::User { content: s.into() };
+        let records = vec![
+            msg(user("one")),
+            msg(Message::Tool {
+                call_id: "a".into(),
+                content: "long output".into(),
+            }),
+            rec(
+                "prune",
+                json!({ "ops": [{ "index": 1, "rule": "large_output", "content": "[pruned]" }] }),
+            ),
+            msg(user("two")),
+            rec(
+                "compaction",
+                json!({ "cut": 2, "message": user("[compaction summary] S") }),
+            ),
+            msg(user("three")),
+        ];
+        let (history, items, turns) = replay(&records);
+        assert_eq!(
+            history,
+            [user("[compaction summary] S"), user("two"), user("three")]
+        );
+        assert_eq!(turns, 3);
+        assert_eq!(items[2], ReplayItem::Compacted);
+    }
 
     #[test]
     fn dangling_calls_get_results() {

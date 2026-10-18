@@ -32,6 +32,8 @@ pub struct AppInfo {
     pub settings: Vec<SettingRow>,
     /// `(layer, status and file)` rows for `/config`.
     pub layers: Vec<(String, String)>,
+    /// `(list, rule)` from `[permissions]`, e.g. `("allow", "shell:git status*")`.
+    pub rules: Vec<(String, String)>,
 }
 
 impl AppInfo {
@@ -52,6 +54,13 @@ impl AppInfo {
             ui: config.settings.ui.clone(),
             no_color: std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()),
             settings: config.setting_rows(),
+            rules: {
+                let p = &config.settings.permissions;
+                [("deny", &p.deny), ("ask", &p.ask), ("allow", &p.allow)]
+                    .into_iter()
+                    .flat_map(|(k, list)| list.iter().map(move |r| (k.to_owned(), r.clone())))
+                    .collect()
+            },
             layers: config
                 .layers
                 .iter()
@@ -68,6 +77,30 @@ impl AppInfo {
                     (l.kind.label().to_owned(), format!("{status}{file}"))
                 })
                 .collect(),
+        }
+    }
+}
+
+/// A row of the slash popup: a built-in command or a skill.
+#[derive(Debug, Clone)]
+pub(crate) struct PopupItem {
+    pub name: String,
+    pub args: String,
+    pub description: String,
+    /// Shown after the description, e.g. a milestone or `skill`.
+    pub hint: Option<&'static str>,
+    /// `None` for skills.
+    pub command: Option<&'static Command>,
+}
+
+impl PopupItem {
+    fn command(c: &'static Command) -> Self {
+        Self {
+            name: c.name.to_owned(),
+            args: c.args.to_owned(),
+            description: c.description.to_owned(),
+            hint: c.pending,
+            command: Some(c),
         }
     }
 }
@@ -120,9 +153,17 @@ pub struct App {
     pub(crate) approval: Option<Approval>,
     /// `(used, budget)` tokens from the last response.
     pub(crate) context: Option<(u32, u32)>,
+    /// Generation speed of the last response, tokens per second.
+    pub(crate) speed: Option<f32>,
     panel_collapsed: bool,
     /// A `/resume` is in flight: clear the transcript when it lands.
     resuming: bool,
+    /// The mode to go back to when plan mode ends.
+    mode_before_plan: String,
+    /// Text for the terminal's clipboard (OSC 52), written by the event loop.
+    clipboard: Option<String>,
+    /// Installed skills, runnable as `/<name>`.
+    skills: Vec<cutoffharness_protocol::SkillInfo>,
     frame: u64,
     dirty: bool,
     quit: bool,
@@ -150,8 +191,12 @@ impl App {
             queued: false,
             approval: None,
             context: None,
+            speed: None,
             panel_collapsed: false,
             resuming: false,
+            mode_before_plan: String::new(),
+            clipboard: None,
+            skills: Vec::new(),
             frame: 0,
             dirty: true,
             quit: false,
@@ -167,6 +212,10 @@ impl App {
 
     pub fn take_dirty(&mut self) -> bool {
         std::mem::take(&mut self.dirty)
+    }
+
+    pub fn take_clipboard(&mut self) -> Option<String> {
+        self.clipboard.take()
     }
 
     pub fn take_ops(&mut self) -> Vec<Op> {
@@ -205,7 +254,7 @@ impl App {
     }
 
     /// Commands matching the input while it is a bare `/word`.
-    pub(crate) fn popup_matches(&self) -> Vec<&'static Command> {
+    pub(crate) fn popup_matches(&self) -> Vec<PopupItem> {
         let text = self.input.text();
         if self.modal.is_some()
             || self.popup_dismissed
@@ -223,7 +272,19 @@ impl App {
             hits.retain(|c| c.name != alias.name);
             hits.insert(0, alias);
         }
-        hits
+        let mut items: Vec<PopupItem> = hits.into_iter().map(PopupItem::command).collect();
+        items.extend(
+            fuzzy::filter(query, self.skills.iter().map(|s| s.name.as_str()))
+                .into_iter()
+                .map(|i| PopupItem {
+                    name: self.skills[i].name.clone(),
+                    args: "[request]".into(),
+                    description: self.skills[i].description.clone(),
+                    hint: Some("skill"),
+                    command: None,
+                }),
+        );
+        items
     }
 
     pub fn on_tick(&mut self) {
@@ -256,6 +317,15 @@ impl App {
                 self.info.model = session.model;
                 self.info.profile = session.profile;
             }
+            Event::ModelCatalog { providers, current }
+                if self.modal.as_ref().is_some_and(|m| m.title == "Providers") =>
+            {
+                self.modal = Some(modal::providers(
+                    Some(&providers),
+                    current.as_deref(),
+                    &self.theme,
+                ));
+            }
             Event::ModelCatalog { providers, current } => {
                 // Only refresh a /models modal that is still open.
                 if self.modal.as_ref().is_some_and(|m| m.title == "Models") {
@@ -264,6 +334,39 @@ impl App {
                         current.as_deref(),
                         &self.theme,
                     ));
+                }
+            }
+            Event::Skills { skills } => self.skills = skills,
+            Event::FilesRestored {
+                restored,
+                conflicts,
+            } => {
+                if !restored.is_empty() {
+                    self.note(format!(
+                        "undone: {} (the model is told at the start of your next message)",
+                        restored.join(", ")
+                    ));
+                }
+                if !conflicts.is_empty() {
+                    self.transcript.push(Entry::Warning(format!(
+                        "not undone, changed since the edit: {}. /undo --force overwrites them",
+                        conflicts.join(", ")
+                    )));
+                }
+            }
+            Event::DoctorReport { checks } => {
+                if self.modal.as_ref().is_some_and(|m| m.title == "Doctor") {
+                    self.modal = Some(modal::doctor(Some(&checks), &self.theme));
+                }
+            }
+            Event::MemoryNotes { notes } => {
+                if self.modal.as_ref().is_some_and(|m| m.title == "Memory") {
+                    self.modal = Some(modal::memory(Some(&notes), &self.theme));
+                }
+            }
+            Event::ContextReport { report } => {
+                if self.modal.as_ref().is_some_and(|m| m.title == "Context") {
+                    self.modal = Some(modal::context(Some(&report), &self.theme));
                 }
             }
             Event::SessionList { sessions } => {
@@ -300,6 +403,9 @@ impl App {
                             result,
                             detail: String::new(),
                         }),
+                        ReplayItem::Compacted => {
+                            Entry::System("── earlier conversation summarized ──".into())
+                        }
                     });
                 }
             }
@@ -351,9 +457,40 @@ impl App {
                 self.approval = Some(Approval { call_id, request });
             }
             Event::ContextUpdate { used, budget, .. } => self.context = Some((used, budget)),
+            Event::Speed { tokens_per_sec, .. } => {
+                if tokens_per_sec.is_some() {
+                    self.speed = tokens_per_sec;
+                }
+            }
+            Event::ContextPruned { report } => self.note(format!(
+                "pruned {} old tool result{} (~{} tokens)",
+                report.items.len(),
+                if report.items.len() == 1 { "" } else { "s" },
+                report.removed_tokens
+            )),
+            Event::Compacting { reason } => {
+                self.note(format!("summarizing earlier conversation ({reason})…"))
+            }
+            Event::Compacted {
+                summary_tokens,
+                replaced,
+            } => self.note(format!(
+                "── earlier conversation summarized: {replaced} messages → ~{summary_tokens} tokens ──"
+            )),
             Event::TurnComplete { .. } => {
                 self.turn_running = false;
                 self.approval = None;
+                if self.info.permission_mode == "plan" {
+                    self.note(
+                        "plan mode · /plan accept carries out the plan; reply to revise it".into(),
+                    );
+                }
+            }
+            Event::PermissionMode { mode } => {
+                if mode == "plan" && self.info.permission_mode != "plan" {
+                    self.note("plan mode: the model looks around and proposes a plan; nothing is changed (/plan off leaves)".into());
+                }
+                self.info.permission_mode = mode;
             }
             Event::TurnAborted { reason, .. } => {
                 self.turn_running = false;
@@ -420,7 +557,8 @@ impl App {
                 self.input.insert('\n');
             }
             KeyCode::Char('j') if ctrl => self.input.insert('\n'),
-            KeyCode::Enter => self.submit(popup.get(self.popup_selected).copied()),
+            KeyCode::Enter => self.submit(popup.get(self.popup_selected).cloned()),
+            KeyCode::BackTab => self.cycle_mode(),
             KeyCode::Tab => {
                 if let Some(cmd) = popup.get(self.popup_selected) {
                     self.input.set(&format!("/{} ", cmd.name));
@@ -515,10 +653,21 @@ impl App {
         }
     }
 
-    fn submit(&mut self, popup_choice: Option<&'static Command>) {
-        if let Some(cmd) = popup_choice {
-            self.input.clear();
-            return self.run_command(cmd, "");
+    fn submit(&mut self, popup_choice: Option<PopupItem>) {
+        match popup_choice {
+            Some(PopupItem {
+                command: Some(cmd), ..
+            }) => {
+                self.input.clear();
+                return self.run_command(cmd, "");
+            }
+            // A skill: let the user add a request first.
+            Some(item) => {
+                self.input.set(&format!("/{} ", item.name));
+                self.popup_dismissed = true;
+                return;
+            }
+            None => {}
         }
         let text = self.input.submit();
         if text.trim().is_empty() {
@@ -528,6 +677,10 @@ impl App {
         if text.starts_with('/') {
             return self.execute(&text);
         }
+        self.send(text);
+    }
+
+    fn send(&mut self, text: String) {
         self.panel_collapsed = true;
         self.transcript.push(Entry::User(text.clone()));
         self.ops.push(Op::UserTurn {
@@ -536,12 +689,46 @@ impl App {
         });
     }
 
+    fn set_mode(&mut self, mode: &str) {
+        if mode == "plan" && self.info.permission_mode != "plan" {
+            self.mode_before_plan = self.info.permission_mode.clone();
+        }
+        self.ops.push(Op::SetPermissionMode {
+            mode: mode.to_owned(),
+        });
+    }
+
+    /// Leave plan mode for the mode it was entered from.
+    fn end_plan(&mut self) {
+        let back = match self.mode_before_plan.as_str() {
+            "" | "plan" => "ask".to_owned(),
+            m => m.to_owned(),
+        };
+        self.set_mode(&back);
+    }
+
+    /// Shift-Tab: ask → auto-edit → plan → ask. Other modes join the cycle at `ask`.
+    fn cycle_mode(&mut self) {
+        let next = match self.info.permission_mode.as_str() {
+            "ask" => "auto-edit",
+            "auto-edit" => "plan",
+            "plan" => {
+                self.mode_before_plan.clear();
+                "ask"
+            }
+            _ => "ask",
+        };
+        self.set_mode(next);
+    }
+
     /// Run a `/command args` line.
     fn execute(&mut self, text: &str) {
         let rest = text.trim().trim_start_matches('/');
         let (name, args) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
         match commands::find(name) {
             Some(cmd) => self.run_command(cmd, args.trim()),
+            // The engine expands `/<skill> args` into the skill's instructions.
+            None if self.skills.iter().any(|s| s.name == name) => self.send(text.trim().to_owned()),
             None => self.note(format!("unknown command /{name}; /help lists commands")),
         }
     }
@@ -609,6 +796,92 @@ impl App {
                     _ => self.note("usage: /config set <key> <value>".into()),
                 }
             }
+            "memory" if args.is_empty() => {
+                self.modal = Some(modal::memory(None, &self.theme));
+                self.ops.push(Op::ListMemory);
+            }
+            "memory" => match args
+                .strip_prefix("delete")
+                .map(str::trim)
+                .and_then(|r| r.split_once('/'))
+            {
+                Some((scope, name)) if !name.is_empty() => {
+                    self.ops.push(Op::DeleteMemory {
+                        scope: scope.to_owned(),
+                        name: name.to_owned(),
+                    });
+                    self.note(format!("deleted {scope} note {name}"));
+                }
+                _ => self.note("usage: /memory, or /memory delete <global|project>/<name>".into()),
+            },
+            "providers" => {
+                self.modal = Some(modal::providers(
+                    None,
+                    self.info.model.as_deref(),
+                    &self.theme,
+                ));
+                self.ops.push(Op::ListModels);
+            }
+            "undo" => self.ops.push(Op::Undo {
+                checkpoint: None,
+                force: args == "--force",
+            }),
+            "skills" => self.modal = Some(modal::skills(&self.skills, &self.theme)),
+            "doctor" => {
+                self.modal = Some(modal::doctor(None, &self.theme));
+                self.ops.push(Op::RunDoctor);
+            }
+            "copy" => {
+                let last = self.transcript.iter().rev().find_map(|e| match e {
+                    Entry::Assistant(t) if !t.trim().is_empty() => Some(t.clone()),
+                    _ => None,
+                });
+                let Some(text) = last else {
+                    return self.note("nothing to copy yet".into());
+                };
+                let (what, text) = match args {
+                    "code" => match last_code_block(&text) {
+                        Some(code) => ("the last code block", code),
+                        None => return self.note("the last response has no code block".into()),
+                    },
+                    _ => ("the last response", text),
+                };
+                self.note(format!(
+                    "copied {what} ({} characters) through the terminal",
+                    text.chars().count()
+                ));
+                self.clipboard = Some(text);
+            }
+            "permissions" if args.is_empty() => {
+                self.modal = Some(modal::permissions(
+                    &self.info.permission_mode,
+                    &self.info.rules,
+                    &self.theme,
+                ));
+            }
+            "permissions" => self.set_mode(args),
+            "plan" => match args {
+                "" => self.set_mode("plan"),
+                "accept" | "go" => {
+                    if self.info.permission_mode != "plan" {
+                        return self.note("not in plan mode; /plan starts it".into());
+                    }
+                    self.end_plan();
+                    self.send("Carry out the plan above.".into());
+                }
+                "off" | "exit" => self.end_plan(),
+                task => {
+                    self.set_mode("plan");
+                    self.send(task.to_owned());
+                }
+            },
+            "context" => {
+                self.modal = Some(modal::context(None, &self.theme));
+                self.ops.push(Op::GetContext);
+            }
+            "compact" => self.ops.push(Op::Compact {
+                focus: Some(args.to_owned()).filter(|a| !a.is_empty()),
+            }),
             "help" => self.modal = Some(modal::help(&self.theme)),
             "quit" => self.quit = true,
             name => self.note(format!(
@@ -675,6 +948,23 @@ fn toml_string(s: &str) -> String {
 #[cfg(test)]
 pub(crate) use tests::info as test_info;
 
+/// The contents of the last fenced code block in `text`.
+fn last_code_block(text: &str) -> Option<String> {
+    let mut last = None;
+    let mut current: Option<Vec<&str>> = None;
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            match current.take() {
+                Some(lines) => last = Some(lines.join("\n")),
+                None => current = Some(Vec::new()),
+            }
+        } else if let Some(lines) = &mut current {
+            lines.push(line);
+        }
+    }
+    last
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -690,6 +980,7 @@ mod tests {
             no_color: false,
             settings: Vec::new(),
             layers: Vec::new(),
+            rules: Vec::new(),
         }
     }
 
@@ -701,6 +992,55 @@ mod tests {
         for c in s.chars() {
             press(app, KeyCode::Char(c));
         }
+    }
+
+    #[test]
+    fn copy_last_response_or_code_block() {
+        let mut app = App::new(info());
+        type_str(&mut app, "/copy");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.take_clipboard(), None);
+        app.on_engine(Event::AssistantDelta {
+            text: "Run:\n```sh\ncargo test\n```\nthen\n```\nb\n```".into(),
+        });
+        type_str(&mut app, "/copy code");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.take_clipboard().as_deref(), Some("b"));
+        type_str(&mut app, "/copy");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.take_clipboard().is_some_and(|t| t.starts_with("Run:")));
+        assert_eq!(
+            last_code_block("```\na\n```\n```\nb\nc\n```").as_deref(),
+            Some("b\nc")
+        );
+    }
+
+    #[test]
+    fn plan_mode_cycle_and_accept() {
+        let mut app = App::new(info());
+        let mode = |m: &str| Op::SetPermissionMode { mode: m.into() };
+        press(&mut app, KeyCode::BackTab);
+        assert_eq!(app.take_ops(), vec![mode("auto-edit")]);
+        app.on_engine(Event::PermissionMode {
+            mode: "auto-edit".into(),
+        });
+        type_str(&mut app, "/plan");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.take_ops(), vec![mode("plan")]);
+        app.on_engine(Event::PermissionMode {
+            mode: "plan".into(),
+        });
+        type_str(&mut app, "/plan accept");
+        press(&mut app, KeyCode::Enter);
+        let ops = app.take_ops();
+        assert_eq!(
+            ops[0],
+            mode("auto-edit"),
+            "back to the mode plan mode started from"
+        );
+        assert!(
+            matches!(&ops[1], Op::UserTurn { items, .. } if items == &[InputItem::text("Carry out the plan above.")])
+        );
     }
 
     #[test]
@@ -716,13 +1056,19 @@ mod tests {
     fn slash_popup_runs_help_and_quit() {
         let mut app = App::new(info());
         type_str(&mut app, "/hel");
-        assert_eq!(app.popup_matches().first().map(|c| c.name), Some("help"));
+        assert_eq!(
+            app.popup_matches().first().map(|c| c.name.as_str()),
+            Some("help")
+        );
         press(&mut app, KeyCode::Enter);
         assert!(app.modal.is_some());
         press(&mut app, KeyCode::Esc);
         assert!(app.modal.is_none());
         type_str(&mut app, "/exit");
-        assert_eq!(app.popup_matches().first().map(|c| c.name), Some("quit"));
+        assert_eq!(
+            app.popup_matches().first().map(|c| c.name.as_str()),
+            Some("quit")
+        );
         press(&mut app, KeyCode::Enter);
         assert!(app.should_quit());
     }

@@ -13,5 +13,8 @@ publish.workspace = true
 cutoffharness-protocol.workspace = true
 cutoffharness-config.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

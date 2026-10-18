@@ -20,6 +20,10 @@ pub struct PromptVars {
     pub folder_listing: String,
     /// Branch at session start, if a git repository.
     pub git_branch: String,
+    /// The memory indexes (global, then project), already capped.
+    pub memory_index: String,
+    /// One line per installed skill, already capped.
+    pub skills: String,
 }
 
 impl Profile {

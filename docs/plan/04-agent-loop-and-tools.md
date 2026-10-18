@@ -27,6 +27,13 @@ Op::UserTurn
 
 `/plan` (or Shift-Tab to `plan`) runs turns with the `read-only` permission set plus `todo` and `ask_user`, and a short system addendum asking for a plan instead of changes. The plan is shown as a reviewable message; **Accept** switches back to the previous mode and sends "carry out the plan" as the next turn, **Revise** keeps planning. The plan is stored in the session so `/resume` restores it. The addendum is appended at the end of the prompt, not the start, to keep the cached prefix ([05](05-context-management.md#stable-prefix-layout)).
 
+As implemented (M2, 2026-10-18; `todo` and `ask_user` don't exist yet):
+- Plan mode is an overlay on the session's permissions. Edits are refused. Shell commands run only if they read (`ls`, `cat`, `rg`, `find` without `-exec`/`-delete`, `git status|log|diff|show|…`, with no control operators) or match an allow rule. Reads follow the normal rules.
+- The request for a plan (`plan.md` in the profile, or a compiled-in default) is appended to each user message sent in plan mode. It is stored in the history, so a resume sends exactly the same request.
+- `/plan` enters plan mode and `/plan <task>` enters it and sends the task. `/plan accept` returns to the previous mode and sends "Carry out the plan above." `/plan off` leaves without carrying it out. Shift-Tab cycles ask → auto-edit → plan.
+- After each turn in plan mode the TUI reminds the user how to accept or revise the plan. The status bar shows `plan`.
+- A mode set during startup is applied once a model is ready. A session switch resets the mode to the configured one.
+
 ### Planner / editor split
 
 `[model] planner = "<provider/model>"` (optional) lets a larger model write the plan and the default model carry it out, or the reverse (a hosted model edits from a plan written by an on-prem one). The planner gets only read-only tools. This builds on the existing `small` role; nothing changes when `planner` is unset.

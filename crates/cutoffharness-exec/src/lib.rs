@@ -95,6 +95,11 @@ pub async fn run(mut engine: EngineHandle, prompt: String, format: OutputFormat)
                     let _ = writeln!(stderr, "  ✗ denied: needs approval (see --permission-mode)");
                 }
             }
+            Event::Compacting { reason } => {
+                if text_mode {
+                    let _ = writeln!(stderr, "› summarizing earlier conversation ({reason})");
+                }
+            }
             Event::Warning { message } => {
                 if text_mode {
                     let _ = writeln!(stderr, "warning: {message}");

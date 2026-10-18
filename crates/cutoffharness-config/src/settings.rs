@@ -20,6 +20,7 @@ pub struct Settings {
     pub sessions: SessionSettings,
     pub network: NetworkSettings,
     pub instructions: InstructionSettings,
+    pub skills: SkillSettings,
     pub telemetry: TelemetrySettings,
     /// Disable provider files from lower layers without deleting them.
     pub providers: ItemToggles,
@@ -180,12 +181,36 @@ impl PermissionMode {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct MemorySettings {
     /// Where memory notes live. Empty: `<user data>/memory`.
     pub path: String,
     pub project_scope: MemoryScope,
+    /// Whether the model's memory writes need approval.
+    pub writes: MemoryWrites,
+    /// Cap on the memory index in the system prompt.
+    pub index_max_tokens: u32,
+}
+
+impl Default for MemorySettings {
+    fn default() -> Self {
+        Self {
+            path: String::new(),
+            project_scope: MemoryScope::default(),
+            writes: MemoryWrites::default(),
+            index_max_tokens: 1_500,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum MemoryWrites {
+    /// Writes show in the transcript and are easy to undo.
+    #[default]
+    Auto,
+    Ask,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -235,6 +260,32 @@ impl Default for InstructionSettings {
         Self {
             files: vec!["AGENTS.md".into()],
             max_bytes: 32 * 1024,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct SkillSettings {
+    /// More skill folders, e.g. another harness's `.claude/skills` once you accept it.
+    /// Relative paths are from the workspace root.
+    #[serde(deserialize_with = "list::de")]
+    #[schemars(with = "ListOrAppend")]
+    pub compat_paths: Vec<String>,
+    /// Skill names to skip.
+    #[serde(deserialize_with = "list::de")]
+    #[schemars(with = "ListOrAppend")]
+    pub disabled: Vec<String>,
+    /// Cap on the skill list in the system prompt.
+    pub index_max_tokens: u32,
+}
+
+impl Default for SkillSettings {
+    fn default() -> Self {
+        Self {
+            compat_paths: Vec::new(),
+            disabled: Vec::new(),
+            index_max_tokens: 1_500,
         }
     }
 }

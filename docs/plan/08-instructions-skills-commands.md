@@ -19,6 +19,8 @@
 - Each file is capped (`max_bytes`, default 32 KiB). Truncation is shown in the startup panel.
 - `@path/to/file.md` import lines are supported, one level deep, workspace-relative, with cycle detection. This matches the convention several harnesses use.
 - Rendered through `{{instructions}}` in the profile system prompt. Loaded once at session start for cache stability. If the files change mid-session, `/reload` applies the change and the UI notes that the cache will be invalidated.
+- Imports resolve relative to the importing file and must stay inside the workspace (or inside the config directory, for global files). Otherwise a cloned repository could import `~/.ssh/id_rsa` into the prompt. A skipped import leaves a note in its place. An `@word` that isn't a file is left as text.
+- Nested files are attached to the first successful tool result whose path is in or below their directory: `read`, `write`, `edit`, and also `glob`/`grep`/`list_dir` on that directory. After a resume, files already attached in the history are not attached again.
 - `/init` generates an `AGENTS.md` for the current repo through a normal agent turn with a built-in prompt template (overridable as `commands/init.md`).
 
 ## Skills
@@ -64,6 +66,17 @@ description: Create and review SQL migrations for this repo's Postgres schema. U
 ### Validation
 
 At load time, frontmatter is validated (`name` matches the directory, `description` is present and ≤ 1,024 chars). Invalid skills show as Failed in the startup panel, and the others still load.
+
+### As implemented (2026-10-18, ahead of M3)
+
+- **Where skills are found:** system `skills/`, user `skills/`, `~/.agents/skills`, the project's `.cutoffharness/skills` (only when the project is trusted), the repository's `.agents/skills`, then `[skills] compat_paths`. A later skill with the same name replaces an earlier one.
+- **Front matter** is parsed without a YAML library. It reads `key: value`, quoted values and `>`/`|` blocks, and skips nested maps.
+- **Invalid skills** show as warnings and a NeedsAttention/Failed startup row. Valid ones still load.
+- **Prompt:** `{{ skills }}` holds one line per skill, capped by `index_max_tokens`. Descriptions are halved, down to 80 characters, before skills are dropped.
+- **`skill` tool:** returns the body in a `<skill name=… directory=…>` block. It is hidden when there are no skills. Loading a skill is always allowed (its own permission subject), so skills in the user's folder don't prompt.
+- **`/<name> [request]`** works in the TUI (also in the slash popup) and in `exec`. The engine replaces it with the skill block plus the request. The session title keeps what the user typed.
+- **`/skills`** lists them, with where each came from.
+- **Not done yet:** the detection prompt for other harnesses' folders, and custom commands.
 
 ## Other harnesses' files
 

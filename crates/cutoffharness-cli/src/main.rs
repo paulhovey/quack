@@ -69,7 +69,10 @@ fn main() -> ExitCode {
             ConfigCmd::Schema { dir } => commands::config_schema(&loaded, dir),
             ConfigCmd::Paths => commands::config_paths(&loaded),
         }),
-        Cmd::Doctor => code(commands::doctor(&loaded)),
+        Cmd::Doctor => block_on(async move {
+            let checks = cutoffharness_core::doctor::run(Arc::new(loaded)).await;
+            commands::doctor(&checks)
+        }),
         Cmd::Sessions => code(commands::sessions(&loaded)),
         Cmd::Keyring { cmd } => code(match cmd {
             KeyringCmd::Set { name } => commands::keyring_set(&name),

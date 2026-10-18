@@ -62,6 +62,14 @@ Round 3 (2026-10-18): exit-criteria tests in `crates/cutoffharness-core/tests/in
 
 Round 4 (2026-10-18): local-server CI (`scripts/local-server-ci.sh`, job `local-servers`). Found by it: llama.cpp discovery reported the trained window (262k) instead of the served one (`-c`); now read from `/props`. Empty replies get one nudge, as planned in [04](04-agent-loop-and-tools.md#loop-guards). Model scope narrowed to current coding families ([03](03-model-profiles.md#why-profiles-exist)).
 
+Round 5 (2026-10-18): the remaining M1 slash commands.
+- `/providers`: usable or why not, and the models of each provider.
+- `/permissions [mode]`: mode picker and the configured rules.
+- `/doctor`: the same checks as `cutoffharness doctor`, now real: config, defaults, each provider contacted, model, project, AGENTS.md, shell, git, `secret-tool`, the sessions folder written to, memory and terminal.
+- `/copy [code]` through OSC 52.
+
+Speed in the status bar (`63 t/s`, from M2), and a `speed` event with time to first token. Interactive provider setup and rule editing wait for `cutoffharness setup` (M2). `/reload` moves to M3 with hot reload.
+
 Still open for M1: the unchecked exit criteria below. `cargo deny`, the macOS/Windows builds of `aws-lc-sys` (reqwest's TLS crypto), the Windows job-kill test and the macOS/Windows keyring stores are only checked in CI or by hand.
 
 - Workspace scaffold, CI matrix (Linux/macOS/Windows), `cargo-deny`, Apache-2.0 + NOTICE
@@ -110,6 +118,14 @@ Left out on purpose: a hosted marketplace, telemetry-backed features and cloud e
 - Plan mode (`/plan`, `plan` permission mode); optional `[model] planner`
 - AGENTS.md discovery (chain + nested on-demand + imports); memory (`memory` tool, index injection, configurable path)
 
+### Progress (2026-10-18)
+
+- Pruning rules 1 (superseded reads) and 3 (large old outputs). Compaction runs at the threshold, on server overflow (one retry) and with `/compact [focus]`. If the model can't write a summary, a plain list is kept instead. Both pruning and compaction are recorded in the session log and replayed on resume. Details: [05](05-context-management.md#as-implemented-m2-2026-10-18)
+- `/context` modal: used, budget and window, the compaction point, and tokens per segment (system prompt, tools, summary, user, model, tool results with the pruned count)
+- AGENTS.md: system and user files, then the chain from the git root down to the cwd (the first configured name wins in each directory), `@` imports (one level, kept inside the workspace), and nested files attached to the first tool result that touches their directory ([08](08-instructions-skills-commands.md#rules))
+- Plan mode: `/plan [task|accept|off]`, Shift-Tab, edits refused and only read-only commands run, the plan request appended to the message ([04](04-agent-loop-and-tools.md#plan-mode))
+- Memory: markdown notes plus an index per scope (global, and project in the data dir or the repo), the index in the prompt via `{{ memory_index }}`, a lenient `memory` tool, `memory.writes = "ask"`, and `/memory` ([07](07-sessions-memory-checkpoints.md#behaviour))
+
 **Exit criteria**
 - [ ] A 50-step task completes inside a 32k window with a current ~30B Qwen coding model on llama.cpp
 - [ ] Prefix-stability invariant passes for all default profiles
@@ -128,6 +144,8 @@ Left out on purpose: a hosted marketplace, telemetry-backed features and cloud e
 - `/fork`, `/export`, auto titles; `/fork --worktree` parallel sessions
 - Bundles (`bundles/`, `/bundles`)
 - Sub-agents (`task` tool) with `/tasks` views (moved from M5)
+
+Landed early (2026-10-18): `/undo` from edit pre-images ([07](07-sessions-memory-checkpoints.md#as-implemented-2026-10-18-ahead-of-m3)); `/rewind` is still to do. Skills discovery, the `skill` tool, `{{ skills }}`, `/<skill>` and `/skills` ([08](08-instructions-skills-commands.md#as-implemented-2026-10-18-ahead-of-m3)). Still to do for skills: other harnesses' folders through the detection prompt.
 
 **Exit criteria**
 - [ ] GitHub MCP server works on Windows via `npx` (`.cmd` resolution) and on Linux/macOS

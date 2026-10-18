@@ -4,6 +4,10 @@
 use std::path::Path;
 
 use cutoffharness_config::Loaded;
+use cutoffharness_config::settings::MemoryScope;
+use cutoffharness_instructions::{agents_md, skills};
+use cutoffharness_store::memory::MemoryStore;
+use cutoffharness_store::session::project_key;
 
 const LISTING_MAX: usize = 40;
 
@@ -75,51 +79,73 @@ pub(crate) fn folder_listing(root: &Path) -> String {
     out.join("\n")
 }
 
-/// AGENTS.md (and other configured files) from the user layer and the workspace root.
-/// Returns the merged text and the files it came from.
-pub(crate) fn instructions(config: &Loaded) -> (String, Vec<String>) {
-    let settings = &config.settings.instructions;
-    let max = usize::try_from(settings.max_bytes).unwrap_or(usize::MAX);
-    let root = &config.dirs.workspace_root;
-    let mut candidates = vec![config.dirs.user_config.join("AGENTS.md")];
-    candidates.extend(settings.files.iter().map(|f| root.join(f)));
-    candidates.dedup();
+/// AGENTS.md: the system and user layers, then the chain from the workspace root down to
+/// the cwd (docs/plan/08-instructions-skills-commands.md#discovery).
+pub(crate) fn instructions(config: &Loaded) -> agents_md::Loaded {
+    let d = &config.dirs;
+    let globals: Vec<(std::path::PathBuf, std::path::PathBuf)> = [&d.system, &d.user_config]
+        .into_iter()
+        .map(|dir| (dir.join("AGENTS.md"), dir.clone()))
+        .collect();
+    agents_md::load(&globals, &d.workspace_root, &d.cwd, &rules(config))
+}
 
-    let mut out = String::new();
-    let mut sources = Vec::new();
-    for path in candidates {
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let text = text.trim_start_matches('\u{feff}').trim();
-        if text.is_empty() {
-            continue;
-        }
-        let shown = path
-            .strip_prefix(root)
-            .map_or_else(|_| path.display().to_string(), |p| p.display().to_string());
-        let room = max.saturating_sub(out.len());
-        if room == 0 {
-            break;
-        }
-        let mut body = text.to_owned();
-        if body.len() > room {
-            let mut cut = room;
-            while !body.is_char_boundary(cut) {
-                cut -= 1;
-            }
-            body.truncate(cut);
-            body.push_str("\n… [truncated: instructions.max_bytes]");
-        }
-        if !out.is_empty() {
-            out.push_str("\n\n");
-        }
-        out.push_str(&format!(
-            "<instructions source=\"{shown}\">\n{body}\n</instructions>"
-        ));
-        sources.push(shown);
+pub(crate) fn rules(config: &Loaded) -> agents_md::Rules {
+    let s = &config.settings.instructions;
+    agents_md::Rules {
+        names: s.files.clone(),
+        max_bytes: usize::try_from(s.max_bytes).unwrap_or(usize::MAX),
     }
-    (out, sources)
+}
+
+/// Memory notes: `[memory] path` (default `<user data>/memory`) for global notes; project
+/// notes under it in `projects/<key>/`, or in the repository with `project_scope = "repo"`.
+pub(crate) fn memory_store(config: &Loaded) -> MemoryStore {
+    let m = &config.settings.memory;
+    let global = if m.path.is_empty() {
+        config.dirs.user_data.join("memory")
+    } else {
+        cutoffharness_config::expand_home(&m.path, &|k| std::env::var_os(k))
+    };
+    let project = match m.project_scope {
+        MemoryScope::Repo => config.dirs.project.join("memory"),
+        MemoryScope::DataDir => global
+            .join("projects")
+            .join(project_key(&config.dirs.workspace_root)),
+    };
+    MemoryStore::new(global, project)
+}
+
+/// Skill folders, lowest precedence first: system, user, `~/.agents/skills`, the project
+/// (`.cutoffharness/skills` when trusted, `.agents/skills`), then `[skills] compat_paths`.
+pub(crate) fn skills(config: &Loaded) -> skills::Found {
+    let d = &config.dirs;
+    let mut roots: Vec<(String, std::path::PathBuf)> = vec![
+        ("system".into(), d.system.join("skills")),
+        ("user".into(), d.user_config.join("skills")),
+    ];
+    if let Some(h) = &d.home {
+        roots.push((
+            "user (~/.agents/skills)".into(),
+            h.join(".agents").join("skills"),
+        ));
+    }
+    let project_trusted = config
+        .item_layers()
+        .iter()
+        .any(|(k, _)| *k == cutoffharness_config::LayerKind::Project);
+    if project_trusted {
+        roots.push(("project".into(), d.project.join("skills")));
+    }
+    roots.push((
+        "project (.agents/skills)".into(),
+        d.workspace_root.join(".agents").join("skills"),
+    ));
+    for p in &config.settings.skills.compat_paths {
+        let path = cutoffharness_config::expand_home(p, &|k| std::env::var_os(k));
+        roots.push((format!("compat ({p})"), d.workspace_root.join(path)));
+    }
+    skills::discover(&roots, &config.settings.skills.disabled)
 }
 
 #[cfg(test)]

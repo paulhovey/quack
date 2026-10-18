@@ -17,6 +17,8 @@ fn ctx(root: &std::path::Path) -> ToolCtx {
         cancel: CancellationToken::new(),
         on_output: None,
         reads: Arc::new(ReadTracker::default()),
+        memory: None,
+        skills: Default::default(),
     }
 }
 

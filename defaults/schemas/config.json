@@ -133,6 +133,13 @@
     "MemorySettings": {
       "additionalProperties": false,
       "properties": {
+        "index_max_tokens": {
+          "default": 1500,
+          "description": "Cap on the memory index in the system prompt.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
         "path": {
           "default": "",
           "description": "Where memory notes live. Empty: `<user data>/memory`.",
@@ -141,9 +148,29 @@
         "project_scope": {
           "$ref": "#/$defs/MemoryScope",
           "default": "data-dir"
+        },
+        "writes": {
+          "$ref": "#/$defs/MemoryWrites",
+          "default": "auto",
+          "description": "Whether the model's memory writes need approval."
         }
       },
       "type": "object"
+    },
+    "MemoryWrites": {
+      "oneOf": [
+        {
+          "enum": [
+            "ask"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "auto",
+          "description": "Writes show in the transcript and are easy to undo.",
+          "type": "string"
+        }
+      ]
     },
     "ModelSettings": {
       "additionalProperties": false,
@@ -290,6 +317,29 @@
       ],
       "type": "string"
     },
+    "SkillSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "compat_paths": {
+          "$ref": "#/$defs/ListOrAppend",
+          "default": [],
+          "description": "More skill folders, e.g. another harness's `.claude/skills` once you accept it.\nRelative paths are from the workspace root."
+        },
+        "disabled": {
+          "$ref": "#/$defs/ListOrAppend",
+          "default": [],
+          "description": "Skill names to skip."
+        },
+        "index_max_tokens": {
+          "default": 1500,
+          "description": "Cap on the skill list in the system prompt.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "StartupPanel": {
       "oneOf": [
         {
@@ -422,8 +472,10 @@
     "memory": {
       "$ref": "#/$defs/MemorySettings",
       "default": {
+        "index_max_tokens": 1500,
         "path": "",
-        "project_scope": "data-dir"
+        "project_scope": "data-dir",
+        "writes": "auto"
       }
     },
     "model": {
@@ -478,6 +530,14 @@
       "default": {
         "path": "",
         "retention_days": 0
+      }
+    },
+    "skills": {
+      "$ref": "#/$defs/SkillSettings",
+      "default": {
+        "compat_paths": [],
+        "disabled": [],
+        "index_max_tokens": 1500
       }
     },
     "telemetry": {

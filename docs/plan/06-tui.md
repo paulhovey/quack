@@ -116,9 +116,9 @@ All configuration UIs share one modal widget, so they look and behave the same:
 | `/keys` | | Keybinding viewer/editor |
 | `/doctor` | | Runs `cutoffharness doctor` checks, shown as a modal report |
 | `/stats` | | Session usage: tokens, cache hits, TTFT, cost (hosted services) |
-| `/reload` | | Reload config, instructions, skills |
+| `/reload` | | Reload config, instructions, skills (moved to M3 with hot reload: the TUI's settings view and the engine's config need to be replaced together) |
 | `/cd <path>` | | Change the workspace directory (updates roots, LSP, instructions) |
-| `/copy` | | Copy the last response (or pick a code block) to the clipboard |
+| `/copy` | | Copy the last response (or pick a code block) to the clipboard. Implemented as `/copy [code]` through OSC 52: no clipboard library is needed, and it works over SSH. Inside tmux it needs `set -g set-clipboard on` |
 | `/help` | `?` | Commands and keys |
 | `/quit` | `/exit` | Quit |
 

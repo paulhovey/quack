@@ -13,6 +13,10 @@ pub struct Profile {
     /// Profile directory; `None` for the compiled-in empty profile.
     pub dir: Option<PathBuf>,
     pub system_template: String,
+    /// `compact.md` from the profile directory: the compaction prompt, if overridden.
+    pub compact_prompt: Option<String>,
+    /// `plan.md`: appended to the user's message in plan mode, if overridden.
+    pub plan_prompt: Option<String>,
 }
 
 impl Profile {
@@ -33,6 +37,8 @@ impl Profile {
             },
             dir: None,
             system_template: "{{ instructions }}".into(),
+            compact_prompt: None,
+            plan_prompt: None,
         }
     }
 }
@@ -57,11 +63,21 @@ pub fn load_profiles(loaded: &Loaded) -> (Vec<Profile>, Vec<String>) {
                         continue;
                     }
                 };
+                let optional = |name: &str| {
+                    std::fs::read_to_string(dir.join(name))
+                        .ok()
+                        .map(|t| t.trim_start_matches('\u{feff}').trim().to_owned())
+                        .filter(|t| !t.is_empty())
+                };
+                let compact_prompt = optional("compact.md");
+                let plan_prompt = optional("plan.md");
                 profiles.push(Profile {
                     id: item.id,
                     file,
                     dir: Some(dir),
                     system_template,
+                    compact_prompt,
+                    plan_prompt,
                 });
             }
             ItemState::Disabled(_) => {}

@@ -44,6 +44,10 @@ pub struct Dirs {
     pub user_config: PathBuf,
     pub user_data: PathBuf,
     pub user_cache: PathBuf,
+    /// The directory the harness was started in.
+    pub cwd: PathBuf,
+    /// The user's home directory; `None` when the environment does not say.
+    pub home: Option<PathBuf>,
     /// Git root containing the cwd, or the cwd itself.
     pub workspace_root: PathBuf,
     /// `<workspace_root>/.cutoffharness`.
@@ -79,6 +83,8 @@ impl Dirs {
             user_cache: var("CACHE_DIR").map_or(platform.cache, PathBuf::from),
             user_data,
             project: workspace_root.join(PROJECT_DIR_NAME),
+            cwd: cwd.to_path_buf(),
+            home: Some(home.clone()).filter(|h| h.is_absolute()),
             workspace_root,
         }
     }

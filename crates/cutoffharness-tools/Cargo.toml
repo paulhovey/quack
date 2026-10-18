@@ -14,6 +14,8 @@ cutoffharness-protocol.workspace = true
 cutoffharness-config.workspace = true
 cutoffharness-shell.workspace = true
 cutoffharness-lsp.workspace = true
+cutoffharness-store.workspace = true
+cutoffharness-instructions.workspace = true
 cutoffharness-sandbox = { workspace = true, optional = true }
 futures.workspace = true
 globset = "0.4.20"

@@ -317,6 +317,9 @@ fn draw_status(f: &mut Frame<'_>, app: &App, area: Rect) {
             left.push_str(&format!(" · {} ctx", k(used)));
         }
     }
+    if let Some(tps) = app.speed {
+        left.push_str(&format!(" · {tps:.0} t/s"));
+    }
     let mut right: Vec<Span<'_>> = Vec::new();
     if app.approval.is_some() {
         right.push(Span::styled("waiting for approval", t.warn));
@@ -371,9 +374,9 @@ fn draw_popup(f: &mut Frame<'_>, app: &App, above: Rect) {
         .take(rows)
         .map(|(i, cmd)| {
             let name = format!(" /{:<14}", format!("{} {}", cmd.name, cmd.args).trim_end());
-            let hint = cmd.pending.map(|m| format!(" ({m})")).unwrap_or_default();
+            let hint = cmd.hint.map(|m| format!(" ({m})")).unwrap_or_default();
             let room = usize::from(width).saturating_sub(2 + name.width() + hint.width() + 1);
-            let desc = truncate(cmd.description, room);
+            let desc = truncate(&cmd.description, room);
             let style = if i == selected {
                 app.theme.selected
             } else {
@@ -549,6 +552,36 @@ mod tests {
     fn help_modal_100x30() {
         let mut app = started_app();
         app.modal = Some(crate::modal::help(&app.theme));
+        insta::assert_snapshot!(render(&app, 100, 30));
+    }
+
+    #[test]
+    fn context_modal_100x30() {
+        use cutoffharness_protocol::{ContextReport, ContextSegment};
+        let mut app = started_app();
+        let seg = |name: &str, tokens, detail: &str| ContextSegment {
+            name: name.into(),
+            tokens,
+            detail: detail.into(),
+        };
+        let report = ContextReport {
+            model: "charm/qwen3.8-flash".into(),
+            window: Some(131_072),
+            budget: Some(111_411),
+            threshold: Some(89_128),
+            used: 41_870,
+            strategy: "auto".into(),
+            segments: vec![
+                seg("System prompt", 1_210, "profile generic, with instructions"),
+                seg("Tool definitions", 1_650, "7 tools"),
+                seg("Summary", 2_400, "earlier conversation, summarized"),
+                seg("Your messages", 610, "6 messages"),
+                seg("Model replies and tool calls", 4_300, "31 messages"),
+                seg("Tool results", 31_700, "29 results, 8 pruned"),
+            ],
+            note: None,
+        };
+        app.modal = Some(crate::modal::context(Some(&report), &app.theme));
         insta::assert_snapshot!(render(&app, 100, 30));
     }
 

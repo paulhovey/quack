@@ -10,6 +10,7 @@ pub enum Subsystem {
     Profile,
     Tokenizer,
     Instructions,
+    Skills,
     Compat,
     Memory,
     Mcp,
@@ -18,13 +19,14 @@ pub enum Subsystem {
 
 impl Subsystem {
     /// All subsystems, in startup panel order.
-    pub const ALL: [Subsystem; 10] = [
+    pub const ALL: [Subsystem; 11] = [
         Self::Config,
         Self::Project,
         Self::Provider,
         Self::Profile,
         Self::Tokenizer,
         Self::Instructions,
+        Self::Skills,
         Self::Compat,
         Self::Memory,
         Self::Mcp,
@@ -39,6 +41,7 @@ impl Subsystem {
             Self::Profile => "profile",
             Self::Tokenizer => "tokenizer",
             Self::Instructions => "instructions",
+            Self::Skills => "skills",
             Self::Compat => "compat",
             Self::Memory => "memory",
             Self::Mcp => "mcp",

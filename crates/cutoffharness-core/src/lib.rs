@@ -3,6 +3,8 @@
 //! Clients (TUI, headless exec, ACP) hold an [`EngineHandle`] and never call subsystems
 //! directly (docs/plan/00-architecture.md#engine-protocol).
 
+mod context;
+pub mod doctor;
 mod engine;
 mod env;
 mod models;

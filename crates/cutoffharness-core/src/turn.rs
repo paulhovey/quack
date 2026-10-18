@@ -12,10 +12,13 @@ use cutoffharness_providers::{
     ChatRequest, ErrorKind, Message, ResponseBuilder, StreamEvent, ToolCall, ToolSpec, tokens,
     toolparse,
 };
-use cutoffharness_tools::{Decision, Permissions, ToolOutput};
+use cutoffharness_store::checkpoint::Checkpoints;
+use cutoffharness_tools::{Decision, Permissions, Subject, ToolOutput};
 use serde_json::Value;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
+
+use cutoffharness_context::compact;
 
 use crate::session::{self, SharedLog};
 use crate::startup::Setup;
@@ -31,10 +34,13 @@ pub(crate) struct TurnCtx {
     pub turn: TurnId,
     pub setup: Arc<Setup>,
     pub perms: Arc<Mutex<Permissions>>,
+    pub nested: Arc<cutoffharness_instructions::agents_md::Nested>,
     pub approvals: Approvals,
     pub tx: broadcast::Sender<Event>,
     pub cancel: CancellationToken,
     pub log: Option<SharedLog>,
+    /// Pre-images of edited files, for `/undo`.
+    pub checkpoints: Option<Arc<Checkpoints>>,
 }
 
 impl TurnCtx {
@@ -44,16 +50,14 @@ impl TurnCtx {
         history.push(m);
     }
 
-    fn emit(&self, e: Event) {
+    pub(crate) fn emit(&self, e: Event) {
         let _ = self.tx.send(e);
     }
 
     /// Emit the corrected estimate of what the next request will cost.
-    fn context_estimate(&self, history: &[Message]) {
-        let raw = raw_estimate(&self.setup, history);
-        let used = self.setup.estimator.lock().map_or(raw, |e| e.scale(raw));
+    pub(crate) fn context_estimate(&self, history: &[Message]) {
         self.emit(Event::ContextUpdate {
-            used,
+            used: estimate(&self.setup, history),
             budget: self.setup.budget.unwrap_or(0),
             cache_hit_tokens: None,
         });
@@ -76,6 +80,8 @@ const EMPTY_NUDGE: &str =
 enum StepEnd {
     Done,
     Aborted(String),
+    /// The server said the request is too long for the model.
+    Overflow(String),
 }
 
 /// Run the turn; returns the updated history.
@@ -85,14 +91,41 @@ pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: String)
     let mut total = Usage::default();
     let mut recent: Vec<(String, String)> = Vec::new();
     let mut nudged = false;
+    let mut overflowed = false;
 
     let end = 'steps: {
         for _ in 0..MAX_STEPS {
+            crate::context::fit(&ctx, &mut history).await;
             let estimated = raw_estimate(&ctx.setup, &history);
             let (msg, usage) = match stream_step(&ctx, &history).await {
                 Ok(r) => r,
                 Err(StepEnd::Aborted(reason)) => break 'steps StepEnd::Aborted(reason),
                 Err(StepEnd::Done) => break 'steps StepEnd::Done,
+                Err(StepEnd::Overflow(message)) => {
+                    // Compact once and retry; a second overflow ends the turn.
+                    let compacted = !overflowed
+                        && crate::context::compact_now(
+                            &ctx,
+                            &mut history,
+                            compact::KEEP_TURNS,
+                            None,
+                            "the server said the request is too long",
+                        )
+                        .await
+                        .is_ok();
+                    overflowed = true;
+                    if compacted {
+                        continue;
+                    }
+                    ctx.error(
+                        EngineErrorKind::Provider,
+                        format!(
+                            "{message} · the conversation is too long for this model; \
+                             try /compact or /new"
+                        ),
+                    );
+                    break 'steps StepEnd::Aborted("context overflow".into());
+                }
             };
             if let Some(u) = usage {
                 if let Ok(mut e) = ctx.setup.estimator.lock() {
@@ -192,12 +225,18 @@ pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: String)
             turn: ctx.turn,
             usage: total,
         }),
-        StepEnd::Aborted(reason) => ctx.emit(Event::TurnAborted {
+        StepEnd::Aborted(reason) | StepEnd::Overflow(reason) => ctx.emit(Event::TurnAborted {
             turn: ctx.turn,
             reason,
         }),
     }
     history
+}
+
+/// The next request's prompt tokens: the byte estimate corrected by reported usage.
+pub(crate) fn estimate(s: &Setup, history: &[Message]) -> u32 {
+    let raw = raw_estimate(s, history);
+    s.estimator.lock().map_or(raw, |e| e.scale(raw))
 }
 
 /// Uncorrected estimate of a request's prompt: system prompt, history and tool definitions.
@@ -214,6 +253,51 @@ fn raw_estimate(s: &Setup, history: &[Message]) -> u32 {
         .saturating_add(u32::try_from(tools * 2 / 7).unwrap_or(u32::MAX))
 }
 
+/// A request to the session's model with its sampling and extra parameters; with the
+/// session's tools when `tools` is set.
+pub(crate) fn request(s: &Setup, messages: Vec<Message>, tools: bool) -> ChatRequest {
+    let mut sampling = s.profile.file.defaults.sampling.clone();
+    let m = &s.model.sampling;
+    sampling.temperature = m.temperature.or(sampling.temperature);
+    sampling.top_p = m.top_p.or(sampling.top_p);
+    sampling.top_k = m.top_k.or(sampling.top_k);
+    sampling.min_p = m.min_p.or(sampling.min_p);
+    sampling.repetition_penalty = m.repetition_penalty.or(sampling.repetition_penalty);
+    ChatRequest {
+        model: s.model.id.clone(),
+        messages,
+        tools: if tools {
+            s.surface
+                .tools
+                .iter()
+                .map(|t| ToolSpec {
+                    name: t.name.clone(),
+                    description: t.description.clone(),
+                    parameters: t.schema.clone(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        },
+        context_window: s.model.context_window,
+        max_tokens: s.model.max_output,
+        sampling,
+        reasoning_effort: Some(s.model.reasoning.effort.clone()).filter(|e| !e.is_empty()),
+        extra_body: serde_json::to_value(&s.model.extra_body)
+            .ok()
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default(),
+    }
+}
+
+pub(crate) fn reasoning_format(s: &Setup) -> cutoffharness_config::provider::ReasoningFormat {
+    s.profile
+        .file
+        .defaults
+        .reasoning_format
+        .unwrap_or(s.model.reasoning.format)
+}
+
 /// One model call. Streams deltas to clients and returns the assembled message.
 async fn stream_step(
     ctx: &TurnCtx,
@@ -227,44 +311,13 @@ async fn stream_step(
         });
     }
     messages.extend_from_slice(history);
-    let mut sampling = s.profile.file.defaults.sampling.clone();
-    let m = &s.model.sampling;
-    sampling.temperature = m.temperature.or(sampling.temperature);
-    sampling.top_p = m.top_p.or(sampling.top_p);
-    sampling.top_k = m.top_k.or(sampling.top_k);
-    sampling.min_p = m.min_p.or(sampling.min_p);
-    sampling.repetition_penalty = m.repetition_penalty.or(sampling.repetition_penalty);
-    let req = ChatRequest {
-        model: s.model.id.clone(),
-        messages,
-        tools: s
-            .surface
-            .tools
-            .iter()
-            .map(|t| ToolSpec {
-                name: t.name.clone(),
-                description: t.description.clone(),
-                parameters: t.schema.clone(),
-            })
-            .collect(),
-        context_window: s.model.context_window,
-        max_tokens: s.model.max_output,
-        sampling,
-        reasoning_effort: Some(s.model.reasoning.effort.clone()).filter(|e| !e.is_empty()),
-        extra_body: serde_json::to_value(&s.model.extra_body)
-            .ok()
-            .and_then(|v| v.as_object().cloned())
-            .unwrap_or_default(),
-    };
-
-    let reasoning = s
-        .profile
-        .file
-        .defaults
-        .reasoning_format
-        .unwrap_or(s.model.reasoning.format);
-    let mut rx = s.provider.stream(req, reasoning, ctx.cancel.child_token());
+    let req = request(s, messages, true);
+    let mut rx = s
+        .provider
+        .stream(req, reasoning_format(s), ctx.cancel.child_token());
     let mut b = ResponseBuilder::default();
+    let sent = std::time::Instant::now();
+    let mut first: Option<std::time::Instant> = None;
     let format = toolparse::TextFormat::parse(&s.model.tool_calling.text_format);
     let mut gate = toolparse::TextGate::new(format);
     loop {
@@ -280,6 +333,16 @@ async fn stream_step(
         let Some(item) = item else { break };
         match item {
             Ok(ev) => {
+                if first.is_none()
+                    && matches!(
+                        ev,
+                        StreamEvent::TextDelta(_)
+                            | StreamEvent::ReasoningDelta(_)
+                            | StreamEvent::ToolCallStart { .. }
+                    )
+                {
+                    first = Some(std::time::Instant::now());
+                }
                 match &ev {
                     StreamEvent::TextDelta(t) => {
                         let text = gate.feed(t);
@@ -295,10 +358,10 @@ async fn stream_step(
                 b.push(&ev);
             }
             Err(e) => {
+                if e.kind == ErrorKind::ContextLengthExceeded {
+                    return Err(StepEnd::Overflow(format!("{}: {e}", s.provider.id)));
+                }
                 let hint = match e.kind {
-                    ErrorKind::ContextLengthExceeded => {
-                        " · the conversation is too long for this model; compaction lands in M2"
-                    }
                     ErrorKind::Auth => " · check the provider's api_key",
                     _ => "",
                 };
@@ -316,6 +379,9 @@ async fn stream_step(
     }
     let usage = b.usage;
     let mut msg = b.into_message();
+    if let Some(first) = first {
+        emit_speed(ctx, sent, first, usage, &msg);
+    }
     if let Message::Assistant {
         tool_calls,
         content,
@@ -343,6 +409,39 @@ async fn stream_step(
     Ok((msg, usage))
 }
 
+/// Report time to first token and generation speed. Output tokens come from the server's
+/// usage, or are estimated from the reply when it reports none.
+fn emit_speed(
+    ctx: &TurnCtx,
+    sent: std::time::Instant,
+    first: std::time::Instant,
+    usage: Option<Usage>,
+    msg: &Message,
+) {
+    let generating = first.elapsed().as_secs_f32();
+    let out = usage
+        .map(|u| u.completion_tokens)
+        .unwrap_or_else(|| match msg {
+            Message::Assistant {
+                content,
+                reasoning,
+                tool_calls,
+            } => {
+                let calls: usize = tool_calls.iter().map(|c| c.arguments.len()).sum();
+                tokens::estimate(content)
+                    + reasoning.as_deref().map_or(0, tokens::estimate)
+                    + u32::try_from(calls * 2 / 7).unwrap_or(0)
+            }
+            _ => 0,
+        });
+    // Very short replies give meaningless rates.
+    let tokens_per_sec = (out >= 8 && generating > 0.05).then(|| out as f32 / generating);
+    ctx.emit(Event::Speed {
+        ttft_ms: u32::try_from((first - sent).as_millis()).unwrap_or(u32::MAX),
+        tokens_per_sec,
+    });
+}
+
 /// Servers that omit ids get `call_N`, which can collide across steps.
 fn dedupe_ids(calls: &mut [ToolCall], history: &[Message]) {
     let mut used: HashSet<String> = history
@@ -364,7 +463,7 @@ fn dedupe_ids(calls: &mut [ToolCall], history: &[Message]) {
 }
 
 /// Lenient argument parsing: empty means `{}`, a JSON string holding an object is unwrapped.
-fn parse_args(raw: &str) -> Result<Value, String> {
+pub(crate) fn parse_args(raw: &str) -> Result<Value, String> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Ok(Value::Object(Default::default()));
@@ -492,7 +591,7 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
                 Some(ApprovalDecision::AllowOnce) => {}
                 Some(ApprovalDecision::AllowSession | ApprovalDecision::AlwaysAllow { .. }) => {
                     if let Ok(mut p) = ctx.perms.lock() {
-                        p.allow_session(subject);
+                        p.allow_session(subject.clone());
                     }
                 }
                 Some(ApprovalDecision::Deny) => {
@@ -521,9 +620,32 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
             });
         }
     });
-    let out = tool.run(args, &tctx).await;
+    let checkpoint = match (&subject, &ctx.checkpoints) {
+        (Subject::Edit(p), Some(cp)) => match cp.before(ctx.turn.0, &call.id, p) {
+            Ok(seq) => Some((cp, seq, p)),
+            Err(e) => {
+                tracing::warn!(error = %e, path = %p.display(), "no undo point for this edit");
+                None
+            }
+        },
+        _ => None,
+    };
+    let mut out = tool.run(args, &tctx).await;
     drop(tctx);
     let _ = forward.await;
+    if let Some((cp, seq, p)) = checkpoint
+        && let Err(e) = cp.after(seq, p, out.ok)
+    {
+        tracing::warn!(error = %e, "could not record the edit for undo");
+    }
+    // AGENTS.md files below the root arrive with the first result that touches them.
+    if out.ok
+        && let Subject::Read(p) | Subject::Edit(p) = &subject
+        && let Some(extra) = ctx.nested.attach(p)
+    {
+        out.model.push_str("\n\n");
+        out.model.push_str(&extra);
+    }
     done(out)
 }
 

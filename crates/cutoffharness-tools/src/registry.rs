@@ -25,6 +25,12 @@ pub enum Subject {
     Read(PathBuf),
     Edit(PathBuf),
     Shell(String),
+    /// Memory notes, outside the workspace.
+    Memory {
+        write: bool,
+    },
+    /// Loading an installed skill's instructions.
+    Skill,
 }
 
 /// Result of a tool call: what the model sees and what the UI shows.
@@ -107,6 +113,10 @@ pub struct ToolCtx {
     /// Live output for the UI (shell).
     pub on_output: Option<mpsc::UnboundedSender<String>>,
     pub reads: Arc<ReadTracker>,
+    /// Memory notes; `None` hides the `memory` tool.
+    pub memory: Option<Arc<cutoffharness_store::memory::MemoryStore>>,
+    /// Skills the `skill` tool can load; empty hides it.
+    pub skills: Arc<Vec<cutoffharness_instructions::skills::Skill>>,
 }
 
 pub trait Tool: Send + Sync {
@@ -122,6 +132,10 @@ pub trait Tool: Send + Sync {
     /// What the user approves: the diff or the command. `Err` means the call will fail anyway.
     fn preview(&self, args: &Value, ctx: &ToolCtx) -> Result<ApprovalRequest, String>;
     fn run<'a>(&'a self, args: Value, ctx: &'a ToolCtx) -> BoxFuture<'a, ToolOutput>;
+    /// Whether to offer the tool in this session.
+    fn available(&self, _ctx: &ToolCtx) -> bool {
+        true
+    }
 }
 
 impl std::fmt::Debug for dyn Tool {
@@ -146,6 +160,8 @@ impl Registry {
             Arc::new(crate::write::Write),
             Arc::new(crate::edit::StrReplace),
             Arc::new(crate::shell::Shell),
+            Arc::new(crate::memory::Memory),
+            Arc::new(crate::skill::LoadSkill),
         ];
         Self { tools }
     }

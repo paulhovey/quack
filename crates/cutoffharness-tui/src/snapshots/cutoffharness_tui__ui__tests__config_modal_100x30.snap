@@ -1,6 +1,5 @@
 ---
 source: crates/cutoffharness-tui/src/ui.rs
-assertion_line: 584
 expression: "render(&app, 100, 30)"
 ---
 " cutoffharness 0.1.0 · ~/src/project                                                                "
@@ -10,14 +9,14 @@ expression: "render(&app, 100, 30)"
 " ✓ pr│ filter:                                                                                │     "
 " ⠋ to│╭──────────────────────────────────────╮╭──────────────────────────────────────────────╮│     "
 " · in││ model.default  "charm/qwen3.8-flash" ││ model.default                                ││     "
-" · co││ ui.ascii                       false ││                                              ││     "
-" · me││                                      ││ `<provider-id>/<model-id>` or                ││     "
-" · mc││                                      ││ `<provider-id>/<alias>`. Empty: pick with    ││     "
-" ✗ ls││                                      ││ `/models`.                                   ││     "
-"     ││                                      ││                                              ││     "
+" · sk││ ui.ascii                       false ││                                              ││     "
+" · co││                                      ││ `<provider-id>/<model-id>` or                ││     "
+" · me││                                      ││ `<provider-id>/<alias>`. Empty: pick with    ││     "
+" · mc││                                      ││ `/models`.                                   ││     "
+" ✗ ls││                                      ││                                              ││     "
 "     ││                                      ││ value     "charm/qwen3.8-flash"              ││     "
-"   Ty││                                      ││ from      user:                              ││     "
-"     ││                                      ││ ~/.config/cutoffharness/config.toml          ││     "
+"     ││                                      ││ from      user:                              ││     "
+"   Ty││                                      ││ ~/.config/cutoffharness/config.toml          ││     "
 "     ││                                      ││                                              ││     "
 "     ││                                      ││ ⏎ edit the value, then press ⏎ to save it to ││     "
 "     ││                                      ││ the user config.toml                         ││     "

@@ -33,6 +33,60 @@ const DENY_FLOOR: &[&str] = &[
     "Remove-Item -Recurse -Force C:\\*",
 ];
 
+/// Commands that only look, allowed while planning. Never matched with control operators.
+const READ_ONLY_COMMANDS: &[&str] = &[
+    "ls",
+    "dir",
+    "cat",
+    "type",
+    "head",
+    "tail",
+    "wc",
+    "grep",
+    "rg",
+    "find",
+    "tree",
+    "file",
+    "stat",
+    "du",
+    "pwd",
+    "which",
+    "where",
+    "Get-ChildItem",
+    "Get-Content",
+    "Select-String",
+];
+const READ_ONLY_GIT: &[&str] = &[
+    "status",
+    "log",
+    "diff",
+    "show",
+    "branch",
+    "blame",
+    "grep",
+    "ls-files",
+    "rev-parse",
+];
+
+/// A single command that only reads: `git status`, `rg foo src`, but not `find -delete`.
+fn read_only_command(cmd: &str) -> bool {
+    let cmd = normalize(cmd);
+    if has_control_operators(&cmd) {
+        return false;
+    }
+    let mut words = cmd.split(' ');
+    match words.next() {
+        Some("git") => words.next().is_some_and(|w| READ_ONLY_GIT.contains(&w)),
+        Some("find") => {
+            !words.any(|w| matches!(w, "-exec" | "-execdir" | "-delete" | "-ok" | "-fprint"))
+        }
+        Some(first) => READ_ONLY_COMMANDS
+            .iter()
+            .any(|c| c.eq_ignore_ascii_case(first)),
+        None => false,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
     Allow,
@@ -100,6 +154,10 @@ pub struct Permissions {
     ask: Vec<Rule>,
     deny: Vec<Rule>,
     session: Vec<Subject>,
+    /// `[memory] writes = "ask"`.
+    pub memory_writes_ask: bool,
+    /// Plan mode: look but don't change anything (docs/plan/04-agent-loop-and-tools.md#plan-mode).
+    pub plan: bool,
 }
 
 impl Permissions {
@@ -118,6 +176,8 @@ impl Permissions {
             ask: parse(&settings.ask),
             deny: parse(&settings.deny),
             session: Vec::new(),
+            memory_writes_ask: false,
+            plan: false,
         };
         (perms, warnings)
     }
@@ -128,6 +188,19 @@ impl Permissions {
     }
 
     pub fn check(&self, subject: &Subject) -> Decision {
+        // Memory is not part of the workspace: reads are free, and writes ask only when
+        // configured to (they show in the transcript and are easy to undo).
+        // Installed skills are instructions the user put there.
+        if *subject == Subject::Skill {
+            return Decision::Allow;
+        }
+        if let Subject::Memory { write } = subject {
+            let ask = *write
+                && self.memory_writes_ask
+                && self.mode != PermissionMode::FullAuto
+                && !self.session.contains(subject);
+            return if ask { Decision::Ask } else { Decision::Allow };
+        }
         if let Subject::Shell(cmd) = subject {
             let cmd = normalize(cmd);
             if DENY_FLOOR.iter().any(|p| glob_match(p, &cmd)) {
@@ -136,6 +209,25 @@ impl Permissions {
         }
         if self.deny.iter().any(|r| r.matches(subject, &self.root)) {
             return Decision::Deny("denied by a [permissions] deny rule".into());
+        }
+        if self.plan {
+            match subject {
+                Subject::Edit(_) => {
+                    return Decision::Deny(
+                        "plan mode: no changes until the user accepts the plan".into(),
+                    );
+                }
+                Subject::Shell(cmd)
+                    if !read_only_command(cmd)
+                        && !self.allow.iter().any(|r| r.matches(subject, &self.root)) =>
+                {
+                    return Decision::Deny(
+                        "plan mode: only read-only commands run while planning".into(),
+                    );
+                }
+                Subject::Shell(_) => return Decision::Allow,
+                _ => {}
+            }
         }
         if self.mode == PermissionMode::ReadOnly && matches!(subject, Subject::Edit(_)) {
             return Decision::Deny("read-only mode: file changes are not allowed".into());
@@ -226,5 +318,35 @@ mod tests {
         p.allow_session(shell("make"));
         assert_eq!(p.check(&shell("make")), Decision::Allow);
         assert_eq!(p.check(&shell("make install")), Decision::Ask);
+    }
+
+    #[test]
+    fn plan_mode_only_looks() {
+        let (mut p, _) = Permissions::new(
+            &PermissionSettings {
+                mode: PermissionMode::FullAuto,
+                allow: vec!["shell:cargo check*".into()],
+                ..Default::default()
+            },
+            Path::new("/repo"),
+        );
+        p.plan = true;
+        assert!(matches!(
+            p.check(&Subject::Edit("/repo/a".into())),
+            Decision::Deny(_)
+        ));
+        assert_eq!(p.check(&shell("git status")), Decision::Allow);
+        assert_eq!(p.check(&shell("rg foo src")), Decision::Allow);
+        assert_eq!(p.check(&shell("cargo check -q")), Decision::Allow);
+        for bad in [
+            "git push",
+            "find . -delete",
+            "ls; rm x",
+            "cat a > b",
+            "npm install",
+        ] {
+            assert!(matches!(p.check(&shell(bad)), Decision::Deny(_)), "{bad}");
+        }
+        assert_eq!(p.check(&Subject::Read("/repo/a".into())), Decision::Allow);
     }
 }

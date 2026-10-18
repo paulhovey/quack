@@ -101,6 +101,9 @@ async fn event_loop(
                 }
             }
         }
+        if let Some(text) = app.take_clipboard() {
+            copy(terminal, &text)?;
+        }
         for op in app.take_ops() {
             if !engine.submit(op).await {
                 return Ok(());
@@ -108,4 +111,48 @@ async fn event_loop(
         }
     }
     Ok(())
+}
+
+/// Put text on the clipboard through the terminal (OSC 52), which works over SSH and needs
+/// no clipboard library. Most current terminals support it; some ask the user first.
+fn copy(terminal: &mut ratatui::DefaultTerminal, text: &str) -> io::Result<()> {
+    use std::io::Write;
+    let out = terminal.backend_mut();
+    write!(out, "\x1b]52;c;{}\x07", base64(text.as_bytes()))?;
+    out.flush()
+}
+
+fn base64(bytes: &[u8]) -> String {
+    const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, b)| n | u32::from(*b) << (16 - 8 * i));
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(char::from(ABC[(n >> (18 - 6 * i)) as usize & 63]));
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod copy_tests {
+    #[test]
+    fn base64_matches_the_standard() {
+        for (input, want) in [
+            ("", ""),
+            ("f", "Zg=="),
+            ("fo", "Zm8="),
+            ("foo", "Zm9v"),
+            ("foobar", "Zm9vYmFy"),
+        ] {
+            assert_eq!(super::base64(input.as_bytes()), want);
+        }
+    }
 }
