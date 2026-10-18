@@ -2,7 +2,8 @@
 //!
 //! Record types: `session_start`, `resume`, `message` (one chat message, exactly as sent),
 //! `tool` (UI summary of a tool call), `usage`, `prune` (tool results replaced),
-//! `compaction` (history before `cut` replaced by `message`).
+//! `compaction` (history before `cut` replaced by `message`), `rewind` (history cut back
+//! to its first `to` messages).
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -60,7 +61,9 @@ pub(crate) fn find(config: &Loaded, resume: &Resume) -> Result<Option<IndexEntry
 pub(crate) fn replay(records: &[Record]) -> (Vec<Message>, Vec<ReplayItem>, u32) {
     let mut history = Vec::new();
     let mut items = Vec::new();
-    let mut turns = 0;
+    let mut turns: u32 = 0;
+    // `(history index, items length)` at each user message, to cut the transcript on rewind.
+    let mut marks: Vec<(usize, usize)> = Vec::new();
     for r in records {
         match r.kind.as_str() {
             "message" => {
@@ -74,6 +77,7 @@ pub(crate) fn replay(records: &[Record]) -> (Vec<Message>, Vec<ReplayItem>, u32)
                 match &m {
                     Message::User { content } => {
                         turns += 1;
+                        marks.push((history.len(), items.len()));
                         items.push(ReplayItem::User {
                             text: content.clone(),
                         });
@@ -121,13 +125,33 @@ pub(crate) fn replay(records: &[Record]) -> (Vec<Message>, Vec<ReplayItem>, u32)
                     .get("message")
                     .and_then(|v| serde_json::from_value::<Message>(v.clone()).ok());
                 if let (Some(cut), Some(msg)) = (cut, msg) {
-                    compact::apply(
-                        &mut history,
-                        usize::try_from(cut).unwrap_or(usize::MAX),
-                        msg,
-                    );
+                    let cut = usize::try_from(cut)
+                        .unwrap_or(usize::MAX)
+                        .min(history.len());
+                    compact::apply(&mut history, cut, msg);
+                    marks.retain(|(i, _)| *i >= cut);
+                    for (i, _) in &mut marks {
+                        *i = *i - cut + 1;
+                    }
                     items.push(ReplayItem::Compacted);
                 }
+            }
+            "rewind" => {
+                let Some(to) = r
+                    .data
+                    .get("to")
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|t| usize::try_from(t).ok())
+                else {
+                    continue;
+                };
+                if let Some(&(_, len)) = marks.iter().find(|(i, _)| *i == to) {
+                    items.truncate(len);
+                }
+                let dropped = marks.iter().filter(|(i, _)| *i >= to).count();
+                marks.retain(|(i, _)| *i < to);
+                turns = turns.saturating_sub(u32::try_from(dropped).unwrap_or(u32::MAX));
+                history.truncate(to);
             }
             // The live session repaired its history when it resumed; do the same at the
             // same point so later prune and compaction records line up.
@@ -234,6 +258,38 @@ mod tests {
         );
         assert_eq!(turns, 3);
         assert_eq!(items[2], ReplayItem::Compacted);
+    }
+
+    #[test]
+    fn replay_applies_rewind_to_history_and_transcript() {
+        let msg = |m: Message| rec("message", json!({ "message": m }));
+        let user = |s: &str| Message::User { content: s.into() };
+        let asst = |s: &str| Message::Assistant {
+            content: s.into(),
+            reasoning: None,
+            tool_calls: Vec::new(),
+        };
+        let records = vec![
+            msg(user("one")),
+            msg(asst("a1")),
+            msg(user("two")),
+            msg(asst("a2")),
+            rec("rewind", json!({ "to": 2 })),
+            msg(user("two again")),
+        ];
+        let (history, items, turns) = replay(&records);
+        assert_eq!(history, [user("one"), asst("a1"), user("two again")]);
+        assert_eq!(turns, 2);
+        assert_eq!(
+            items,
+            [
+                ReplayItem::User { text: "one".into() },
+                ReplayItem::Assistant { text: "a1".into() },
+                ReplayItem::User {
+                    text: "two again".into()
+                },
+            ]
+        );
     }
 
     #[test]

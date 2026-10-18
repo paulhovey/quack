@@ -15,6 +15,7 @@ use crate::modal::{self, Modal, ModalOutcome};
 use crate::theme::{Glyphs, Theme};
 
 const DOUBLE_CTRL_C: Duration = Duration::from_millis(1500);
+const DOUBLE_ESC: Duration = Duration::from_millis(600);
 /// Spinner advances every N frames (16 ms each).
 const SPIN_EVERY: u64 = 5;
 
@@ -166,11 +167,15 @@ pub struct App {
     skills: Vec<cutoffharness_protocol::SkillInfo>,
     /// Servers found by the last `/setup`.
     detected: Vec<cutoffharness_protocol::DetectedServer>,
+    /// A `.cutoffharness/` waiting for a trust decision.
+    trust: Option<modal::TrustPrompt>,
     frame: u64,
     dirty: bool,
     quit: bool,
     ops: Vec<Op>,
     last_ctrl_c: Option<Instant>,
+    /// For Esc Esc, which opens the rewind picker.
+    last_esc: Option<Instant>,
 }
 
 impl App {
@@ -200,11 +205,13 @@ impl App {
             clipboard: None,
             skills: Vec::new(),
             detected: Vec::new(),
+            trust: None,
             frame: 0,
             dirty: true,
             quit: false,
             ops: Vec::new(),
             last_ctrl_c: None,
+            last_esc: None,
             info,
         }
     }
@@ -312,6 +319,28 @@ impl App {
                 }
             }
             Event::StartupComplete => self.startup_done = true,
+            Event::ConfigReloaded => {
+                self.startup_done = false;
+                self.panel_collapsed = false;
+                self.trust = None;
+                self.note("config reloaded".into());
+            }
+            Event::ProjectTrust {
+                path,
+                summary,
+                changed,
+            } => {
+                let prompt = modal::TrustPrompt {
+                    path,
+                    summary,
+                    changed,
+                };
+                // Offer the choice once it arrives, unless the user is busy with something.
+                if self.modal.is_none() && self.approval.is_none() {
+                    self.modal = Some(modal::trust(Some(&prompt), &self.theme));
+                }
+                self.trust = Some(prompt);
+            }
             Event::TurnQueued { waiting_for } => {
                 self.queued = true;
                 self.note(format!("queued, waiting for {waiting_for}"));
@@ -356,6 +385,30 @@ impl App {
                         conflicts.join(", ")
                     )));
                 }
+            }
+            Event::RewindPoints { points } => {
+                if self.modal.as_ref().is_some_and(|m| m.title == "Rewind") {
+                    self.modal = Some(modal::rewind(Some(&points), &self.theme));
+                }
+            }
+            Event::Rewound { back, text } => {
+                // Cut the transcript at the same user message, counted from the end.
+                let at = self
+                    .transcript
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .filter(|(_, e)| matches!(e, Entry::User(_)))
+                    .nth(back.saturating_sub(1) as usize)
+                    .map(|(i, _)| i);
+                if let Some(i) = at {
+                    self.transcript.truncate(i);
+                }
+                self.context = None;
+                if self.input.is_empty() {
+                    self.input.set(&text);
+                }
+                self.note("rewound; the message is back in the input to edit or send again".into());
             }
             Event::McpServers { servers } => {
                 if self.modal.as_ref().is_some_and(|m| m.title == "MCP") {
@@ -566,7 +619,17 @@ impl App {
         match key.code {
             KeyCode::Esc if !popup.is_empty() => self.popup_dismissed = true,
             KeyCode::Esc if self.turn_running || self.queued => self.ops.push(Op::Interrupt),
-            KeyCode::Esc => {}
+            KeyCode::Esc => {
+                if self
+                    .last_esc
+                    .take()
+                    .is_some_and(|t| t.elapsed() < DOUBLE_ESC)
+                {
+                    self.open_rewind();
+                } else {
+                    self.last_esc = Some(Instant::now());
+                }
+            }
             KeyCode::Enter
                 if key
                     .modifiers
@@ -929,6 +992,47 @@ impl App {
             "compact" => self.ops.push(Op::Compact {
                 focus: Some(args.to_owned()).filter(|a| !a.is_empty()),
             }),
+            "rewind" if args.is_empty() => self.open_rewind(),
+            "rewind" => {
+                let mut words = args.split_whitespace();
+                let back = words.next().and_then(|n| n.parse::<u32>().ok());
+                let mut what = "both";
+                let mut force = false;
+                for w in words {
+                    match w {
+                        "--force" => force = true,
+                        w => what = w,
+                    }
+                }
+                match (back, what) {
+                    (Some(back), "both" | "conversation" | "files") if back > 0 => {
+                        self.ops.push(Op::Rewind {
+                            back,
+                            conversation: what != "files",
+                            files: what != "conversation",
+                            force,
+                        });
+                    }
+                    _ => self.note("usage: /rewind [n] [both|conversation|files] [--force]".into()),
+                }
+            }
+            "reload" => {
+                self.note("reloading config…".into());
+                self.ops.push(Op::ReloadConfig);
+            }
+            "trust" => match args {
+                "" => self.modal = Some(modal::trust(self.trust.as_ref(), &self.theme)),
+                "later" => {
+                    self.note("skipping the project config for now; /trust to decide".into())
+                }
+                decision @ ("trusted" | "settings-only" | "ignored") => {
+                    self.note(format!("project config: {decision}; reloading…"));
+                    self.ops.push(Op::TrustProject {
+                        decision: decision.to_owned(),
+                    });
+                }
+                _ => self.note("usage: /trust [trusted|settings-only|ignored]".into()),
+            },
             "help" => self.modal = Some(modal::help(&self.theme)),
             "quit" => self.quit = true,
             name => self.note(format!(
@@ -936,6 +1040,33 @@ impl App {
                 cmd.pending.unwrap_or("a later milestone")
             )),
         }
+    }
+
+    fn open_rewind(&mut self) {
+        if self.turn_running {
+            return self.note("wait for the current turn to finish before rewinding".into());
+        }
+        self.modal = Some(modal::rewind(None, &self.theme));
+        self.ops.push(Op::ListRewindPoints);
+    }
+
+    /// Settings from a reloaded config. What the engine reports (model, profile, mode)
+    /// stays as it is until the engine says otherwise.
+    pub fn reconfigure(&mut self, info: AppInfo) {
+        let keep = (
+            self.info.model.take(),
+            std::mem::take(&mut self.info.profile),
+            std::mem::take(&mut self.info.permission_mode),
+        );
+        self.info = info;
+        (
+            self.info.model,
+            self.info.profile,
+            self.info.permission_mode,
+        ) = keep;
+        self.theme = Theme::resolve(&self.info.ui.theme, self.info.no_color);
+        self.glyphs = Glyphs::new(self.info.ui.ascii);
+        self.dirty = true;
     }
 
     fn note(&mut self, text: String) {
@@ -1087,6 +1218,62 @@ mod tests {
         );
         assert!(
             matches!(&ops[1], Op::UserTurn { items, .. } if items == &[InputItem::text("Carry out the plan above.")])
+        );
+    }
+
+    #[test]
+    fn trust_prompt_opens_and_sends_the_decision() {
+        let mut app = App::new(info());
+        app.on_engine(Event::ProjectTrust {
+            path: "/r/.cutoffharness".into(),
+            summary: "1 MCP server".into(),
+            changed: false,
+        });
+        assert_eq!(app.modal.as_ref().map(|m| m.title.as_str()), Some("Trust"));
+        press(&mut app, KeyCode::Enter);
+        assert!(app.modal.is_none());
+        assert_eq!(
+            app.take_ops(),
+            vec![Op::TrustProject {
+                decision: "trusted".into()
+            }]
+        );
+        type_str(&mut app, "/reload");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.take_ops(), vec![Op::ReloadConfig]);
+    }
+
+    #[test]
+    fn double_esc_opens_rewind_and_rewound_cuts_the_transcript() {
+        let mut app = App::new(info());
+        for text in ["one", "two", "three"] {
+            app.on_engine(Event::AssistantDelta { text: "x".into() });
+            app.transcript.push(Entry::User(text.into()));
+        }
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.modal.as_ref().map(|m| m.title.as_str()), Some("Rewind"));
+        assert_eq!(app.take_ops(), vec![Op::ListRewindPoints]);
+        app.modal = None;
+        app.on_engine(Event::Rewound {
+            back: 2,
+            text: "two".into(),
+        });
+        assert!(!app.transcript.contains(&Entry::User("two".into())));
+        assert!(app.transcript.contains(&Entry::User("one".into())));
+        assert_eq!(app.input.text(), "two");
+        type_str(&mut app, "");
+        app.input.clear();
+        type_str(&mut app, "/rewind 1 files --force");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(
+            app.take_ops(),
+            vec![Op::Rewind {
+                back: 1,
+                conversation: false,
+                files: true,
+                force: true
+            }]
         );
     }
 

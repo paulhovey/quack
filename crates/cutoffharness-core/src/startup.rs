@@ -86,10 +86,13 @@ fn warn(tx: &broadcast::Sender<Event>, message: impl Into<String>) {
     });
 }
 
+/// Startup, and a reload: `keep` is the `(provider, model)` in use, tried before
+/// `[model].default` so a reload does not change the model.
 pub(crate) async fn run(
     config: Arc<Loaded>,
     tx: broadcast::Sender<Event>,
     mcp: Arc<crate::mcp::Mcp>,
+    keep: Option<(String, String)>,
 ) -> StartupOutcome {
     let reporter = |subsystem| Reporter {
         tx: tx.clone(),
@@ -102,7 +105,17 @@ pub(crate) async fn run(
     for warning in &config.warnings {
         warn(&tx, warning.clone());
     }
-    reporter(Subsystem::Project).send(project_state(config.project));
+    reporter(Subsystem::Project).send(project_state(&config));
+    if matches!(
+        config.project,
+        ProjectStatus::Untrusted | ProjectStatus::Changed
+    ) {
+        let _ = tx.send(Event::ProjectTrust {
+            path: config.dirs.project.display().to_string(),
+            summary: config.project_summary().describe(),
+            changed: config.project == ProjectStatus::Changed,
+        });
+    }
     reporter(Subsystem::Tokenizer).send(LoadState::Ready {
         detail: "estimate, corrected by server usage".into(),
     });
@@ -182,7 +195,20 @@ pub(crate) async fn run(
     let skills = skills.await.unwrap_or_default();
     report_skills(&tx, &skills);
 
-    let resolved = resolve_model(&config, &providers, &prov, &tx).await;
+    let kept = match keep {
+        Some((pid, mid)) => match named(&config, &providers, &pid, &mid, &prov, &tx).await {
+            Ok((p, m)) => Some((p, m, false)),
+            Err(e) => {
+                warn(&tx, format!("cannot keep {pid}/{mid}: {e}"));
+                None
+            }
+        },
+        None => None,
+    };
+    let resolved = match kept {
+        Some(r) => Ok(r),
+        None => resolve_model(&config, &providers, &prov, &tx).await,
+    };
     let (provider, model, auto_picked) = match resolved {
         Ok(r) => r,
         Err((state, problem)) => {
@@ -367,19 +393,7 @@ async fn resolve_model(
                 "[model].default `{wanted}` must be <provider>/<model>"
             )));
         };
-        let Some(item) = providers.iter().find(|p| p.id == pid) else {
-            return Err(failed(format!(
-                "provider `{pid}` not found in any providers.d/"
-            )));
-        };
-        let file = match &item.state {
-            ItemState::Loaded(p) => p.clone(),
-            ItemState::Disabled(why) => {
-                return Err(failed(format!("provider `{pid}` is disabled: {why}")));
-            }
-            ItemState::Failed(d) => return Err(failed(d.one_line())),
-        };
-        return try_provider(config, pid, file, Some(mid), DISCOVERY_TIMEOUT, prov, tx)
+        return named(config, providers, pid, mid, prov, tx)
             .await
             .map(|(p, m)| (p, m, false))
             .map_err(failed);
@@ -439,6 +453,26 @@ async fn resolve_model(
         },
         msg,
     ))
+}
+
+/// A provider and model chosen by name: `[model].default`, or the one kept by a reload.
+async fn named(
+    config: &Loaded,
+    providers: &[Item<ProviderFile>],
+    pid: &str,
+    mid: &str,
+    prov: &Reporter,
+    tx: &broadcast::Sender<Event>,
+) -> Result<(Provider, ModelEntry), String> {
+    let Some(item) = providers.iter().find(|p| p.id == pid) else {
+        return Err(format!("provider `{pid}` not found in any providers.d/"));
+    };
+    let file = match &item.state {
+        ItemState::Loaded(p) => p.clone(),
+        ItemState::Disabled(why) => return Err(format!("provider `{pid}` is disabled: {why}")),
+        ItemState::Failed(d) => return Err(d.one_line()),
+    };
+    try_provider(config, pid, file, Some(mid), DISCOVERY_TIMEOUT, prov, tx).await
 }
 
 /// The environment variable named by `api_key = { env = ... }`, when it is unset.
@@ -706,8 +740,14 @@ fn report_skills(tx: &broadcast::Sender<Event>, found: &skills::Found) {
     });
 }
 
-fn project_state(status: ProjectStatus) -> LoadState {
-    match status {
+fn project_state(config: &Loaded) -> LoadState {
+    let trust = |what: &str| LoadState::NeedsAttention {
+        detail: format!(
+            "{what} ({}); skipped · /trust to review",
+            config.project_summary().describe()
+        ),
+    };
+    match config.project {
         ProjectStatus::None => LoadState::Disabled {
             reason: "no .cutoffharness/ in this workspace".into(),
         },
@@ -717,12 +757,10 @@ fn project_state(status: ProjectStatus) -> LoadState {
         ProjectStatus::SettingsOnly => LoadState::Ready {
             detail: "trusted (settings only)".into(),
         },
-        ProjectStatus::Untrusted => LoadState::NeedsAttention {
-            detail: "project config found but not trusted; skipped (trust prompt lands in M3)"
-                .into(),
-        },
+        ProjectStatus::Untrusted => trust("project config found"),
+        ProjectStatus::Changed => trust("project config changed since you trusted it"),
         ProjectStatus::Ignored => LoadState::Disabled {
-            reason: "ignored (trust.toml)".into(),
+            reason: "ignored (/trust to change)".into(),
         },
         ProjectStatus::DisabledByPolicy => LoadState::Disabled {
             reason: "disabled by policy".into(),

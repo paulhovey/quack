@@ -140,7 +140,12 @@ A checkpoint is created at each **user turn** boundary (grouping all edits in th
 - **Manifest:** `manifest.jsonl` records the pre-image, a hash of the file after the call (FNV-1a, used only to spot later changes), and undos. Each pre-image is stored per call, not content-addressed. Sessions are small, and no SHA-256 crate is needed.
 - **`/undo [--force]`** reverts the files of the last successful edit call: new files are deleted and changed ones get their bytes back, CRLF included. A file changed since the call is left alone and reported; `--force` overwrites it.
 - **The model is told** at the start of the next user message ("The user undid your last change to …"), so it doesn't build on the reverted edit.
-- **Not tracked:** shell commands (the shadow-repo snapshots come later). `/rewind` and per-turn checkpoints are not done yet.
+- **Not tracked:** shell commands (the shadow-repo snapshots come later).
+- **`/rewind`** (or Esc Esc while idle) lists the user messages still in the history, most recent first, with the files changed since each one. The files of a rewind point are those changed by the tool calls in the history after that message, so no separate turn bookkeeping is needed. In the picker, Enter rewinds the conversation and the files, and Ctrl-S rewinds the conversation only. `/rewind <n> files` rewinds the files only, and adds `--force` to overwrite files changed since.
+  - **Conflicts:** if any of the files changed again since, nothing is rewound and the conflicts are listed. This differs from `/undo`, which restores what it can, because a half-done rewind would leave the files and the conversation out of step.
+  - **Conversation:** the history is cut back to before the message, and a `rewind` record (`{"to": <history length>}`) is appended to the session log; nothing is deleted. Resume replays the cut, the transcript included. The message goes back into the input for editing.
+  - **Files only:** the model is told at the start of the next message, as with `/undo`.
+  - **Tested:** `core/tests/rewind.rs` restores a CRLF file byte for byte and deletes a file created since. Messages already folded into a compaction summary can't be rewound to.
 
 ### Commands
 

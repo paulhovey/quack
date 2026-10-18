@@ -12,7 +12,7 @@ use cutoffharness_protocol::{
 };
 use cutoffharness_providers::Message;
 use cutoffharness_tools::Permissions;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -38,6 +38,7 @@ pub struct EngineHandle {
     pub ops: mpsc::Sender<Op>,
     pub events: broadcast::Receiver<Event>,
     tx: broadcast::Sender<Event>,
+    config: watch::Receiver<Arc<Loaded>>,
     task: JoinHandle<()>,
 }
 
@@ -45,6 +46,11 @@ impl EngineHandle {
     /// Another receiver for the same event stream (e.g. a logger next to the UI).
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.tx.subscribe()
+    }
+
+    /// The config in use; it changes after `Event::ConfigReloaded`.
+    pub fn config(&self) -> Arc<Loaded> {
+        self.config.borrow().clone()
     }
 
     pub async fn submit(&self, op: Op) -> bool {
@@ -66,6 +72,8 @@ enum Queued {
     Switch(Option<SessionId>),
     /// `/compact`, with an optional focus.
     Compact(Option<String>),
+    /// `/reload`, or a trust decision.
+    Reload,
 }
 
 /// The conversation once a model is ready.
@@ -98,6 +106,9 @@ fn nested(config: &Loaded, setup: &Setup, history: &[Message]) -> Arc<Nested> {
 #[derive(Debug)]
 pub struct Engine {
     config: Arc<Loaded>,
+    config_tx: watch::Sender<Arc<Loaded>>,
+    /// A reload is reading files or rebuilding the session; turns wait for it.
+    reloading: bool,
     tx: broadcast::Sender<Event>,
     session: SessionInfo,
     started: bool,
@@ -132,6 +143,7 @@ impl Engine {
     pub fn spawn_with(config: Arc<Loaded>, resume: Resume) -> EngineHandle {
         let (tx, events) = broadcast::channel(EVENT_CAPACITY);
         let (ops, ops_rx) = mpsc::channel(OP_CAPACITY);
+        let (config_tx, config_rx) = watch::channel(config.clone());
         let session = SessionInfo {
             id: new_session_id(),
             cwd: config.dirs.workspace_root.display().to_string(),
@@ -140,6 +152,8 @@ impl Engine {
         };
         let engine = Self {
             config,
+            config_tx,
+            reloading: false,
             tx: tx.clone(),
             session,
             started: false,
@@ -167,6 +181,7 @@ impl Engine {
             ops,
             events,
             tx,
+            config: config_rx,
             task,
         }
     }
@@ -185,10 +200,12 @@ impl Engine {
             self.config.clone(),
             self.tx.clone(),
             self.mcp.clone(),
+            None,
         ));
         let (done_tx, mut done_rx) = mpsc::channel::<(TurnId, Vec<Message>)>(8);
         let (switch_tx, mut switch_rx) = mpsc::channel::<Result<Setup, String>>(2);
         self.switch_tx = Some(switch_tx);
+        let (reload_tx, mut reload_rx) = mpsc::channel::<Reload>(2);
 
         loop {
             tokio::select! {
@@ -196,9 +213,20 @@ impl Engine {
                     self.started = true;
                     self.on_started(outcome.unwrap_or_default());
                     self.emit(Event::StartupComplete);
-                    self.next_queued(&done_tx);
+                    self.next_queued(&done_tx, &reload_tx);
                 }
                 Some(result) = switch_rx.recv() => self.on_switched(result),
+                Some(step) = reload_rx.recv() => {
+                    match step {
+                        Reload::Read(result) => self.on_reread(result, &reload_tx).await,
+                        Reload::Ready(outcome) => {
+                            self.on_reloaded(*outcome);
+                            self.reloading = false;
+                            self.emit(Event::StartupComplete);
+                        }
+                    }
+                    self.next_queued(&done_tx, &reload_tx);
+                }
                 Some((turn, history)) = done_rx.recv() => {
                     if let Some(c) = &mut self.convo {
                         c.history = Some(history);
@@ -207,11 +235,11 @@ impl Engine {
                     if self.running.as_ref().is_some_and(|(t, _)| *t == turn) {
                         self.running = None;
                     }
-                    self.next_queued(&done_tx);
+                    self.next_queued(&done_tx, &reload_tx);
                 }
                 op = ops.recv() => {
                     let Some(op) = op else { break };
-                    if !self.handle(op, &done_tx) {
+                    if !self.handle(op, &done_tx, &reload_tx) {
                         break;
                     }
                 }
@@ -478,6 +506,140 @@ impl Engine {
         }
     }
 
+    /// The user messages still in the history, most recent first, with the tool calls
+    /// made after each.
+    fn rewind_points(&self) -> Vec<Point> {
+        let Some(history) = self.convo.as_ref().and_then(|c| c.history.as_deref()) else {
+            return Vec::new();
+        };
+        let changes = self
+            .checkpoints()
+            .map(|cp| cp.changes())
+            .unwrap_or_default();
+        let root = &self.config.dirs.workspace_root;
+        let mut points = Vec::new();
+        let mut calls: Vec<String> = Vec::new();
+        for (index, m) in history.iter().enumerate().rev() {
+            match m {
+                Message::Assistant { tool_calls, .. } => {
+                    calls.extend(tool_calls.iter().map(|c| c.id.clone()));
+                }
+                Message::User { content }
+                    if !content.starts_with(cutoffharness_context::compact::SUMMARY_MARKER) =>
+                {
+                    let mut files: Vec<String> = Vec::new();
+                    for c in changes.iter().filter(|c| calls.contains(&c.call_id)) {
+                        let shown = c
+                            .path
+                            .strip_prefix(root)
+                            .unwrap_or(&c.path)
+                            .display()
+                            .to_string()
+                            .replace('\\', "/");
+                        if !files.contains(&shown) {
+                            files.push(shown);
+                        }
+                    }
+                    points.push(Point {
+                        point: cutoffharness_protocol::RewindPoint {
+                            back: u32::try_from(points.len() + 1).unwrap_or(u32::MAX),
+                            text: content.clone(),
+                            files,
+                        },
+                        index,
+                        calls: calls.clone(),
+                    });
+                }
+                _ => {}
+            }
+        }
+        points
+    }
+
+    /// `/rewind`: put files back and/or cut the conversation back to before a user message.
+    /// When files changed again since, nothing happens without `force`.
+    fn rewind(&mut self, back: u32, conversation: bool, files: bool, force: bool) {
+        if self.running.is_some() {
+            return self.warn("wait for the current turn to finish before /rewind".into());
+        }
+        let Some(point) = self
+            .rewind_points()
+            .into_iter()
+            .find(|p| p.point.back == back)
+        else {
+            return self.warn(format!("no user message {back} back to rewind to"));
+        };
+        let root = self.config.dirs.workspace_root.clone();
+        let show = |p: &PathBuf| {
+            p.strip_prefix(&root)
+                .unwrap_or(p)
+                .display()
+                .to_string()
+                .replace('\\', "/")
+        };
+        let mut restored = Vec::new();
+        if files && let Some(cp) = self.checkpoints() {
+            let changes: Vec<_> = cp
+                .changes()
+                .into_iter()
+                .filter(|c| point.calls.contains(&c.call_id))
+                .collect();
+            let conflicts = cp.conflicts(&changes);
+            if !force && !conflicts.is_empty() {
+                self.emit(Event::FilesRestored {
+                    restored: Vec::new(),
+                    conflicts: conflicts.iter().map(show).collect(),
+                });
+                return self.warn(format!(
+                    "nothing rewound: files changed since; /rewind {back} --force overwrites them"
+                ));
+            }
+            match cp.restore(&changes, force) {
+                Ok(r) => {
+                    restored = r.restored.iter().map(show).collect();
+                    self.emit(Event::FilesRestored {
+                        restored: restored.clone(),
+                        conflicts: r.conflicts.iter().map(show).collect(),
+                    });
+                }
+                Err(e) => return self.warn(format!("rewind failed: {e}")),
+            }
+        }
+        if !conversation {
+            if !restored.is_empty() {
+                self.notes.push(format!(
+                    "[The user put {} back to how they were before their message “{}”.]",
+                    restored.join(", "),
+                    point.point.text.lines().next().unwrap_or_default()
+                ));
+            }
+            return;
+        }
+        let Some(c) = &mut self.convo else { return };
+        let Some(history) = &mut c.history else {
+            return;
+        };
+        let dropped = history[point.index..]
+            .iter()
+            .filter(|m| matches!(m, Message::User { .. }))
+            .count();
+        history.truncate(point.index);
+        c.nested = nested(&self.config, &c.setup, history);
+        self.turns = self
+            .turns
+            .saturating_sub(u32::try_from(dropped).unwrap_or(u32::MAX));
+        session::record(
+            self.log.as_ref(),
+            "rewind",
+            serde_json::json!({ "to": point.index }),
+        );
+        self.sync_log();
+        self.emit(Event::Rewound {
+            back,
+            text: point.point.text,
+        });
+    }
+
     fn list_memory(&self) {
         let store = crate::env::memory_store(&self.config);
         let mut notes = Vec::new();
@@ -650,10 +812,20 @@ impl Engine {
     }
 
     /// Returns false when the engine should stop.
-    fn handle(&mut self, op: Op, done: &mpsc::Sender<(TurnId, Vec<Message>)>) -> bool {
+    fn handle(
+        &mut self,
+        op: Op,
+        done: &mpsc::Sender<(TurnId, Vec<Message>)>,
+        reload: &mpsc::Sender<Reload>,
+    ) -> bool {
         match op {
             Op::UserTurn { items, .. } => {
-                if !self.started {
+                if self.reloading {
+                    self.emit(Event::TurnQueued {
+                        waiting_for: "the config reload".into(),
+                    });
+                    self.queued.push_back(Queued::Turn(items));
+                } else if !self.started {
                     self.emit(Event::TurnQueued {
                         waiting_for: "startup".into(),
                     });
@@ -712,8 +884,8 @@ impl Engine {
             }
             // A client may send these the moment it sees `TurnComplete`, before the turn
             // task has handed the history back, so they wait in the queue like turns do.
-            Op::ResumeSession { id } => self.queue_switch(Some(id), done),
-            Op::NewSession => self.queue_switch(None, done),
+            Op::ResumeSession { id } => self.queue_switch(Some(id), done, reload),
+            Op::NewSession => self.queue_switch(None, done, reload),
             Op::Compact { focus } => {
                 if !self.started || self.running.is_some() {
                     self.emit(Event::TurnQueued {
@@ -725,10 +897,20 @@ impl Engine {
                     });
                 }
                 self.queued.push_back(Queued::Compact(focus));
-                self.next_queued(done);
+                self.next_queued(done, reload);
             }
             Op::ListSessions => self.list_sessions(),
             Op::ListMemory => self.list_memory(),
+            Op::ListRewindPoints => {
+                let points = self.rewind_points().into_iter().map(|p| p.point).collect();
+                self.emit(Event::RewindPoints { points });
+            }
+            Op::Rewind {
+                back,
+                conversation,
+                files,
+                force,
+            } => self.rewind(back, conversation, files, force),
             Op::Undo { force, .. } => self.undo(force),
             Op::RunDoctor => {
                 let config = self.config.clone();
@@ -799,6 +981,31 @@ impl Engine {
                 self.sync_log();
             }
             Op::SaveSetting { key, value, scope } => self.save_setting(&key, &value, &scope),
+            Op::ReloadConfig => {
+                self.queued.push_back(Queued::Reload);
+                self.next_queued(done, reload);
+            }
+            Op::TrustProject { decision } => {
+                let saved = cutoffharness_config::TrustDecision::parse(&decision)
+                    .ok_or_else(|| {
+                        format!(
+                            "unknown decision `{decision}`; use trusted, settings-only or ignored"
+                        )
+                    })
+                    .and_then(|d| self.config.trust_project(d));
+                match saved {
+                    Ok(_) => {
+                        self.queued.push_back(Queued::Reload);
+                        self.next_queued(done, reload);
+                    }
+                    Err(message) => self.emit(Event::Error {
+                        error: EngineError {
+                            kind: EngineErrorKind::Config,
+                            message: format!("cannot save the trust decision: {message}"),
+                        },
+                    }),
+                }
+            }
             Op::Shutdown => return false,
             other => self.emit(Event::Warning {
                 message: format!("{} is not implemented yet", op_name(&other)),
@@ -811,20 +1018,125 @@ impl Engine {
         &mut self,
         target: Option<SessionId>,
         done: &mpsc::Sender<(TurnId, Vec<Message>)>,
+        reload: &mpsc::Sender<Reload>,
     ) {
         self.queued.push_back(Queued::Switch(target));
-        self.next_queued(done);
+        self.next_queued(done, reload);
     }
 
-    fn next_queued(&mut self, done: &mpsc::Sender<(TurnId, Vec<Message>)>) {
-        while self.started && self.running.is_none() {
+    fn next_queued(
+        &mut self,
+        done: &mpsc::Sender<(TurnId, Vec<Message>)>,
+        reload: &mpsc::Sender<Reload>,
+    ) {
+        while self.started && self.running.is_none() && !self.reloading {
             match self.queued.pop_front() {
                 Some(Queued::Turn(items)) => self.start_turn(items, done.clone()),
                 Some(Queued::Switch(target)) => self.switch_session(target),
                 Some(Queued::Compact(focus)) => self.start_compact(focus, done.clone()),
+                Some(Queued::Reload) => self.begin_reload(reload.clone()),
                 None => break,
             }
         }
+    }
+
+    /// Read the config files again off the async threads.
+    fn begin_reload(&mut self, reload: mpsc::Sender<Reload>) {
+        self.reloading = true;
+        let config = self.config.clone();
+        tokio::spawn(async move {
+            let result = tokio::task::spawn_blocking(move || config.reload())
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|r| r.map_err(|e| e.to_string()));
+            let _ = reload.send(Reload::Read(result.map(Box::new))).await;
+        });
+    }
+
+    /// The new config is read: restart MCP servers on it and run startup again, keeping
+    /// the model in use.
+    async fn on_reread(
+        &mut self,
+        result: Result<Box<Loaded>, String>,
+        reload: &mpsc::Sender<Reload>,
+    ) {
+        let config = match result {
+            Ok(c) => Arc::new(*c),
+            Err(message) => {
+                self.reloading = false;
+                return self.emit(Event::Error {
+                    error: EngineError {
+                        kind: EngineErrorKind::Config,
+                        message: format!("cannot reload the config: {message}"),
+                    },
+                });
+            }
+        };
+        self.config = config.clone();
+        self.config_tx.send_replace(config.clone());
+        let _ = tokio::time::timeout(Duration::from_secs(3), self.mcp.manager.shutdown()).await;
+        self.start_mcp().await;
+        self.emit(Event::ConfigReloaded);
+        let keep = self
+            .convo
+            .as_ref()
+            .map(|c| (c.setup.provider.id.clone(), c.setup.model.id.clone()));
+        let tx = self.tx.clone();
+        let mcp = self.mcp.clone();
+        let reload = reload.clone();
+        tokio::spawn(async move {
+            let outcome = startup::run(config, tx, mcp, keep).await;
+            let _ = reload.send(Reload::Ready(Box::new(outcome))).await;
+        });
+    }
+
+    /// Startup after a reload finished: the session continues on the new setup, with its
+    /// history and permission mode. Approvals given for the session are dropped, since the
+    /// rules they were given under may have changed.
+    fn on_reloaded(&mut self, outcome: StartupOutcome) {
+        let Some(setup) = outcome.setup else {
+            self.problem = outcome.problem;
+            if self.convo.is_some() {
+                self.warn(
+                    "the reloaded config has no usable model; keeping the previous one".into(),
+                );
+            }
+            return;
+        };
+        self.problem = None;
+        self.session.model = Some(setup.model_ref.clone());
+        self.session.profile = setup.profile.id.clone();
+        let mut perms = setup.permissions.clone();
+        let history = match self.convo.take() {
+            Some(c) => {
+                if let Ok(old) = c.perms.lock() {
+                    perms.mode = self
+                        .config
+                        .settings
+                        .policy
+                        .max_permission_mode
+                        .map_or(old.mode, |cap| old.mode.min(cap));
+                    perms.plan = old.plan;
+                }
+                c.history.unwrap_or_default()
+            }
+            None => Vec::new(),
+        };
+        self.convo = Some(Conversation {
+            perms: Arc::new(Mutex::new(perms)),
+            nested: nested(&self.config, &setup, &history),
+            setup: Arc::new(setup),
+            history: Some(history),
+        });
+        session::record(
+            self.log.as_ref(),
+            "reload",
+            serde_json::json!({ "model": self.session.model }),
+        );
+        self.emit(Event::SessionConfigured {
+            session: self.session.clone(),
+        });
+        self.emit_mode();
     }
 
     /// Run `/compact` like a turn: it owns the history until it is done and Esc stops it.
@@ -951,6 +1263,23 @@ impl Engine {
     }
 }
 
+/// A rewind point and where it is in the history.
+#[derive(Debug)]
+struct Point {
+    point: cutoffharness_protocol::RewindPoint,
+    /// Index of the user message in the history.
+    index: usize,
+    /// Tool calls made after it.
+    calls: Vec<String>,
+}
+
+/// Steps of a reload, reported back to the engine loop.
+#[derive(Debug)]
+enum Reload {
+    Read(Result<Box<Loaded>, String>),
+    Ready(Box<StartupOutcome>),
+}
+
 /// `/<skill> [args]` becomes the skill's instructions followed by the request. Anything
 /// else (including unknown `/words`) is sent as typed.
 fn expand_skill(setup: &Setup, prompt: String) -> (String, Option<String>) {
@@ -1003,7 +1332,10 @@ fn op_name(op: &Op) -> &'static str {
         Op::SetTitle { .. } => "set_title",
         Op::SaveSetting { .. } => "save_setting",
         Op::ForkSession { .. } => "fork_session",
+        Op::ListRewindPoints => "list_rewind_points",
+        Op::Rewind { .. } => "rewind",
         Op::ReloadConfig => "reload_config",
+        Op::TrustProject { .. } => "trust_project",
         Op::Shutdown => "shutdown",
     }
 }

@@ -84,6 +84,7 @@ fn main() -> ExitCode {
             setup::run(Arc::new(loaded), &mut io).await
         }),
         Cmd::Sessions => code(commands::sessions(&loaded)),
+        Cmd::Trust { decision } => code(commands::trust(&loaded, decision.map(Into::into))),
         Cmd::Keyring { cmd } => code(match cmd {
             KeyringCmd::Set { name } => commands::keyring_set(&name),
             KeyringCmd::Delete { name } => commands::keyring_delete(&name),

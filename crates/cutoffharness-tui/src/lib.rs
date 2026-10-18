@@ -90,7 +90,12 @@ async fn event_loop(
                 None => break,
             },
             ev = engine.events.recv() => match ev {
-                Ok(ev) => app.on_engine(ev),
+                Ok(ev) => {
+                    if matches!(ev, cutoffharness_protocol::Event::ConfigReloaded) {
+                        app.reconfigure(AppInfo::from_config(&engine.config()));
+                    }
+                    app.on_engine(ev);
+                }
                 Err(RecvError::Lagged(n)) => tracing::warn!(skipped = n, "ui lagged behind engine events"),
                 Err(RecvError::Closed) => break,
             },

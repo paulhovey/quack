@@ -124,7 +124,14 @@ fn local(config: &Loaded) -> Vec<DoctorCheck> {
         ProjectStatus::None => (CheckStatus::Ok, "no .cutoffharness/"),
         ProjectStatus::Trusted => (CheckStatus::Ok, "trusted"),
         ProjectStatus::SettingsOnly => (CheckStatus::Ok, "trusted (settings only)"),
-        ProjectStatus::Untrusted => (CheckStatus::Warn, "config found but not trusted; skipped"),
+        ProjectStatus::Untrusted => (
+            CheckStatus::Warn,
+            "config found but not trusted; skipped (/trust or `cutoffharness trust`)",
+        ),
+        ProjectStatus::Changed => (
+            CheckStatus::Warn,
+            "changed since it was trusted; skipped until reviewed (/trust or `cutoffharness trust`)",
+        ),
         ProjectStatus::Ignored => (CheckStatus::Info, "ignored (trust.toml)"),
         ProjectStatus::DisabledByPolicy => (CheckStatus::Info, "disabled by policy"),
     };

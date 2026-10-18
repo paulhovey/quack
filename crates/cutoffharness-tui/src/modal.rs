@@ -885,6 +885,160 @@ pub(crate) fn permissions(current: &str, rules: &[(String, String)], theme: &The
     )
 }
 
+/// The `/rewind` picker. `points` is `None` while the engine lists them.
+pub(crate) fn rewind(
+    points: Option<&[cutoffharness_protocol::RewindPoint]>,
+    theme: &Theme,
+) -> Modal {
+    let items = match points {
+        None => vec![placeholder("listing messages…", "", theme)],
+        Some([]) => vec![placeholder(
+            "no messages yet",
+            "Once you have sent a message, /rewind can go back to before it.",
+            theme,
+        )],
+        Some(points) => points
+            .iter()
+            .map(|p| {
+                let first = p.text.lines().find(|l| !l.trim().is_empty()).unwrap_or_default();
+                let mut detail = vec![Line::styled(format!("{} back", p.back), theme.accent), Line::raw("")];
+                detail.extend(p.text.lines().take(12).map(|l| Line::raw(l.to_owned())));
+                detail.push(Line::raw(""));
+                if p.files.is_empty() {
+                    detail.push(Line::styled("No files changed by write or edit since then.", theme.dim));
+                } else {
+                    detail.push(Line::styled("Files put back:", theme.dim));
+                    detail.extend(p.files.iter().map(|f| Line::raw(format!("  {f}"))));
+                }
+                detail.push(Line::raw(""));
+                detail.push(Line::styled(
+                    format!(
+                        "⏎ conversation and files · ^s conversation only · /rewind {} files for files only. \
+                         Changes made by shell commands are not tracked.",
+                        p.back
+                    ),
+                    theme.dim,
+                ));
+                ModalItem {
+                    label: first.chars().take(100).collect(),
+                    hint: match p.files.len() {
+                        0 => String::new(),
+                        1 => "1 file".into(),
+                        n => format!("{n} files"),
+                    },
+                    detail,
+                    action: Some(format!("/rewind {} both", p.back)),
+                    run: true,
+                    alt: Some(format!("/rewind {} conversation", p.back)),
+                }
+            })
+            .collect(),
+    };
+    Modal::new(
+        "Rewind",
+        vec![ModalTab {
+            title: "Messages".into(),
+            items,
+        }],
+    )
+    .with_alt("conversation only")
+}
+
+/// The `/trust` modal: what the workspace's `.cutoffharness/` holds and the three choices.
+pub(crate) fn trust(pending: Option<&TrustPrompt>, theme: &Theme) -> Modal {
+    const CHOICES: &[(&str, &str, &str)] = &[
+        (
+            "trusted",
+            "Trust",
+            "Load everything: settings, providers, MCP servers, hooks and language servers. \
+             MCP servers and hooks start programs from this repo's files.",
+        ),
+        (
+            "settings-only",
+            "Trust settings only",
+            "Load config.toml, but nothing that starts a program or adds a provider.",
+        ),
+        (
+            "ignored",
+            "Ignore",
+            "Never load this repo's .cutoffharness/, and don't ask again.",
+        ),
+    ];
+    let mut about = match pending {
+        Some(p) => vec![
+            Line::styled(
+                if p.changed {
+                    "Changed since you trusted it"
+                } else {
+                    "Project config found"
+                },
+                theme.warn,
+            ),
+            Line::raw(""),
+            field(theme, "folder", p.path.clone()),
+            field(theme, "holds", p.summary.clone()),
+        ],
+        None => vec![
+            Line::styled("This workspace's .cutoffharness/", theme.accent),
+            Line::raw(""),
+            Line::raw("No decision is waiting. Choosing again replaces the stored one."),
+        ],
+    };
+    about.push(Line::raw(""));
+    about.push(Line::styled(
+        "Decisions are kept in trust.toml in the user data folder. If the files change, \
+         you are asked again.",
+        theme.dim,
+    ));
+    let mut items: Vec<ModalItem> = CHOICES
+        .iter()
+        .map(|(id, label, what)| {
+            let mut detail = vec![
+                Line::styled(*label, theme.accent),
+                Line::raw(""),
+                Line::raw(*what),
+                Line::raw(""),
+            ];
+            detail.extend(about.iter().cloned());
+            ModalItem {
+                label: (*label).to_owned(),
+                hint: String::new(),
+                detail,
+                action: Some(format!("/trust {id}")),
+                run: true,
+                alt: None,
+            }
+        })
+        .collect();
+    items.push(ModalItem {
+        label: "Decide later".into(),
+        hint: String::new(),
+        detail: vec![
+            Line::styled("Decide later", theme.accent),
+            Line::raw(""),
+            Line::raw("Keep skipping it for now. /trust brings this back."),
+        ],
+        action: Some("/trust later".into()),
+        run: true,
+        alt: None,
+    });
+    Modal::new(
+        "Trust",
+        vec![ModalTab {
+            title: "Project".into(),
+            items,
+        }],
+    )
+}
+
+/// A `.cutoffharness/` waiting for a decision (`Event::ProjectTrust`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TrustPrompt {
+    pub path: String,
+    pub summary: String,
+    pub changed: bool,
+}
+
 /// The `/doctor` modal. `checks` is `None` while they run.
 pub(crate) fn doctor(
     checks: Option<&[cutoffharness_protocol::DoctorCheck]>,

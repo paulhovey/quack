@@ -174,6 +174,23 @@ impl Checkpoints {
         changes.into_iter().filter(|c| c.call_id == last).collect()
     }
 
+    /// Files of `changes` that changed again since their last change, which `restore`
+    /// would leave alone without `force`.
+    pub fn conflicts(&self, changes: &[Change]) -> Vec<PathBuf> {
+        let mut seen: Vec<&Path> = Vec::new();
+        let mut out = Vec::new();
+        for c in changes.iter().rev() {
+            if seen.contains(&c.path.as_path()) {
+                continue;
+            }
+            seen.push(&c.path);
+            if hash_file(&c.path) != c.after {
+                out.push(c.path.clone());
+            }
+        }
+        out
+    }
+
     /// Put the files of `changes` back as they were before; newest change first, so a
     /// call that touched a file twice ends at the oldest state. With `force`, files changed
     /// since are overwritten too.

@@ -134,6 +134,15 @@ Loading a project's `.cutoffharness/` can run code: MCP `command`s, LSP `command
 - AGENTS.md, skills and commands are text and load without trust. Skills that bundle scripts still go through the normal shell permissions when executed.
 - Policy `project_config = "never"` disables the project layer entirely, for locked-down enterprises.
 
+### As implemented (2026-10-18)
+
+- When the project needs a decision, the engine sends `Event::ProjectTrust` with what the folder holds (for example "settings, 2 MCP servers, 1 hook"). The TUI opens the **Trust** modal with *Trust*, *Trust settings only*, *Ignore* and *Decide later*. `/trust` reopens it, and `/trust trusted|settings-only|ignored` decides directly. Outside the TUI, `cutoffharness trust` shows the state and `cutoffharness trust <decision>` records it.
+- A decision reloads the session (`Op::TrustProject`, then the same path as `/reload`). Files that a trusted project adds take effect at once, and the conversation and model are kept.
+- The fingerprint is SHA-256 over the relative path and contents of every file in `.cutoffharness/`, except `skills/`, `commands/` and `memory/`, which are text. Symlinks are hashed by their target and never followed. If the fingerprint differs from the stored one, the project shows as *changed since you trusted it* and is skipped until the user decides again. An *Ignore* decision stays in force when files change. A record with no `hash`, such as one written by an administrator, trusts any content.
+- A `.cutoffharness/` that holds only text folders needs no decision.
+- `trust.toml` is edited with `toml_edit`, so comments survive, and the file is replaced atomically. There is one record per canonical path.
+- The hash is hand-written (about 100 lines, checked against the FIPS 180-4 vectors) rather than a new crate, per the dependency policy. The TLS stack's hash isn't used because builds without TLS must still verify trust.
+
 ## Secrets
 
 Secrets never have to be written into TOML. Supported value forms for any secret field:
@@ -160,6 +169,8 @@ api_key = "sk-..."                                        # allowed, but warns i
 `/config` lists every setting with its effective value, its origin (default, a layer file, env or CLI) and its schema description. Enter flips a boolean, or puts `/config set <key> <value>` in the input to edit. `/models` saves a default model with Ctrl-S. Both write to the user layer's `config.toml` through `toml_edit`, so comments and layout survive. The edit is validated against the schema before anything is written, and the file is replaced atomically. Keys locked by policy are refused. If a higher layer, an environment variable or a CLI flag still overrides the key, the confirmation says so. `ui.*` changes apply at once; the rest apply on the next start.
 
 ## Hot reload
+
+As implemented (2026-10-18): `/reload` (`Op::ReloadConfig`) re-reads every layer with the same command-line options. It waits for a running turn and holds new turns until it finishes. It then stops and restarts the MCP servers, runs startup again (the startup panel shows its progress), and keeps the conversation and the model in use, falling back to the normal model choice if that model has gone. The permission mode carries over, capped by policy. Approvals given for the session are dropped, because the rules they were given under may have changed. The TUI rebuilds its `/config` view from the new settings, and `ui.*` changes apply at once. Still to do: watching the folders with `notify`, and restarting only the MCP servers whose files changed.
 
 `notify` watches all layer directories. On change, a debounced `Op::ReloadConfig`:
 - reloads settings and item files,

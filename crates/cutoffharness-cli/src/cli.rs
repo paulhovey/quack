@@ -80,6 +80,12 @@ pub(crate) enum Cmd {
     /// Add a provider (a server on this machine, a hosted service, or a URL) and pick the
     /// default model.
     Setup,
+    /// Show or decide whether this repo's `.cutoffharness/` loads. Without a decision,
+    /// prints what it holds and the current state.
+    Trust {
+        #[arg(value_enum)]
+        decision: Option<TrustArg>,
+    },
     /// Store or remove API keys in the OS credential store, for `api_key = { keyring = "…" }`.
     Keyring {
         #[command(subcommand)]
@@ -111,6 +117,26 @@ impl From<Format> for cutoffharness_exec::OutputFormat {
             Format::Text => Self::Text,
             Format::Json => Self::Json,
             Format::StreamJson => Self::StreamJson,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum TrustArg {
+    /// Load everything, including MCP servers and hooks that start programs.
+    Trusted,
+    /// Load `config.toml` only.
+    SettingsOnly,
+    /// Never load it, and don't ask again.
+    Ignored,
+}
+
+impl From<TrustArg> for cutoffharness_config::TrustDecision {
+    fn from(t: TrustArg) -> Self {
+        match t {
+            TrustArg::Trusted => Self::Trusted,
+            TrustArg::SettingsOnly => Self::SettingsOnly,
+            TrustArg::Ignored => Self::Ignored,
         }
     }
 }

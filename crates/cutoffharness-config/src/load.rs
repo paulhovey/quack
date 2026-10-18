@@ -10,7 +10,7 @@ use crate::diagnostic::{FileDiagnostic, read_text};
 use crate::merge::{self, Origins};
 use crate::paths::{Dirs, Env, LayerKind};
 use crate::settings::{Policy, ProjectConfigPolicy, Settings};
-use crate::trust::{self, TrustDecision};
+use crate::trust::{self, ProjectSummary, TrustDecision};
 
 /// Inputs that come from the command line.
 #[derive(Debug, Clone, Default)]
@@ -75,6 +75,9 @@ pub enum ProjectStatus {
     SettingsOnly,
     /// Found but not yet trusted: skipped, and the user is asked.
     Untrusted,
+    /// Trusted before, but files that need trust changed since: skipped until the user
+    /// looks again.
+    Changed,
     Ignored,
     DisabledByPolicy,
 }
@@ -94,6 +97,11 @@ pub enum ConfigError {
 #[derive(Debug)]
 pub struct Loaded {
     pub dirs: Dirs,
+    /// The directories as discovered, before the system layer moved the defaults bundle;
+    /// a reload starts from these.
+    found: Dirs,
+    /// What the command line asked for; a reload applies it again.
+    pub opts: LoadOptions,
     pub settings: Settings,
     pub origins: Origins,
     pub layers: Vec<LayerReport>,
@@ -104,6 +112,38 @@ pub struct Loaded {
 }
 
 impl Loaded {
+    /// Load again from the same directories and command line, with the process
+    /// environment: picks up edited files and trust decisions.
+    pub fn reload(&self) -> Result<Loaded, ConfigError> {
+        self.reload_with(&|k| std::env::var_os(k))
+    }
+
+    pub fn reload_with(&self, env: Env<'_>) -> Result<Loaded, ConfigError> {
+        load_in(self.found.clone(), env, &self.opts)
+    }
+
+    /// What the project's `.cutoffharness/` holds, for the trust prompt.
+    pub fn project_summary(&self) -> ProjectSummary {
+        ProjectSummary::read(&self.dirs.project)
+    }
+
+    /// Record the user's trust decision for this workspace in `<user data>/trust.toml`.
+    /// It applies from the next load (see [`reload`](Self::reload)).
+    pub fn trust_project(&self, decision: TrustDecision) -> Result<PathBuf, String> {
+        if self.project == ProjectStatus::DisabledByPolicy {
+            return Err("project config is disabled by the system policy".into());
+        }
+        if !self.dirs.project.is_dir() {
+            return Err(format!("{} does not exist", self.dirs.project.display()));
+        }
+        trust::record(
+            &self.dirs.user_data,
+            &self.dirs.workspace_root,
+            &self.dirs.project,
+            decision,
+        )
+    }
+
     /// Layers whose item directories (`providers.d`, `mcp.d`, …) are active.
     pub fn item_layers(&self) -> Vec<(LayerKind, PathBuf)> {
         [
@@ -148,7 +188,11 @@ struct LayerFile {
 }
 
 pub fn load_with(env: Env<'_>, opts: &LoadOptions) -> Result<Loaded, ConfigError> {
-    let mut dirs = Dirs::discover_with(env, &opts.cwd);
+    load_in(Dirs::discover_with(env, &opts.cwd), env, opts)
+}
+
+fn load_in(found: Dirs, env: Env<'_>, opts: &LoadOptions) -> Result<Loaded, ConfigError> {
+    let mut dirs = found.clone();
     let mut warnings = Vec::new();
     let mut diagnostics = Vec::new();
 
@@ -203,6 +247,9 @@ pub fn load_with(env: Env<'_>, opts: &LoadOptions) -> Result<Loaded, ConfigError
             status: match other {
                 ProjectStatus::None => LayerStatus::Missing,
                 ProjectStatus::Untrusted => LayerStatus::Skipped("not trusted yet".into()),
+                ProjectStatus::Changed => {
+                    LayerStatus::Skipped("changed since it was trusted".into())
+                }
                 ProjectStatus::Ignored => LayerStatus::Skipped("ignored by user".into()),
                 _ => LayerStatus::Skipped("disabled by policy".into()),
             },
@@ -266,6 +313,8 @@ pub fn load_with(env: Env<'_>, opts: &LoadOptions) -> Result<Loaded, ConfigError
 
     Ok(Loaded {
         dirs,
+        found,
+        opts: opts.clone(),
         settings,
         origins,
         layers: reports,
@@ -360,10 +409,15 @@ fn project_status(dirs: &Dirs, policy: ProjectConfigPolicy) -> ProjectStatus {
         ProjectConfigPolicy::Never => ProjectStatus::DisabledByPolicy,
         ProjectConfigPolicy::Always => ProjectStatus::Trusted,
         ProjectConfigPolicy::TrustedOnly => {
-            match trust::lookup(&dirs.user_data, &dirs.workspace_root) {
-                Some(TrustDecision::Trusted) => ProjectStatus::Trusted,
-                Some(TrustDecision::SettingsOnly) => ProjectStatus::SettingsOnly,
-                Some(TrustDecision::Ignored) => ProjectStatus::Ignored,
+            match trust::lookup(&dirs.user_data, &dirs.workspace_root, &dirs.project) {
+                Some(f) if !f.current => ProjectStatus::Changed,
+                Some(f) => match f.decision {
+                    TrustDecision::Trusted => ProjectStatus::Trusted,
+                    TrustDecision::SettingsOnly => ProjectStatus::SettingsOnly,
+                    TrustDecision::Ignored => ProjectStatus::Ignored,
+                },
+                // Only text (skills, memory): nothing to decide.
+                None if ProjectSummary::read(&dirs.project).is_empty() => ProjectStatus::Trusted,
                 None => ProjectStatus::Untrusted,
             }
         }

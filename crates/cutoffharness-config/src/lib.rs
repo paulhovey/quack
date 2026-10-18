@@ -20,6 +20,7 @@ pub mod provider;
 pub mod schema;
 mod secret;
 pub mod settings;
+mod sha256;
 mod trust;
 
 pub use diagnostic::FileDiagnostic;
@@ -34,7 +35,7 @@ pub use paths::{Dirs, Env, LayerKind, find_workspace_root};
 pub use provider::ProviderFile;
 pub use secret::{Secret, SecretError, expand_home, keyring_delete, keyring_parts, keyring_set};
 pub use settings::Settings;
-pub use trust::TrustDecision;
+pub use trust::{ProjectSummary, TrustDecision};
 
 /// Product name, used for directory names. Kept in one place for the eventual rename.
 pub const APP_NAME: &str = "cutoffharness";

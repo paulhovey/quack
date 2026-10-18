@@ -168,6 +168,47 @@ pub(crate) fn sessions(loaded: &Loaded) -> i32 {
     exit::OK
 }
 
+pub(crate) fn trust(loaded: &Loaded, decision: Option<cutoffharness_config::TrustDecision>) -> i32 {
+    use cutoffharness_config::ProjectStatus;
+    let dir = &loaded.dirs.project;
+    let Some(decision) = decision else {
+        let state = match loaded.project {
+            ProjectStatus::None => {
+                println!("no {} in this workspace", dir.display());
+                return exit::OK;
+            }
+            ProjectStatus::Trusted => "trusted",
+            ProjectStatus::SettingsOnly => "trusted (settings only)",
+            ProjectStatus::Untrusted => "not trusted yet; skipped",
+            ProjectStatus::Changed => "changed since it was trusted; skipped",
+            ProjectStatus::Ignored => "ignored",
+            ProjectStatus::DisabledByPolicy => "disabled by the system policy",
+        };
+        println!("{}\n  state: {state}", dir.display());
+        let summary = loaded.project_summary();
+        if !summary.is_empty() {
+            println!("  holds: {}", summary.describe());
+        }
+        println!("\ndecide with: cutoffharness trust trusted | settings-only | ignored");
+        return exit::OK;
+    };
+    match loaded.trust_project(decision) {
+        Ok(file) => {
+            println!(
+                "{}: {} (saved in {})",
+                dir.display(),
+                decision.as_str(),
+                file.display()
+            );
+            exit::OK
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            exit::CONFIG_ERROR
+        }
+    }
+}
+
 pub(crate) fn keyring_set(name: &str) -> i32 {
     let (service, user) = cutoffharness_config::keyring_parts(name);
     let secret = match read_secret(&format!("secret for {service}/{user} (input hidden): ")) {

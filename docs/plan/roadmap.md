@@ -149,13 +149,13 @@ Left out on purpose: a hosted marketplace, telemetry-backed features and cloud e
 - Bundles (`bundles/`, `/bundles`)
 - Sub-agents (`task` tool) with `/tasks` views (moved from M5)
 
-Landed early (2026-10-18): `/undo` from edit pre-images ([07](07-sessions-memory-checkpoints.md#as-implemented-2026-10-18-ahead-of-m3)); `/rewind` is still to do. Skills discovery, the `skill` tool, `{{ skills }}`, `/<skill>` and `/skills` ([08](08-instructions-skills-commands.md#as-implemented-2026-10-18-ahead-of-m3)). Still to do for skills: other harnesses' folders through the detection prompt.
+Landed early (2026-10-18): the project trust flow (Trust modal, `/trust`, `cutoffharness trust`, fingerprinted decisions; [01](01-configuration.md#as-implemented-2026-10-18)), and `/reload` keeping the conversation (folder watching is still to do; [01](01-configuration.md#hot-reload)). `/undo` and `/rewind` from edit pre-images ([07](07-sessions-memory-checkpoints.md#as-implemented-2026-10-18-ahead-of-m3)). Skills discovery, the `skill` tool, `{{ skills }}`, `/<skill>` and `/skills` ([08](08-instructions-skills-commands.md#as-implemented-2026-10-18-ahead-of-m3)). Still to do for skills: other harnesses' folders through the detection prompt.
 
 **Exit criteria**
 - [ ] GitHub MCP server works on Windows via `npx` (`.cmd` resolution) and on Linux/macOS
-- [ ] A malicious `.cutoffharness/mcp.d` in an untrusted repo doesn't execute
+- [x] A malicious `.cutoffharness/mcp.d` in an untrusted repo doesn't execute (`core/tests/trust.rs`: nothing starts until trusted, it starts after the trust reload, and editing it asks again)
 - [x] `git status && rm -rf x` is split and needs approval for `rm` in `ask` mode (hand-written splitter for now; deny rules now see every command, even in `full-auto`; [11](11-security.md#as-implemented-2026-10-18-ahead-of-m3))
-- [ ] Rewind restores files byte-exactly, CRLF files included
+- [x] Rewind restores files byte-exactly, CRLF files included (`core/tests/rewind.rs`; [07](07-sessions-memory-checkpoints.md#as-implemented-2026-10-18-ahead-of-m3))
 
 ## M4 — IDE-grade feedback: "it knows when it broke the build"
 

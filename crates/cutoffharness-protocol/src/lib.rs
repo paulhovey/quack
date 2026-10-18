@@ -97,7 +97,27 @@ pub enum Op {
     ForkSession {
         at: EventIndex,
     },
+    /// Ask for the messages the conversation can go back to; answered with
+    /// `Event::RewindPoints`.
+    ListRewindPoints,
+    /// Go back to before the user message `back` messages from the end (1 = the last one).
+    /// `conversation` drops it and everything after; `files` puts back the files changed
+    /// since by write and edit calls (`force`: also files changed again since).
+    Rewind {
+        back: u32,
+        conversation: bool,
+        files: bool,
+        #[serde(default)]
+        force: bool,
+    },
+    /// Read the config files again and rebuild the session around them, keeping the
+    /// conversation and the model in use. Waits for a running turn.
     ReloadConfig,
+    /// Record a decision about this workspace's `.cutoffharness/` (`trusted`,
+    /// `settings-only` or `ignored`), then reload.
+    TrustProject {
+        decision: String,
+    },
     Shutdown,
 }
 
@@ -138,6 +158,15 @@ pub enum Event {
         note: Option<String>,
     },
     ShutdownComplete,
+    /// The config files were read again; startup progress follows, then `StartupComplete`.
+    ConfigReloaded,
+    /// The workspace has a `.cutoffharness/` that needs a trust decision (`Op::TrustProject`).
+    /// `summary` says what it holds; `changed` when it was trusted before and changed since.
+    ProjectTrust {
+        path: String,
+        summary: String,
+        changed: bool,
+    },
     // turn
     TurnStarted {
         turn: TurnId,
@@ -224,6 +253,16 @@ pub enum Event {
     /// Skills the model can load, and the user can run as `/<name> [args]`.
     Skills {
         skills: Vec<SkillInfo>,
+    },
+    /// User messages `/rewind` can go back to, most recent first.
+    RewindPoints {
+        points: Vec<RewindPoint>,
+    },
+    /// The conversation went back to before a user message (`text`, so a client can offer
+    /// it for editing). Files are reported by `FilesRestored`.
+    Rewound {
+        back: u32,
+        text: String,
     },
     /// Files put back by `/undo`; `conflicts` changed since and were left alone.
     FilesRestored {
@@ -392,6 +431,16 @@ pub struct SessionSummary {
     pub started: String,
     /// The session this client is in.
     pub current: bool,
+}
+
+/// A user message the conversation can go back to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RewindPoint {
+    /// 1 for the last user message, 2 for the one before, and so on.
+    pub back: u32,
+    pub text: String,
+    /// Files changed by write and edit calls since this message, workspace-relative.
+    pub files: Vec<String>,
 }
 
 /// A transcript entry of a resumed session.

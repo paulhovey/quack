@@ -78,9 +78,9 @@ pub(crate) const COMMANDS: &[Command] = &[
     c(
         "rewind",
         &[],
-        "",
-        "Go back to an earlier message: conversation, files or both",
-        Some("M3"),
+        "[n]",
+        "Go back to an earlier message: conversation, files or both (Esc Esc)",
+        None,
     ),
     c(
         "undo",
@@ -218,8 +218,15 @@ pub(crate) const COMMANDS: &[Command] = &[
         "reload",
         &[],
         "",
-        "Reload config, instructions and skills",
-        Some("M3"),
+        "Read config, providers, MCP and skills again",
+        None,
+    ),
+    c(
+        "trust",
+        &[],
+        "[trusted|settings-only|ignored]",
+        "Decide whether this repo's .cutoffharness/ loads",
+        None,
     ),
     c(
         "cd",
