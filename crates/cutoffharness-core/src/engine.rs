@@ -530,8 +530,8 @@ impl Engine {
             return self
                 .warn("wait for the current turn to finish before adding a provider".into());
         }
-        let comment = "Found on this machine by setup.";
-        let added = match crate::setup::add_provider(&self.config, id, base_url, api, comment) {
+        let comment = crate::setup::local_comment(id);
+        let added = match crate::setup::add_provider(&self.config, id, base_url, api, &comment) {
             Ok(a) => a,
             Err(message) => {
                 return self.emit(Event::Error {

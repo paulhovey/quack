@@ -118,7 +118,7 @@ impl ProviderError {
             401 | 403 => ErrorKind::Auth,
             429 => ErrorKind::RateLimited { retry_after },
             400 | 413 | 422 if is_context_overflow(&lower) => ErrorKind::ContextLengthExceeded,
-            500 | 502 | 503 | 504 | 529 => ErrorKind::ServerOverloaded,
+            500 | 502 | 503 | 504 | 520 | 529 => ErrorKind::ServerOverloaded,
             _ => ErrorKind::BadRequest,
         };
         Self {

@@ -36,6 +36,7 @@ pub struct Provider {
     client: reqwest::Client,
     base_url: String,
     headers: HeaderMap,
+    dialect: openai_chat::Dialect,
 }
 
 impl Provider {
@@ -95,6 +96,7 @@ impl Provider {
         Ok(Self {
             id: id.to_owned(),
             api,
+            dialect: openai_chat::Dialect::of(&base_url),
             base_url,
             file,
             client,
@@ -207,7 +209,7 @@ impl Provider {
         let (path, body, accept) = match self.api {
             Api::OpenAiChat => (
                 openai_chat::CHAT_PATH,
-                openai_chat::build_body(&req),
+                openai_chat::build_body(&req, self.dialect),
                 "text/event-stream",
             ),
             #[cfg(feature = "proto-ollama")]

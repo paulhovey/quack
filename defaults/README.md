@@ -14,7 +14,7 @@ CUTOFFHARNESS_DEFAULTS_DIR=defaults cargo run
 
 | Directory | Contents | Lands in |
 |---|---|---|
-| `providers.d/` | One provider per file | M1: novita, fireworks, together, openrouter, deepinfra; llama-cpp, ollama, vllm, lmstudio, sglang |
+| `providers.d/` | Empty: for a company's own providers. `cutoffharness setup` writes users' providers | — |
 | `profiles.d/` | Model profiles: `<id>/profile.toml` + prompt templates | M1 (`generic`), M2 (the rest) |
 | `mcp.d/` | Example MCP servers, all `enabled = false`: everything, filesystem, time, github | M3 (landed early) |
 | `lsp.d/` | Language server files; never auto-installed | M4 |

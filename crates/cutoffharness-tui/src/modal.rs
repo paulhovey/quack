@@ -937,9 +937,10 @@ pub(crate) fn providers(
         )],
         Some([]) => vec![placeholder(
             "no providers",
-            "Add a TOML file with a base_url to providers.d in your config folder \
-             (`cutoffharness config paths` shows where). Shipped examples are in the \
-             defaults bundle.",
+            "/setup finds model servers on this machine; `cutoffharness setup` in a \
+             terminal also adds hosted services and servers elsewhere. Or add a TOML file \
+             with a base_url to providers.d in your config folder (`cutoffharness config \
+             paths` shows where).",
             theme,
         )],
         Some(list) => list
@@ -1189,6 +1190,10 @@ pub(crate) fn setup(
                         ),
                         Line::raw(""),
                     ];
+                    if !s.note.is_empty() {
+                        detail.push(Line::raw(s.note.clone()));
+                        detail.push(Line::raw(""));
+                    }
                     detail.push(match &s.configured {
                         Some(id) => Line::styled(
                             format!("⏎ use it (already set up as provider `{id}`)"),

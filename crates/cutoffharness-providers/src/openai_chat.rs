@@ -1,7 +1,7 @@
 //! `api = "openai-chat"`: `/chat/completions` with SSE streaming.
 //! Covers vLLM, SGLang, llama.cpp, LM Studio, TGI, Ollama `/v1` and most hosted services.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use cutoffharness_config::provider::ReasoningFormat;
 use cutoffharness_protocol::Usage;
@@ -14,14 +14,81 @@ use crate::types::{ChatRequest, DiscoveredModel, FinishReason, Message, StreamEv
 pub(crate) const CHAT_PATH: &str = "chat/completions";
 pub(crate) const MODELS_PATH: &str = "models";
 
-/// Serialize a request. Reasoning from earlier turns is not sent back.
-pub(crate) fn build_body(req: &ChatRequest) -> Value {
-    let messages: Vec<Value> = req.messages.iter().map(message_json).collect();
+/// How a server's `/chat/completions` differs from the common shape.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum Dialect {
+    #[default]
+    Standard,
+    /// Mistral's API: it rejects fields it doesn't know, takes `reasoning_effort` as
+    /// `none` or `high`, and wants earlier reasoning sent back as `thinking` parts.
+    Mistral,
+}
+
+impl Dialect {
+    pub(crate) fn of(base_url: &str) -> Self {
+        let host = base_url
+            .split("://")
+            .nth(1)
+            .unwrap_or(base_url)
+            .split(['/', ':'])
+            .next()
+            .unwrap_or_default();
+        if host.eq_ignore_ascii_case("api.mistral.ai") {
+            Self::Mistral
+        } else {
+            Self::Standard
+        }
+    }
+}
+
+/// How messages are written for one request.
+struct Shape<'a> {
+    mistral: bool,
+    /// Tool-call ids as Mistral's tokenizer takes them: exactly 9 letters or digits.
+    short_ids: bool,
+    /// Send reasoning back as a `thinking` part.
+    echo_reasoning: bool,
+    /// Tool names by call id, for tool results.
+    names: HashMap<&'a str, &'a str>,
+}
+
+/// Serialize a request. Reasoning from earlier turns is sent back only where the server
+/// expects it (Mistral).
+pub(crate) fn build_body(req: &ChatRequest, dialect: Dialect) -> Value {
+    let mistral = dialect == Dialect::Mistral;
+    let effort = req
+        .reasoning_effort
+        .as_deref()
+        .map(|e| if mistral { mistral_effort(e) } else { e });
+    let shape = Shape {
+        mistral,
+        short_ids: mistral || is_mistral_large(&req.model),
+        echo_reasoning: mistral && effort != Some("none") && req.preserve_reasoning != Some(false),
+        names: req
+            .messages
+            .iter()
+            .flat_map(|m| match m {
+                Message::Assistant { tool_calls, .. } => tool_calls.as_slice(),
+                _ => &[],
+            })
+            .map(|c| (c.id.as_str(), c.name.as_str()))
+            .collect(),
+    };
+    let messages: Vec<Value> = req
+        .messages
+        .iter()
+        .map(|m| message_json(m, &shape))
+        .collect();
     let mut body = Map::new();
     body.insert("model".into(), json!(req.model));
     body.insert("messages".into(), Value::Array(messages));
     body.insert("stream".into(), json!(true));
-    body.insert("stream_options".into(), json!({ "include_usage": true }));
+    if mistral {
+        // Usage comes in the last chunk anyway; a stable key raises prompt-cache hits.
+        body.insert("prompt_cache_key".into(), json!(cache_key(&req.messages)));
+    } else {
+        body.insert("stream_options".into(), json!({ "include_usage": true }));
+    }
     if !req.tools.is_empty() {
         let tools: Vec<Value> = req
             .tools
@@ -43,16 +110,18 @@ pub(crate) fn build_body(req: &ChatRequest) -> Value {
         body.insert("max_tokens".into(), json!(n));
     }
     let s = &req.sampling;
+    // Mistral rejects sampling settings it doesn't have.
+    let local = |v: Option<Value>| v.filter(|_| !mistral);
     let optional = [
         ("temperature", s.temperature.map(Value::from)),
         ("top_p", s.top_p.map(Value::from)),
-        ("top_k", s.top_k.map(Value::from)),
-        ("min_p", s.min_p.map(Value::from)),
-        ("repetition_penalty", s.repetition_penalty.map(Value::from)),
+        ("top_k", local(s.top_k.map(Value::from))),
+        ("min_p", local(s.min_p.map(Value::from))),
         (
-            "reasoning_effort",
-            req.reasoning_effort.clone().map(Value::from),
+            "repetition_penalty",
+            local(s.repetition_penalty.map(Value::from)),
         ),
+        ("reasoning_effort", effort.map(Value::from)),
     ];
     for (k, v) in optional {
         if let Some(v) = v {
@@ -65,26 +134,95 @@ pub(crate) fn build_body(req: &ChatRequest) -> Value {
     Value::Object(body)
 }
 
-fn message_json(m: &Message) -> Value {
+/// Mistral takes `none` or `high`, as Mistral's own harness maps them.
+fn mistral_effort(effort: &str) -> &'static str {
+    match effort {
+        "none" | "off" | "minimal" | "low" => "none",
+        _ => "high",
+    }
+}
+
+/// Mistral Large, whose tokenizer takes only 9-character tool-call ids, on any server.
+fn is_mistral_large(model: &str) -> bool {
+    model.to_ascii_lowercase().contains("mistral-large")
+}
+
+/// An id Mistral accepts: kept when it already is one, otherwise derived from it, so the
+/// call and its result still match.
+fn short_id(id: &str) -> String {
+    if id.len() == 9 && id.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return id.to_owned();
+    }
+    const DIGITS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let mut n = fnv1a(id.as_bytes());
+    (0..9)
+        .map(|_| {
+            let c = DIGITS[(n % 62) as usize] as char;
+            n /= 62;
+            c
+        })
+        .collect()
+}
+
+/// The same for every request of a session: the system prompt and the first user message.
+fn cache_key(messages: &[Message]) -> String {
+    let mut bytes = Vec::new();
+    for m in messages.iter().take(2) {
+        if let Message::System { content } | Message::User { content } = m {
+            bytes.extend_from_slice(content.as_bytes());
+            bytes.push(0);
+        }
+    }
+    format!("ch-{:016x}", fnv1a(&bytes))
+}
+
+/// FNV-1a: stable across builds, unlike `std`'s hasher.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, b| {
+        (h ^ u64::from(*b)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
+fn message_json(m: &Message, shape: &Shape<'_>) -> Value {
+    let id = |id: &str| {
+        if shape.short_ids {
+            short_id(id)
+        } else {
+            id.to_owned()
+        }
+    };
     match m {
         Message::System { content } => json!({ "role": "system", "content": content }),
         Message::User { content } => json!({ "role": "user", "content": content }),
         Message::Assistant {
             content,
+            reasoning,
             tool_calls,
-            ..
         } => {
             let mut v = json!({ "role": "assistant", "content": content });
+            if let Some(r) = reasoning
+                .as_deref()
+                .filter(|r| shape.echo_reasoning && !r.is_empty())
+            {
+                let mut parts = vec![json!({
+                    "type": "thinking",
+                    "thinking": [{ "type": "text", "text": r }],
+                })];
+                if !content.is_empty() {
+                    parts.push(json!({ "type": "text", "text": content }));
+                }
+                v["content"] = Value::Array(parts);
+            }
             if !tool_calls.is_empty() {
                 // Some servers reject an empty string next to tool calls.
-                if content.is_empty() {
+                if content.is_empty() && !shape.mistral {
                     v["content"] = Value::Null;
                 }
                 v["tool_calls"] = tool_calls
                     .iter()
                     .map(|c| {
                         json!({
-                            "id": c.id,
+                            "id": id(&c.id),
                             "type": "function",
                             "function": { "name": c.name, "arguments": c.arguments },
                         })
@@ -94,7 +232,13 @@ fn message_json(m: &Message) -> Value {
             v
         }
         Message::Tool { call_id, content } => {
-            json!({ "role": "tool", "tool_call_id": call_id, "content": content })
+            let mut v = json!({ "role": "tool", "tool_call_id": id(call_id), "content": content });
+            if shape.mistral
+                && let Some(name) = shape.names.get(call_id.as_str())
+            {
+                v["name"] = json!(name);
+            }
+            v
         }
     }
 }
@@ -160,21 +304,48 @@ impl ChunkParser {
         }
     }
 
+    fn text(&mut self, text: &str, out: &mut Vec<StreamEvent>) {
+        match &mut self.think {
+            Some(t) => out.extend(t.feed(text).into_iter().map(piece_event)),
+            None => out.push(StreamEvent::TextDelta(text.to_owned())),
+        }
+    }
+
     fn delta(&mut self, d: &Value, out: &mut Vec<StreamEvent>) {
         for key in ["reasoning_content", "reasoning"] {
             if let Some(r) = d.get(key).and_then(Value::as_str).filter(|r| !r.is_empty()) {
                 out.push(StreamEvent::ReasoningDelta(r.to_owned()));
             }
         }
-        if let Some(text) = d
-            .get("content")
-            .and_then(Value::as_str)
-            .filter(|t| !t.is_empty())
-        {
-            match &mut self.think {
-                Some(t) => out.extend(t.feed(text).into_iter().map(piece_event)),
-                None => out.push(StreamEvent::TextDelta(text.to_owned())),
+        match d.get("content") {
+            Some(Value::String(text)) if !text.is_empty() => self.text(text, out),
+            // Mistral sends content as parts: `text`, and `thinking` holding text parts.
+            Some(Value::Array(parts)) => {
+                for part in parts {
+                    let text = |v: &Value| v.get("text").and_then(Value::as_str).map(str::to_owned);
+                    match part.get("type").and_then(Value::as_str) {
+                        Some("text") => {
+                            if let Some(t) = text(part).filter(|t| !t.is_empty()) {
+                                self.text(&t, out);
+                            }
+                        }
+                        Some("thinking") => {
+                            let r: String = match part.get("thinking") {
+                                Some(Value::Array(inner)) => {
+                                    inner.iter().filter_map(text).collect()
+                                }
+                                Some(Value::String(t)) => t.clone(),
+                                _ => String::new(),
+                            };
+                            if !r.is_empty() {
+                                out.push(StreamEvent::ReasoningDelta(r));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
             }
+            _ => {}
         }
         for call in d
             .get("tool_calls")
@@ -284,6 +455,7 @@ pub(crate) fn parse_models(body: &Value) -> Vec<DiscoveredModel> {
                         "/context_window",
                         "/max_model_len",
                         "/context_length",
+                        "/max_context_length",
                         "/meta/n_ctx_train",
                     ],
                 ),
@@ -304,6 +476,7 @@ pub(crate) fn parse_models(body: &Value) -> Vec<DiscoveredModel> {
 mod tests {
     use super::*;
     use crate::types::{ResponseBuilder, ToolCall, ToolSpec};
+    use cutoffharness_config::provider::Sampling;
 
     #[test]
     fn llama_cpp_serves_less_than_it_was_trained_on() {
@@ -353,7 +526,7 @@ mod tests {
             .collect(),
             ..ChatRequest::default()
         };
-        let b = build_body(&req);
+        let b = build_body(&req, Dialect::Standard);
         assert_eq!(b["messages"][1]["content"], Value::Null);
         assert_eq!(
             b["messages"][1]["tool_calls"][0]["function"]["name"],
@@ -365,6 +538,103 @@ mod tests {
         assert_eq!(b["max_tokens"], 64);
         assert_eq!(b["chat_template_kwargs"]["enable_thinking"], false);
         assert!(b.get("temperature").is_none());
+    }
+
+    fn mistral_history() -> ChatRequest {
+        ChatRequest {
+            model: "mistral-large-4".into(),
+            messages: vec![
+                Message::System {
+                    content: "sys".into(),
+                },
+                Message::User {
+                    content: "fix it".into(),
+                },
+                Message::Assistant {
+                    content: String::new(),
+                    reasoning: Some("read first".into()),
+                    tool_calls: vec![ToolCall {
+                        id: "call_0".into(),
+                        name: "read".into(),
+                        arguments: "{}".into(),
+                    }],
+                },
+                Message::Tool {
+                    call_id: "call_0".into(),
+                    content: "fn main() {}".into(),
+                },
+            ],
+            sampling: Sampling {
+                temperature: Some(0.3),
+                top_k: Some(20),
+                min_p: Some(0.05),
+                ..Sampling::default()
+            },
+            reasoning_effort: Some("medium".into()),
+            ..ChatRequest::default()
+        }
+    }
+
+    #[test]
+    fn mistral_api_shape() {
+        assert_eq!(Dialect::of("https://api.mistral.ai/v1"), Dialect::Mistral);
+        assert_eq!(
+            Dialect::of("https://openrouter.ai/api/v1"),
+            Dialect::Standard
+        );
+        let req = mistral_history();
+        let b = build_body(&req, Dialect::Mistral);
+        // Only fields Mistral knows.
+        assert!(b.get("stream_options").is_none());
+        assert!(b.get("top_k").is_none() && b.get("min_p").is_none());
+        assert_eq!(b["temperature"], 0.3);
+        assert_eq!(b["reasoning_effort"], "high");
+        assert_eq!(
+            b["prompt_cache_key"],
+            build_body(&req, Dialect::Mistral)["prompt_cache_key"]
+        );
+        // Reasoning goes back as a thinking part; the empty answer stays a string part list.
+        let a = &b["messages"][2];
+        assert_eq!(
+            a["content"],
+            json!([{"type": "thinking", "thinking": [{"type": "text", "text": "read first"}]}])
+        );
+        let id = a["tool_calls"][0]["id"].as_str().expect("id");
+        assert_eq!(id.len(), 9);
+        assert!(id.bytes().all(|c| c.is_ascii_alphanumeric()), "{id}");
+        assert_eq!(b["messages"][3]["tool_call_id"], id);
+        assert_eq!(b["messages"][3]["name"], "read");
+
+        // `none` turns thinking off, and with it the echo.
+        let mut off = mistral_history();
+        off.reasoning_effort = Some("low".into());
+        let b = build_body(&off, Dialect::Mistral);
+        assert_eq!(b["reasoning_effort"], "none");
+        assert_eq!(b["messages"][2]["content"], "");
+        let mut kept_out = mistral_history();
+        kept_out.preserve_reasoning = Some(false);
+        assert_eq!(
+            build_body(&kept_out, Dialect::Mistral)["messages"][2]["content"],
+            ""
+        );
+    }
+
+    #[test]
+    fn mistral_large_elsewhere_gets_short_ids_only() {
+        // For example vLLM serving the open weights: standard fields, Mistral's ids.
+        let b = build_body(&mistral_history(), Dialect::Standard);
+        assert_eq!(b["stream_options"]["include_usage"], true);
+        assert_eq!(b["reasoning_effort"], "medium");
+        assert_eq!(b["messages"][2]["content"], Value::Null);
+        assert_eq!(
+            b["messages"][2]["tool_calls"][0]["id"]
+                .as_str()
+                .map(str::len),
+            Some(9)
+        );
+        assert!(b["messages"][3].get("name").is_none());
+        assert_eq!(short_id("abcDEF123"), "abcDEF123");
+        assert_ne!(short_id("call_0"), short_id("call_1"));
     }
 
     #[test]
@@ -410,6 +680,38 @@ mod tests {
                 }],
             }
         );
+    }
+
+    #[test]
+    fn mistral_content_parts() {
+        let chunks = [
+            r#"{"choices":[{"delta":{"role":"assistant","content":[{"type":"thinking","thinking":[{"type":"text","text":"check "}]}]}}]}"#,
+            r#"{"choices":[{"delta":{"content":[{"type":"thinking","thinking":[{"type":"text","text":"the file"}]}]}}]}"#,
+            r#"{"choices":[{"delta":{"content":[{"type":"text","text":"Done."}]}}]}"#,
+            r#"{"choices":[{"delta":{"content":""},"finish_reason":"stop"}]}"#,
+        ];
+        let mut p = ChunkParser::new(ReasoningFormat::Auto);
+        let mut b = ResponseBuilder::default();
+        for c in chunks {
+            for ev in p.parse(c).expect("chunk") {
+                b.push(&ev);
+            }
+        }
+        for ev in p.finish() {
+            b.push(&ev);
+        }
+        assert_eq!(
+            b.into_message(),
+            Message::Assistant {
+                content: "Done.".into(),
+                reasoning: Some("check the file".into()),
+                tool_calls: vec![],
+            }
+        );
+        let models = parse_models(
+            &serde_json::json!({"data": [{"id": "mistral-large-4", "max_context_length": 1048576}]}),
+        );
+        assert_eq!(models[0].context_window, Some(1_048_576));
     }
 
     #[test]

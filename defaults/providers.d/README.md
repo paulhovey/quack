@@ -1,18 +1,16 @@
 # defaults/providers.d
 
-One provider per file. Delete a file to remove that provider.
+Empty on purpose. A provider is just a server, so nothing ships here: `cutoffharness
+setup` (or `/setup` in the TUI) finds servers on this machine, offers the hosted
+services, or takes any URL, and writes a small file to your own config folder.
 
-A provider file needs only a `base_url`, plus an `api_key` for hosted services:
+A company bundle can put its own providers here, one per file:
 
 ```toml
-base_url = "https://api.example.com/v1"
-api_key = { env = "EXAMPLE_API_KEY" }
+base_url = "https://llm.corp.example/v1"
+api_key = { env = "CORP_LLM_KEY" }
 ```
 
 Models are discovered from the server's `/models` endpoint. To pin or describe
 specific models, add `models = ["model-id", ...]`. Every other option has a working
 default; the full list is in `../schemas/provider.json` (editors with taplo complete it).
-
-When `[model].default` is not set, the first provider that answers is used. Your own
-files (user and project layers) are tried before these, and hosted services are skipped
-when their key variable is not set.

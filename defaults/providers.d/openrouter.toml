@@ -1,4 +1,0 @@
-#:schema ../schemas/provider.json
-# OpenRouter (many hosted models). Set OPENROUTER_API_KEY. Models are discovered.
-base_url = "https://openrouter.ai/api/v1"
-api_key = { env = "OPENROUTER_API_KEY" }

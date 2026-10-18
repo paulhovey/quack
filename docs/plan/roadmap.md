@@ -126,6 +126,8 @@ Left out on purpose: a hosted marketplace, telemetry-backed features and cloud e
 - Plan mode: `/plan [task|accept|off]`, Shift-Tab, edits refused and only read-only commands run, the plan request appended to the message ([04](04-agent-loop-and-tools.md#plan-mode))
 - Memory: markdown notes plus an index per scope (global, and project in the data dir or the repo), the index in the prompt via `{{ memory_index }}`, a lenient `memory` tool, `memory.writes = "ask"`, and `/memory` ([07](07-sessions-memory-checkpoints.md#behaviour))
 - `cutoffharness setup` and `/setup`: local server detection (loopback only), hosted services with the key stored in the OS credential store, or any URL, then the default model ([14](14-packaging-and-distribution.md#as-implemented-2026-10-18))
+- Mistral Large 4 through Mistral's API: a Mistral dialect in `openai-chat` (strict fields, `none`/`high` effort, reasoning sent back as `thinking` parts, 9-character tool-call ids, `prompt_cache_key`); not yet run live ([02](02-providers.md#mistral-large-4-2026-10-18))
+- The defaults bundle no longer ships provider files: a provider is just a server, and engine ports, tool-call notes and hosted services live in setup ([02](02-providers.md#servers-not-engines-2026-10-18))
 
 **Exit criteria**
 - [ ] A 50-step task completes inside a 32k window with a current ~30B Qwen coding model on llama.cpp

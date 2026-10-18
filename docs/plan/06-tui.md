@@ -87,7 +87,7 @@ All configuration UIs share one modal widget, so they look and behave the same:
 | Command | Aliases | Opens / does |
 |---|---|---|
 | `/models` | `/model` | Models modal (above). Switch for session, set default (`[model].default`), set `small` model, refresh discovery, set unknown context window |
-| `/providers` | | Provider list: state, protocol, base URL, auth status. Actions: enable/disable, test connection, set API key (keyring/env/cmd wizard), edit file, **add provider** (pick a template from the defaults dir, or start blank; writes a new `providers.d/<id>.toml`) |
+| `/providers` | | Provider list: state, protocol, base URL, auth status. Actions: enable/disable, test connection, set API key (keyring/env/cmd wizard), edit file, **add provider** (pick a local engine or hosted service from setup's list, or start blank; writes a new `providers.d/<id>.toml`) |
 | `/setup` | | Find model servers on this machine (loopback ports only) and add one: one row per server and model, Enter writes `providers.d/<id>.toml` to the user layer and switches to the model. Hosted services and other addresses go through `cutoffharness setup` ([14](14-packaging-and-distribution.md#first-run-experience)) |
 | `/profiles` | `/profile` | Profile list with match rules. Actions: switch for session, pin for model (writes `profile =` into the model entry), preview the rendered prompt and its token cost |
 | `/resume` | `/sessions` | Session browser for this project (Tab switches to all projects): title, age, turns, model, preview pane with the transcript head. Actions: resume, fork, rename, export, delete (with confirmation) |

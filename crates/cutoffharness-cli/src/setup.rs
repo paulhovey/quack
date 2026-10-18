@@ -5,10 +5,9 @@
 //! line, so the wizard can also be scripted through stdin.
 
 use std::io::{BufRead, Write};
-use std::path::PathBuf;
 use std::sync::Arc;
 
-use cutoffharness_config::{ItemState, LayerKind, Loaded, Secret, load_providers};
+use cutoffharness_config::{LayerKind, Loaded};
 use cutoffharness_core::setup;
 use cutoffharness_exec::exit;
 
@@ -110,83 +109,86 @@ async fn local(config: &Arc<Loaded>, io: &mut Io<'_>) -> Result<Option<String>, 
     if let Some(id) = &server.configured {
         return Ok(Some(id.clone()));
     }
-    let comment = format!("{} on this machine, found by setup.", server.name);
     let added = setup::add_provider(
         config,
         &server.id,
         &server.base_url,
         server.api.as_deref(),
-        &comment,
+        &setup::local_comment(&server.id),
     )?;
     if let Some(path) = &added.path {
         io.say(&format!("Wrote {}", path.display()));
     }
+    if !server.note.is_empty() {
+        io.say(&format!("Note: {}", server.note));
+    }
     Ok(Some(added.id))
 }
 
-/// Configured providers that take a key from an environment variable.
+/// A hosted service from setup's list, with its key in the credential store or a variable.
 fn hosted(config: &Loaded, io: &mut Io<'_>) -> Result<Option<String>, String> {
-    let items = load_providers(config);
-    let services: Vec<(String, String, PathBuf, LayerKind)> = items
-        .iter()
-        .filter_map(|i| match &i.state {
-            ItemState::Loaded(f) => match &f.api_key {
-                Some(Secret::Env { env, .. }) => {
-                    Some((i.id.clone(), env.clone(), i.path.clone(), i.layer))
-                }
-                _ => None,
-            },
-            _ => None,
+    let services: Vec<(setup::Hosted, Option<String>)> = setup::hosted_services()
+        .into_iter()
+        .map(|s| {
+            let set_up = setup::configured_at(config, s.base_url);
+            (s, set_up)
         })
         .collect();
-    if services.is_empty() {
-        io.say("No hosted services are configured. The defaults bundle ships files for");
-        io.say("several (`cutoffharness config paths` shows where it is looked for); or use");
-        io.say("option 3 with the service's URL.");
-        return Ok(None);
-    }
-    for (i, (id, env, _, _)) in services.iter().enumerate() {
-        let state = if std::env::var_os(env).is_some() {
-            format!("{env} is set")
-        } else {
-            format!("needs {env}")
+    let mut group = "";
+    for (i, (s, set_up)) in services.iter().enumerate() {
+        if s.group != group {
+            group = s.group;
+            io.say(&format!("  {group}"));
+        }
+        let state = match set_up {
+            Some(id) => format!("set up as `{id}`"),
+            None if std::env::var_os(s.env).is_some() => format!("{} is set", s.env),
+            None => "needs an API key".into(),
         };
-        io.say(&format!("  {}  {id:<14} {state}", i + 1));
+        io.say(&format!("  {:>4}  {:<28} {state}", i + 1, s.name));
     }
-    let Some((id, env, path, layer)) = choose(io, &services, "Which one? [1] ")? else {
+    io.say("  For another service, use option 3 with its URL.");
+    let Some((service, set_up)) = choose(io, &services, "Which one? [1] ")? else {
         return Ok(None);
     };
-    if std::env::var_os(env).is_some() {
+    if let Some(id) = set_up {
         return Ok(Some(id.clone()));
     }
-    io.say(&format!("Where should the {id} API key come from?"));
-    io.say("  1  the OS credential store (stored now, recommended)");
-    io.say(&format!("  2  the {env} environment variable (you set it)"));
-    match io.ask("> [1] ").as_deref() {
-        Some("2") => {
-            io.say(&format!("Set {env} in your shell profile, for example"));
-            io.say(&format!("  export {env}=…            (bash, zsh)"));
-            io.say(&format!("  $env:{env} = \"…\"         (PowerShell)"));
-            io.say("then start cutoffharness, or run setup again to pick a model.");
-            Ok(None)
-        }
-        None => Ok(None),
-        Some(_) => {
-            store_key(io, id)?;
-            let text = std::fs::read_to_string(path)
-                .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-            let text = with_keyring_key(&text, id);
-            let target = setup::providers_dir(config)?.join(format!("{id}.toml"));
-            if *layer == LayerKind::User {
-                std::fs::write(&target, text)
-                    .map_err(|e| format!("cannot write {}: {e}", target.display()))?;
-            } else {
-                setup::write_new(&target, &text)?;
+    let key = if std::env::var_os(service.env).is_some() {
+        io.say(&format!("Using the key in {}.", service.env));
+        setup::KeyFrom::Env
+    } else {
+        io.say(&format!(
+            "Where should the {} API key come from?",
+            service.name
+        ));
+        io.say("  1  the OS credential store (stored now, recommended)");
+        io.say(&format!(
+            "  2  the {} environment variable (you set it)",
+            service.env
+        ));
+        match io.ask("> [1] ").as_deref() {
+            None => return Ok(None),
+            Some("2") => setup::KeyFrom::Env,
+            Some(_) => {
+                store_key(io, service.id)?;
+                setup::KeyFrom::Keyring
             }
-            io.say(&format!("Wrote {}", target.display()));
-            Ok(Some(id.clone()))
         }
+    };
+    let added = setup::add_hosted(config, service, key)?;
+    if let Some(path) = &added.path {
+        io.say(&format!("Wrote {}", path.display()));
     }
+    if key == setup::KeyFrom::Env && std::env::var_os(service.env).is_none() {
+        let env = service.env;
+        io.say(&format!("Set {env} in your shell profile, for example"));
+        io.say(&format!("  export {env}=…            (bash, zsh)"));
+        io.say(&format!("  $env:{env} = \"…\"         (PowerShell)"));
+        io.say("then start cutoffharness, or run setup again to pick a model.");
+        return Ok(None);
+    }
+    Ok(Some(added.id))
 }
 
 /// Any OpenAI-compatible endpoint.
@@ -299,25 +301,6 @@ fn choose<'a, T>(io: &mut Io<'_>, items: &'a [T], prompt: &str) -> Result<Option
     }
 }
 
-/// Point a provider file's `api_key` at the credential store, keeping everything else.
-fn with_keyring_key(text: &str, id: &str) -> String {
-    let line = format!("api_key = {{ keyring = \"{id}\" }}");
-    let mut out: Vec<String> = Vec::new();
-    let mut replaced = false;
-    for l in text.lines() {
-        if l.trim_start().starts_with("api_key") {
-            out.push(line.clone());
-            replaced = true;
-        } else {
-            out.push(l.to_owned());
-        }
-    }
-    if !replaced {
-        out.push(line);
-    }
-    out.join("\n") + "\n"
-}
-
 /// `https://api.example.com/v1` → `example`; `http://10.0.0.5:8000/v1` → `server-8000`.
 fn id_from_url(url: &str) -> String {
     let host_port = url
@@ -414,21 +397,40 @@ mod tests {
         assert!(out.contains("none configured yet"), "{out}");
     }
 
+    #[tokio::test]
+    async fn wizard_adds_a_hosted_service_reading_its_variable() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config = Arc::new(isolated(tmp.path()));
+        // Option 2, Novita, the environment variable.
+        let n = setup::hosted_services()
+            .iter()
+            .position(|s| s.id == "novita")
+            .expect("novita")
+            + 1;
+        let mut input = std::io::Cursor::new(format!("2\n{n}\n2\n").into_bytes());
+        let mut out = Vec::new();
+        let mut io = Io {
+            input: &mut input,
+            out: &mut out,
+            secret: &|_| Ok(String::new()),
+        };
+        let code = run(config, &mut io).await;
+        let out = String::from_utf8_lossy(&out);
+        assert_eq!(code, exit::OK, "{out}");
+        let file = std::fs::read_to_string(tmp.path().join("user/providers.d/novita.toml"))
+            .expect("provider file");
+        assert_eq!(
+            file,
+            "# Novita AI, added by setup.\nbase_url = \"https://api.novita.ai/openai/v1\"\napi_key = { env = \"NOVITA_API_KEY\" }\n"
+        );
+        assert!(out.contains("needs an API key"), "{out}");
+    }
+
     #[test]
     fn ids_from_urls() {
         assert_eq!(id_from_url("https://api.example.com/v1"), "example");
         assert_eq!(id_from_url("http://gpu-box:8000/v1"), "gpu-box");
         assert_eq!(id_from_url("http://10.0.0.5:8000/v1"), "server-8000");
         assert_eq!(id_from_url("https://inference.corp.example.org"), "example");
-    }
-
-    #[test]
-    fn keyring_key_replaces_the_env_key() {
-        let text =
-            "# Novita.\nbase_url = \"https://x/v1\"\napi_key = { env = \"NOVITA_API_KEY\" }\n";
-        assert_eq!(
-            with_keyring_key(text, "novita"),
-            "# Novita.\nbase_url = \"https://x/v1\"\napi_key = { keyring = \"novita\" }\n"
-        );
     }
 }

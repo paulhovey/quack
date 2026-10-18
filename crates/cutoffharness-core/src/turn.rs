@@ -269,6 +269,7 @@ pub(crate) fn request(s: &Setup, messages: Vec<Message>, tools: bool) -> ChatReq
         max_tokens: s.model.max_output,
         sampling,
         reasoning_effort: Some(s.model.reasoning.effort.clone()).filter(|e| !e.is_empty()),
+        preserve_reasoning: s.model.reasoning.preserve_in_history,
         extra_body: serde_json::to_value(&s.model.extra_body)
             .ok()
             .and_then(|v| v.as_object().cloned())

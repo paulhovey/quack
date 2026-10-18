@@ -1,4 +1,0 @@
-#:schema ../schemas/provider.json
-# llama.cpp `llama-server` on this machine. Start it with `--jinja` so tool calls work.
-# The loaded model is discovered.
-base_url = "http://127.0.0.1:8080/v1"

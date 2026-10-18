@@ -1,7 +1,0 @@
-#:schema ../schemas/provider.json
-# Ollama on this machine, through its native API so each request carries the context
-# window (Ollama's OpenAI endpoint silently cuts long prompts). Models are discovered and
-# get their trained window capped at 32k, since Ollama allocates memory for all of it;
-# list a model with a larger context_window to go higher.
-base_url = "http://127.0.0.1:11434"
-api = "ollama"

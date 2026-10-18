@@ -2,6 +2,10 @@
 //! finding model servers on this machine and writing minimal provider files to the user
 //! layer. Shared by `cutoffharness setup` and the TUI's `/setup`.
 //!
+//! Every provider is just a server (a `base_url`, and a key when it needs one). The engine
+//! names and hosted services below only suggest where to look and what to call it; nothing
+//! ships as a provider until the user picks it.
+//!
 //! Detection only runs when the user asks for it, and only probes loopback addresses.
 
 use std::path::{Path, PathBuf};
@@ -22,15 +26,18 @@ pub struct Candidate {
     pub name: String,
     pub base_url: String,
     pub api: Option<String>,
+    /// What this engine needs for tool calls, written into the provider file.
+    pub note: String,
 }
 
 impl Candidate {
-    fn new(id: &str, name: &str, base_url: &str, api: Option<&str>) -> Self {
+    fn new(id: &str, name: &str, base_url: &str, api: Option<&str>, note: &str) -> Self {
         Self {
             id: id.into(),
             name: name.into(),
             base_url: base_url.into(),
             api: api.map(Into::into),
+            note: note.into(),
         }
     }
 }
@@ -38,12 +45,188 @@ impl Candidate {
 /// The servers `setup` looks for, on their default ports.
 pub fn local_servers() -> Vec<Candidate> {
     vec![
-        Candidate::new("ollama", "Ollama", "http://127.0.0.1:11434", Some("ollama")),
-        Candidate::new("llama-cpp", "llama.cpp", "http://127.0.0.1:8080/v1", None),
-        Candidate::new("vllm", "vLLM", "http://127.0.0.1:8000/v1", None),
-        Candidate::new("lmstudio", "LM Studio", "http://127.0.0.1:1234/v1", None),
-        Candidate::new("sglang", "SGLang", "http://127.0.0.1:30000/v1", None),
+        Candidate::new(
+            "ollama",
+            "Ollama",
+            "http://127.0.0.1:11434",
+            Some("ollama"),
+            "Uses Ollama's native API, so each request sets the context window (its OpenAI \
+             endpoint silently cuts long prompts).",
+        ),
+        Candidate::new(
+            "llama-cpp",
+            "llama.cpp",
+            "http://127.0.0.1:8080/v1",
+            None,
+            "Start llama-server with `--jinja` so tool calls work.",
+        ),
+        Candidate::new(
+            "vllm",
+            "vLLM",
+            "http://127.0.0.1:8000/v1",
+            None,
+            "Start vLLM with `--enable-auto-tool-choice --tool-call-parser <parser>` for your \
+             model so tool calls work.",
+        ),
+        Candidate::new(
+            "lmstudio",
+            "LM Studio",
+            "http://127.0.0.1:1234/v1",
+            None,
+            "",
+        ),
+        Candidate::new(
+            "sglang",
+            "SGLang",
+            "http://127.0.0.1:30000/v1",
+            None,
+            "Start SGLang with `--tool-call-parser <parser>` for your model so tool calls work.",
+        ),
     ]
+}
+
+/// The comment for a server found on this machine: where it came from and, for a known
+/// engine, what it needs for tool calls.
+pub fn local_comment(id: &str) -> String {
+    match local_servers().into_iter().find(|c| c.id == id) {
+        Some(c) if c.note.is_empty() => format!("{} on this machine, found by setup.", c.name),
+        Some(c) => format!("{} on this machine, found by setup.\n{}", c.name, c.note),
+        None => "Found on this machine by setup.".into(),
+    }
+}
+
+/// A hosted service with an OpenAI-compatible API.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hosted {
+    pub id: &'static str,
+    pub name: &'static str,
+    /// Heading the wizard lists it under.
+    pub group: &'static str,
+    pub base_url: &'static str,
+    /// The variable its key is conventionally read from.
+    pub env: &'static str,
+}
+
+/// Services that host many open models.
+pub const OPEN_MODEL_HOSTS: &str = "Open-model services";
+/// The model makers' own APIs and coding plans.
+pub const MODEL_MAKERS: &str = "From the model makers";
+
+/// The hosted services `setup` offers, in the order it lists them.
+pub fn hosted_services() -> Vec<Hosted> {
+    let h = |id, name, group, base_url, env| Hosted {
+        id,
+        name,
+        group,
+        base_url,
+        env,
+    };
+    let (open, maker) = (OPEN_MODEL_HOSTS, MODEL_MAKERS);
+    vec![
+        h(
+            "openrouter",
+            "OpenRouter",
+            open,
+            "https://openrouter.ai/api/v1",
+            "OPENROUTER_API_KEY",
+        ),
+        h(
+            "synthetic",
+            "Synthetic",
+            open,
+            "https://api.synthetic.new/openai/v1",
+            "SYNTHETIC_API_KEY",
+        ),
+        h(
+            "charm-hyper",
+            "Charm Hyper",
+            open,
+            "https://hyper.charm.land/v1",
+            "CHARM_API_KEY",
+        ),
+        h(
+            "together",
+            "Together AI",
+            open,
+            "https://api.together.xyz/v1",
+            "TOGETHER_API_KEY",
+        ),
+        h(
+            "fireworks",
+            "Fireworks AI",
+            open,
+            "https://api.fireworks.ai/inference/v1",
+            "FIREWORKS_API_KEY",
+        ),
+        h(
+            "deepinfra",
+            "DeepInfra",
+            open,
+            "https://api.deepinfra.com/v1/openai",
+            "DEEPINFRA_API_KEY",
+        ),
+        h(
+            "novita",
+            "Novita AI",
+            open,
+            "https://api.novita.ai/openai/v1",
+            "NOVITA_API_KEY",
+        ),
+        // Plan keys (Vibe) and pay-as-you-go keys use the same API.
+        h(
+            "mistral",
+            "Mistral (API or Vibe plan)",
+            maker,
+            "https://api.mistral.ai/v1",
+            "MISTRAL_API_KEY",
+        ),
+        // Kimi Code plan keys only work on the coding endpoint, and API keys only on Moonshot's.
+        h(
+            "kimi-code",
+            "Kimi Code plan",
+            maker,
+            "https://api.kimi.com/coding/v1",
+            "KIMI_API_KEY",
+        ),
+        h(
+            "moonshot",
+            "Moonshot API (Kimi)",
+            maker,
+            "https://api.moonshot.ai/v1",
+            "MOONSHOT_API_KEY",
+        ),
+        // Likewise for Z.ai: Coding Plan keys need the coding endpoint.
+        h(
+            "zai-coding",
+            "Z.ai GLM Coding Plan",
+            maker,
+            "https://api.z.ai/api/coding/paas/v4",
+            "ZAI_API_KEY",
+        ),
+        h(
+            "zai",
+            "Z.ai API",
+            maker,
+            "https://api.z.ai/api/paas/v4",
+            "ZAI_API_KEY",
+        ),
+        h(
+            "deepseek",
+            "DeepSeek API",
+            maker,
+            "https://api.deepseek.com",
+            "DEEPSEEK_API_KEY",
+        ),
+    ]
+}
+
+/// Where a hosted provider's key comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyFrom {
+    /// The OS credential store, under the provider id.
+    Keyring,
+    /// The service's environment variable.
+    Env,
 }
 
 /// Probe the default local ports. Servers that answer with a model list are returned, in
@@ -112,6 +295,7 @@ async fn probe(
         name: c.name,
         base_url: c.base_url,
         api: c.api,
+        note: c.note,
         models: list
             .into_iter()
             .map(|m| ModelInfo {
@@ -130,6 +314,14 @@ fn provider_file(base_url: &str, api: Option<&str>) -> Option<ProviderFile> {
         v["api"] = api.into();
     }
     serde_json::from_value(v).ok()
+}
+
+/// The configured provider that already points at `base_url`, if any.
+pub fn configured_at(config: &Loaded, base_url: &str) -> Option<String> {
+    configured_urls(config)
+        .into_iter()
+        .find(|(_, url)| same_server(url, base_url))
+        .map(|(id, _)| id)
 }
 
 /// Loaded providers and their `base_url`s.
@@ -169,6 +361,20 @@ pub fn provider_text(comment: &str, base_url: &str, api: Option<&str>) -> String
     text
 }
 
+/// The text of a hosted service's provider file, with its key from `key`.
+pub fn hosted_text(service: &Hosted, key: KeyFrom) -> String {
+    let mut text = provider_text(
+        &format!("{}, added by setup.", service.name),
+        service.base_url,
+        None,
+    );
+    text.push_str(&match key {
+        KeyFrom::Keyring => format!("api_key = {{ keyring = \"{}\" }}\n", service.id),
+        KeyFrom::Env => format!("api_key = {{ env = \"{}\" }}\n", service.env),
+    });
+    text
+}
+
 /// Provider ids become file names, so keep them plain.
 pub fn check_id(id: &str) -> Result<(), String> {
     if id.is_empty()
@@ -201,6 +407,20 @@ pub fn add_provider(
     api: Option<&str>,
     comment: &str,
 ) -> Result<Added, String> {
+    add_file(config, id, base_url, &provider_text(comment, base_url, api))
+}
+
+/// Add a hosted service as a provider in the user layer, as [`add_provider`] does.
+pub fn add_hosted(config: &Loaded, service: &Hosted, key: KeyFrom) -> Result<Added, String> {
+    add_file(
+        config,
+        service.id,
+        service.base_url,
+        &hosted_text(service, key),
+    )
+}
+
+fn add_file(config: &Loaded, id: &str, base_url: &str, text: &str) -> Result<Added, String> {
     check_id(id)?;
     let items = load_providers(config);
     if let Some(item) = items.iter().find(|i| {
@@ -226,7 +446,7 @@ pub fn add_provider(
         .find(|id| !taken(id))
         .ok_or_else(|| format!("too many providers named {id}"))?;
     let path = dir.join(format!("{id}.toml"));
-    write_new(&path, &provider_text(comment, base_url, api))?;
+    write_new(&path, text)?;
     Ok(Added {
         id,
         path: Some(path),
@@ -312,5 +532,25 @@ mod tests {
         assert!(check_id("llama-cpp_2").is_ok());
         assert!(check_id("../x").is_err());
         assert!(check_id("").is_err());
+    }
+
+    #[test]
+    fn hosted_files_parse_with_either_key() {
+        for service in hosted_services() {
+            for key in [KeyFrom::Keyring, KeyFrom::Env] {
+                let text = hosted_text(&service, key);
+                let f: ProviderFile = toml::from_str(&text).expect("parse");
+                assert_eq!(f.base_url, service.base_url);
+                assert!(f.api_key.is_some(), "{text}");
+            }
+        }
+        assert_eq!(
+            hosted_text(&hosted_services()[0], KeyFrom::Env),
+            "# OpenRouter, added by setup.\nbase_url = \"https://openrouter.ai/api/v1\"\napi_key = { env = \"OPENROUTER_API_KEY\" }\n"
+        );
+        assert_eq!(
+            local_comment("llama-cpp"),
+            "llama.cpp on this machine, found by setup.\nStart llama-server with `--jinja` so tool calls work."
+        );
     }
 }

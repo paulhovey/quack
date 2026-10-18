@@ -358,6 +358,9 @@ pub struct DetectedServer {
     pub base_url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api: Option<String>,
+    /// What this engine needs for tool calls, e.g. a server flag. May be empty.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
     pub models: Vec<ModelInfo>,
     /// The configured provider that already points here, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -33,7 +33,7 @@ pub async fn run(config: Arc<Loaded>) -> Vec<DoctorCheck> {
             0 => check(
                 "providers",
                 CheckStatus::Fail,
-                "none configured: add a file to providers.d (see `config paths`)",
+                "none configured: run `cutoffharness setup`, or add a file to providers.d (see `config paths`)",
             ),
             n => check(
                 "providers",

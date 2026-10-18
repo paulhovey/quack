@@ -1,4 +1,0 @@
-#:schema ../schemas/provider.json
-# Fireworks AI (hosted open models). Set FIREWORKS_API_KEY. Models are discovered.
-base_url = "https://api.fireworks.ai/inference/v1"
-api_key = { env = "FIREWORKS_API_KEY" }

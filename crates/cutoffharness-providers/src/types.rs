@@ -15,6 +15,9 @@ pub struct ChatRequest {
     pub max_tokens: Option<u32>,
     pub sampling: Sampling,
     pub reasoning_effort: Option<String>,
+    /// Send earlier reasoning back with each assistant message, where the server takes it
+    /// (Mistral). `None`: the server's convention.
+    pub preserve_reasoning: Option<bool>,
     /// Merged verbatim into the request body last.
     pub extra_body: serde_json::Map<String, serde_json::Value>,
 }

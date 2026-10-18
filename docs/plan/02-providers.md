@@ -233,9 +233,63 @@ Errors are normalized into `ProviderError { kind, status, retryable, message, ra
 
 `ContextLengthExceeded` triggers an automatic compaction and a single retry ([05](05-context-management.md)). These messages are recognised by pattern for servers that return them as 400s with different texts.
 
-## Default provider files (shipped separately)
+## Servers, not engines (2026-10-18)
 
-`defaults/providers.d/`: `ollama.toml`, `llama-cpp.toml`, `vllm.toml`, `lmstudio.toml`, `sglang.toml`, `novita.toml`, `fireworks.toml`, `together.toml`, `openrouter.toml`, `deepinfra.toml`. Each file is fully commented, with every model entry tagged `# verified: <date>`. See [14](14-packaging-and-distribution.md) for how they are installed and removed.
+vLLM, SGLang, llama.cpp, LM Studio and the hosted services are all OpenAI-compatible servers. Their provider files would differ only in `base_url`, and in the key for hosted ones. Engine quirks are detected from responses, not from file names: llama.cpp by `owned_by: "llamacpp"` in `/models` (then `/props` for the served window), and vLLM by `max_model_len`. Ollama is the one exception, because its native API (`api = "ollama"`) is used to set the context window per request.
+
+So no provider files ship in the defaults bundle. A provider is a server the user names (`gpu-box`, `work-vllm`), whether it runs on this machine or somewhere else. The engine names and hosted services live in `cutoffharness-core/src/setup.rs` instead:
+
+| Engine | Default address setup probes | Needed for tool calls |
+|---|---|---|
+| Ollama | `127.0.0.1:11434` (native API) | — |
+| llama.cpp `llama-server` | `127.0.0.1:8080/v1` | `--jinja` |
+| vLLM | `127.0.0.1:8000/v1` | `--enable-auto-tool-choice --tool-call-parser <parser>` |
+| LM Studio | `127.0.0.1:1234/v1` | — |
+| SGLang | `127.0.0.1:30000/v1` | `--tool-call-parser <parser>` |
+
+The hosted services are a list in the setup wizard, in two groups: open-model services (OpenRouter, Synthetic, Charm Hyper, Together, Fireworks, DeepInfra, Novita) and the model makers' own APIs and coding plans (Mistral, including Vibe plan keys; Kimi Code plan; Moonshot; Z.ai GLM Coding Plan; Z.ai API; DeepSeek). Coding-plan keys only work on their plan's endpoint, so Kimi and Z.ai each appear twice. DeepSeek has no separate coding plan. Picking one writes its `base_url` and an `api_key` from the credential store or its usual variable. A file that setup writes carries the engine's tool-call note as a comment.
+
+A server elsewhere needs only its URL, plus a key if it was started with one (for example vLLM's `--api-key`):
+
+```toml
+base_url = "https://gpu-box.example.com/v1"
+api_key = { env = "GPU_BOX_KEY" }
+```
+
+`defaults/providers.d/` stays as the place where a company's bundle ships its own providers ([14](14-packaging-and-distribution.md#enterprise-builds)).
+
+## Mistral Large 4 (2026-10-18)
+
+Mistral Large 4 ("Le Chonk") has been in API preview since 2026-10-06 as `mistral-large-4` (alias `mistral-large-4-0`, and `mistral-large` now points to it). It has about 1T total parameters (around 50B active), takes text and images, has a 1M window per Mistral's model card, and supports `reasoning_effort`. Open weights are promised for the end of October 2026, under a license not yet announced. The main paths are Mistral's API (pay-as-you-go or Vibe plan keys, both `mistral` in setup's list) and hosted services such as OpenRouter. Only Large 4 is targeted; other Mistral models get the same API handling but were not looked at.
+
+Sources: Mistral's own harness (`mistralai/mistral-vibe`, commit `4ae5c59`, 2026-10-09) and Mistral's platform docs (model card `mistral-large-4-0`, the reasoning guide, and the chat API reference).
+
+### As implemented
+
+`openai-chat` has a **Mistral dialect**, used when the provider's host is `api.mistral.ai`. Nothing needs to be set in the provider file.
+
+| Mistral's API | What we do |
+|---|---|
+| Rejects any field it doesn't know ("Extra inputs are not permitted") | No `stream_options` (usage comes in the last chunk anyway). `top_k`, `min_p` and `repetition_penalty` are dropped. `extra_body` is still sent as written |
+| `reasoning_effort` is `none` or `high` | `none`, `off`, `minimal`, `low` → `none`; anything else → `high`, as Vibe maps them. Unset sends nothing (server default) |
+| Earlier reasoning must be sent back: the docs warn that stripping `ThinkChunk` "significantly degrades output quality" | Assistant messages carry their reasoning as a `thinking` part before the text, unless the effort is `none` or the model sets `reasoning.preserve_in_history = false` |
+| Streamed `content` may be a list of `text` and `thinking` parts | Read for every server, not only Mistral |
+| `/models` reports `max_context_length` | Read during discovery, so the 1M window is found without configuration |
+| Tool-call ids are 9 letters or digits | Ids that aren't (our text-parsed calls, or history from another model) are replaced by a stable 9-character id derived from them, for the call and its result alike. This also applies to any model named `mistral-large*` on other servers (vLLM with the Mistral tokenizer) |
+| Tool results carry the tool `name`; an empty answer next to tool calls is `""` | Both sent in the Mistral dialect only (other servers keep `null`, which some require) |
+| `prompt_cache_key` raises cache hits; cached input costs 10% | A key derived from the system prompt and the first user message, so it stays the same for the whole session |
+| Tool calls arrive in one piece once fully generated, so a long call is silent; Vibe has no idle timeout by default | Our idle timeout stays at 300 s |
+| Retries 429, 500, 502, 503, 504, 520 | 520 added |
+| `cached_tokens` under `usage.prompt_tokens_details` | Already read |
+
+No Mistral profile was added. The generic profile already uses the same tool shapes as Vibe (exact-string `edit`, `read` with offset and limit). Temperature is left to the server, whose default "varies depending on the model" per Mistral's docs; Vibe uses 1.0 with thinking for its default model, but Mistral has published no value for Large 4. To set it anyway, list the model with `sampling.temperature` in the provider file.
+
+### Not done yet
+
+- Not run against the live API: there is no Mistral key in the test environment. The request shape is covered by unit tests against what Vibe sends and the API reference.
+- Images: Large 4 accepts them, but we send no images yet.
+- Self-hosting the open weights, when they ship: vLLM with `--tokenizer-mode mistral --config-format mistral --load-format mistral --enable-auto-tool-choice --tool-call-parser mistral`. At about 1T parameters this needs several GPUs. Check these flags against the release and add them to setup's vLLM note.
+- A budget-capped eval subset through the API ([13](13-testing-and-evals.md)) before calling it verified.
 
 ## Open questions
 
