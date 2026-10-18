@@ -24,6 +24,8 @@ const SPIN_EVERY: u64 = 5;
 pub struct AppInfo {
     pub version: String,
     pub cwd: String,
+    /// The checked-out git branch, or a short commit when detached.
+    pub branch: Option<String>,
     pub model: Option<String>,
     pub profile: String,
     pub permission_mode: String,
@@ -48,6 +50,7 @@ impl AppInfo {
         };
         Self {
             version: env!("CARGO_PKG_VERSION").to_owned(),
+            branch: git_branch(&config.dirs.workspace_root),
             cwd,
             model: Some(config.settings.model.default.clone()).filter(|m| !m.is_empty()),
             profile: "empty".into(),
@@ -80,6 +83,28 @@ impl AppInfo {
                 .collect(),
         }
     }
+}
+
+/// The branch in `.git/HEAD` of `dir` or a parent; worktrees and submodules point at
+/// their git dir with a `gitdir:` file.
+fn git_branch(dir: &std::path::Path) -> Option<String> {
+    let git = dir
+        .ancestors()
+        .map(|d| d.join(".git"))
+        .find(|g| g.exists())?;
+    let git = if git.is_file() {
+        let link = std::fs::read_to_string(&git).ok()?;
+        let target = link.strip_prefix("gitdir:")?.trim();
+        git.parent()?.join(target)
+    } else {
+        git
+    };
+    let head = std::fs::read_to_string(git.join("HEAD")).ok()?;
+    let head = head.trim();
+    Some(match head.strip_prefix("ref: refs/heads/") {
+        Some(branch) => branch.to_owned(),
+        None => head.chars().take(7).collect(),
+    })
 }
 
 /// A row of the slash popup: a built-in command or a skill.
@@ -115,17 +140,46 @@ pub(crate) enum Entry {
     System(String),
     Warning(String),
     Error(String),
+    /// What a finished turn took, shown as a dim rule.
+    TurnSummary(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ToolEntry {
     pub call_id: CallId,
+    pub name: String,
     pub summary: String,
     /// `None` while running.
     pub ok: Option<bool>,
     pub result: String,
     /// Live output while running; the full diff or output once done.
     pub detail: String,
+    pub started: Option<Instant>,
+    pub took: Option<Duration>,
+}
+
+/// A plan item's state, from the `todo` tool's `[x]`/`[~]`/`[ ]` marks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlanState {
+    Done,
+    Active,
+    Pending,
+}
+
+/// Plan items from the `todo` tool's rendered checklist.
+pub(crate) fn parse_plan(text: &str) -> Vec<(PlanState, String)> {
+    text.lines()
+        .filter_map(|l| {
+            let (mark, rest) = (l.get(..3)?, l.get(3..)?.trim());
+            let state = match mark {
+                "[x]" => PlanState::Done,
+                "[~]" => PlanState::Active,
+                "[ ]" => PlanState::Pending,
+                _ => return None,
+            };
+            Some((state, rest.to_owned()))
+        })
+        .collect()
 }
 
 /// A tool call waiting for the user's decision.
@@ -156,6 +210,11 @@ pub struct App {
     pub(crate) context: Option<(u32, u32)>,
     /// Generation speed of the last response, tokens per second.
     pub(crate) speed: Option<f32>,
+    /// When the running turn started, and how many tools it has called.
+    pub(crate) turn_started: Option<Instant>,
+    turn_tools: u32,
+    /// The model's current plan, from its last `todo` call.
+    pub(crate) plan: Vec<(PlanState, String)>,
     panel_collapsed: bool,
     /// A `/resume` is in flight: clear the transcript when it lands.
     resuming: bool,
@@ -201,6 +260,9 @@ impl App {
             approval: None,
             context: None,
             speed: None,
+            turn_started: None,
+            turn_tools: 0,
+            plan: Vec::new(),
             panel_collapsed: false,
             resuming: false,
             mode_before_plan: String::new(),
@@ -309,6 +371,10 @@ impl App {
                 .iter()
                 .any(|(_, s)| matches!(s, LoadState::Running { .. }));
         if animating && !self.info.ui.reduced_motion && self.frame.is_multiple_of(SPIN_EVERY) {
+            self.dirty = true;
+        }
+        // The elapsed-time clock in the status bar.
+        if self.turn_running && self.frame.is_multiple_of(60) {
             self.dirty = true;
         }
     }
@@ -477,10 +543,13 @@ impl App {
                             result,
                         } => Entry::Tool(ToolEntry {
                             call_id: CallId(String::new()),
+                            name: summary.split_whitespace().next().unwrap_or_default().to_owned(),
                             summary,
                             ok: Some(ok),
                             result,
                             detail: String::new(),
+                            started: None,
+                            took: None,
                         }),
                         ReplayItem::Compacted => {
                             Entry::System("── earlier conversation summarized ──".into())
@@ -491,6 +560,8 @@ impl App {
             Event::TurnStarted { .. } => {
                 self.queued = false;
                 self.turn_running = true;
+                self.turn_started = Some(Instant::now());
+                self.turn_tools = 0;
             }
             Event::AssistantDelta { text } => match self.transcript.last_mut() {
                 Some(Entry::Assistant(buf)) => buf.push_str(&text),
@@ -513,23 +584,37 @@ impl App {
                     .transcript
                     .push(Entry::Reasoning(text.trim_start().to_owned())),
             },
-            Event::ToolCallBegin { call } => self.transcript.push(Entry::Tool(ToolEntry {
-                call_id: call.call_id,
-                summary: call.summary,
-                ok: None,
-                result: String::new(),
-                detail: String::new(),
-            })),
+            Event::ToolCallBegin { call } => {
+                self.turn_tools += 1;
+                self.transcript.push(Entry::Tool(ToolEntry {
+                    call_id: call.call_id,
+                    name: call.name,
+                    summary: call.summary,
+                    ok: None,
+                    result: String::new(),
+                    detail: String::new(),
+                    started: Some(Instant::now()),
+                    took: None,
+                }));
+            }
             Event::ToolCallOutputDelta { call_id, chunk } => {
                 if let Some(t) = self.tool_mut(&call_id) {
                     t.detail.push_str(&chunk);
                 }
             }
             Event::ToolCallEnd { call_id, result } => {
+                let mut plan = None;
                 if let Some(t) = self.tool_mut(&call_id) {
                     t.ok = Some(result.ok);
                     t.result = result.summary;
                     t.detail = result.detail.unwrap_or_default();
+                    t.took = t.started.map(|s| s.elapsed());
+                    if t.name == "todo" && result.ok {
+                        plan = Some(parse_plan(&t.detail));
+                    }
+                }
+                if let Some(plan) = plan {
+                    self.plan = plan;
                 }
             }
             Event::ApprovalRequest { call_id, request } => {
@@ -556,9 +641,27 @@ impl App {
             } => self.note(format!(
                 "── earlier conversation summarized: {replaced} messages → ~{summary_tokens} tokens ──"
             )),
-            Event::TurnComplete { .. } => {
+            Event::TurnComplete { usage, .. } => {
                 self.turn_running = false;
                 self.approval = None;
+                if let Some(started) = self.turn_started.take() {
+                    let mut parts = vec![crate::theme::elapsed(started.elapsed())];
+                    match self.turn_tools {
+                        0 => {}
+                        1 => parts.push("1 tool".into()),
+                        n => parts.push(format!("{n} tools")),
+                    }
+                    if usage.completion_tokens > 0 {
+                        parts.push(format!(
+                            "{} tokens out",
+                            crate::theme::tokens(usage.completion_tokens)
+                        ));
+                    }
+                    if let Some(tps) = self.speed {
+                        parts.push(format!("{tps:.0} t/s"));
+                    }
+                    self.transcript.push(Entry::TurnSummary(parts.join(" · ")));
+                }
                 if self.info.permission_mode == "plan" {
                     self.note(
                         "plan mode · /plan accept carries out the plan; reply to revise it".into(),
@@ -578,6 +681,7 @@ impl App {
             }
             Event::TurnAborted { reason, .. } => {
                 self.turn_running = false;
+                self.turn_started = None;
                 self.approval = None;
                 self.note(reason);
             }
@@ -1195,6 +1299,7 @@ mod tests {
         AppInfo {
             version: "0.1.0".into(),
             cwd: "~/src/project".into(),
+            branch: Some("main".into()),
             model: None,
             profile: "empty".into(),
             permission_mode: "ask".into(),

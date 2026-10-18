@@ -29,7 +29,6 @@ perf.data*
 # insta writes these when a snapshot changes; accept with `cargo insta review`.
 *.snap.new
 *.pending-snap
-*.snap
 
 # --- Local secrets and environment ---
 .env

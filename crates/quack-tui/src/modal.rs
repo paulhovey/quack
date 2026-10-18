@@ -4,10 +4,14 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::Modifier;
+use ratatui::layout::{Constraint, Layout, Margin, Rect};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Padding, Paragraph, Tabs, Wrap};
+use ratatui::widgets::{
+    Block, Clear, List, ListItem, ListState, Padding, Paragraph, Scrollbar, ScrollbarOrientation,
+    ScrollbarState, Wrap,
+};
+use unicode_width::UnicodeWidthStr;
 
 use crate::commands::{COMMANDS, KEYS};
 use crate::fuzzy;
@@ -183,8 +187,11 @@ impl Modal {
         f.render_widget(Clear, area);
         let block = Block::bordered()
             .border_set(glyphs.border)
-            .border_style(theme.border)
-            .title(Span::styled(format!(" {} ", self.title), theme.accent));
+            .border_style(theme.accent)
+            .title(Span::styled(
+                format!(" {} ", self.title),
+                theme.pill(theme.accent),
+            ));
         let inner = block.inner(area);
         f.render_widget(block, area);
 
@@ -198,21 +205,37 @@ impl Modal {
         .areas(inner);
 
         if tabs_h > 0 {
-            let titles: Vec<String> = self.tabs.iter().map(|t| t.title.clone()).collect();
-            f.render_widget(
-                Tabs::new(titles)
-                    .select(self.tab)
-                    .style(theme.dim)
-                    .highlight_style(theme.accent.add_modifier(Modifier::BOLD)),
-                tabs_area,
-            );
+            let mut spans = vec![Span::raw(" ")];
+            for (i, tab) in self.tabs.iter().enumerate() {
+                let style = if i == self.tab {
+                    theme.pill(theme.accent)
+                } else {
+                    theme.dim
+                };
+                spans.push(Span::styled(format!(" {} ", tab.title), style));
+                spans.push(Span::raw(" "));
+            }
+            f.render_widget(Paragraph::new(Line::from(spans)), tabs_area);
         }
-        let filter_line = Line::from(vec![
-            Span::styled(" filter: ", theme.dim),
-            Span::raw(self.filter.clone()),
-        ]);
-        f.render_widget(Paragraph::new(filter_line), filter_area);
-        let cursor_x = filter_area.x + 9 + u16::try_from(self.filter.chars().count()).unwrap_or(0);
+        let total = self.items().len();
+        let count = if self.filter.is_empty() {
+            format!("{total} ")
+        } else {
+            format!("{} of {total} ", self.filtered.len())
+        };
+        let mut filter_line = vec![Span::styled(format!(" {} ", glyphs.prompt), theme.accent)];
+        if self.filter.is_empty() {
+            filter_line.push(Span::styled("type to filter", theme.dim));
+        } else {
+            filter_line.push(Span::styled(self.filter.clone(), theme.user));
+        }
+        f.render_widget(Paragraph::new(Line::from(filter_line)), filter_area);
+        f.render_widget(
+            Paragraph::new(Line::styled(count, theme.dim).right_aligned()),
+            filter_area,
+        );
+        let prompt_w = u16::try_from(glyphs.prompt.width() + 2).unwrap_or(3);
+        let cursor_x = filter_area.x + prompt_w + u16::try_from(self.filter.width()).unwrap_or(0);
         f.set_cursor_position((
             cursor_x.min(filter_area.right().saturating_sub(1)),
             filter_area.y,
@@ -231,40 +254,65 @@ impl Modal {
         self.draw_list(f, list_area, theme, glyphs);
         self.draw_details(f, detail_area, theme, glyphs);
 
-        let mut spans = vec![Span::raw(" ")];
-        for (key, what) in &self.footer {
-            if *key == "tab" && self.tabs.len() < 2 {
-                continue;
-            }
-            spans.push(Span::styled(*key, theme.accent));
-            spans.push(Span::styled(format!(" {what}   "), theme.dim));
-        }
-        f.render_widget(Paragraph::new(Line::from(spans)), footer);
+        let keys: Vec<(&str, &str)> = self
+            .footer
+            .iter()
+            .filter(|(k, _)| *k != "tab" || self.tabs.len() > 1)
+            .copied()
+            .collect();
+        f.render_widget(Paragraph::new(crate::ui::key_hints(theme, &keys)), footer);
     }
 
     fn draw_list(&self, f: &mut Frame<'_>, area: Rect, theme: &Theme, glyphs: &Glyphs) {
         let block = Block::bordered()
             .border_set(glyphs.border)
             .border_style(theme.border);
-        let width = usize::from(block.inner(area).width);
+        let inner = block.inner(area);
+        let width = usize::from(inner.width);
         let rows: Vec<ListItem<'_>> = self
             .filtered
             .iter()
-            .filter_map(|i| self.items().get(*i))
-            .map(|item| {
-                let used = item.label.chars().count() + item.hint.chars().count() + 1;
-                let pad = " ".repeat(width.saturating_sub(used + 1));
-                ListItem::new(Line::from(vec![
-                    Span::raw(format!(" {}", item.label)),
-                    Span::raw(pad),
-                    Span::styled(item.hint.clone(), theme.dim),
-                ]))
+            .enumerate()
+            .filter_map(|(n, i)| self.items().get(*i).map(|item| (n == self.selected, item)))
+            .map(|(on, item)| {
+                let soft = if on { theme.sel_text } else { theme.dim };
+                let hint = truncate(&item.hint, width / 2);
+                let label = truncate(&item.label, width.saturating_sub(hint.width() + 4));
+                let hits = if label == item.label {
+                    fuzzy::positions(&self.filter, &item.label)
+                } else {
+                    Vec::new()
+                };
+                let pad = width.saturating_sub(label.width() + hint.width() + 3);
+                let mut spans = vec![
+                    Span::styled(if on { glyphs.bar } else { " " }, theme.accent),
+                    Span::raw(" "),
+                ];
+                let base = if on { theme.selected } else { Style::new() };
+                spans.extend(theme.highlight(&label, &hits, base));
+                spans.push(Span::raw(" ".repeat(pad)));
+                spans.push(Span::styled(hint, soft));
+                ListItem::new(Line::from(spans))
             })
             .collect();
         let empty = rows.is_empty();
         let list = List::new(rows).block(block).highlight_style(theme.selected);
         let mut state = ListState::default().with_selected((!empty).then_some(self.selected));
         f.render_stateful_widget(list, area, &mut state);
+        if self.filtered.len() > usize::from(inner.height) {
+            let mut sb = ScrollbarState::new(self.filtered.len()).position(self.selected);
+            f.render_stateful_widget(
+                Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                    .begin_symbol(None)
+                    .end_symbol(None)
+                    .thumb_symbol(glyphs.scroll[0])
+                    .thumb_style(theme.accent)
+                    .track_symbol(Some(glyphs.scroll[1]))
+                    .track_style(theme.border),
+                area.inner(Margin::new(0, 1)),
+                &mut sb,
+            );
+        }
     }
 
     fn draw_details(&self, f: &mut Frame<'_>, area: Rect, theme: &Theme, glyphs: &Glyphs) {
@@ -283,6 +331,25 @@ impl Modal {
             area,
         );
     }
+}
+
+/// Truncate to `max` columns with an ellipsis.
+fn truncate(s: &str, max: usize) -> String {
+    if s.width() <= max {
+        return s.to_owned();
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    for c in s.chars() {
+        let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+        if used + w + 1 > max {
+            break;
+        }
+        out.push(c);
+        used += w;
+    }
+    out.push('…');
+    out
 }
 
 pub(crate) fn centered(area: Rect, pct_w: u16, pct_h: u16) -> Rect {

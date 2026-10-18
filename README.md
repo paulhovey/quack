@@ -101,7 +101,7 @@ Everything below works today. Planned work is listed separately at the end.
 - Permission modes: `read-only`, `ask`, `auto-edit`, `full-auto` and `yolo`.
 - `/yolo` toggles yolo mode on and off (back to the mode you were in); `--yolo` starts in
   it. Nothing asks and the sandbox is off; only the built-in deny list and your deny rules
-  still apply. The status bar shows YOLO while it is on.
+  still apply. The status bar shows a red YOLO badge while it is on.
 - Allow and deny rules for shell commands, edits, reads and MCP tools, on top of a built-in
   deny floor that cannot be removed.
 - Compound commands are split: in `git status && rm -rf x` the `rm` still needs approval, and
@@ -177,8 +177,19 @@ Everything below works today. Planned work is listed separately at the end.
 
 ### Interface
 
-- A full-screen terminal UI with markdown rendering, a slash-command palette and an ASCII
-  mode.
+- A full-screen terminal UI with markdown rendering and an ASCII mode.
+- A slash-command palette that highlights the letters you typed and shows what doesn't fit
+  on the row (the rest of a description, aliases) underneath. Every picker (`/models`,
+  `/config`, `/help`, …) works the same way, with tabs, match highlighting and a scrollbar.
+- A status bar with the permission mode as a coloured badge, a context gauge that turns
+  yellow then red as the window fills, generation speed, and what the model is doing right
+  now (thinking, writing, running a tool) with a running clock.
+- The model's plan as a live checklist, plus a strip above the input showing progress and
+  the step in hand.
+- Tool calls coloured by kind, with how long slow ones took. Diffs get a coloured gutter.
+  Each turn ends with a short line: time taken, tools called, tokens out.
+- The git branch in the header, and a welcome screen with the first few things worth
+  knowing.
 - `/copy` copies through the terminal (OSC 52), so it works over SSH.
 - `quack exec "..."` runs one turn without the UI, for scripts and CI.
 
