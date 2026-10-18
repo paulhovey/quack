@@ -392,7 +392,8 @@ pub(crate) fn models(
             alt: None,
         }),
         Some(providers) => {
-            for p in providers {
+            // The bundle's providers that are not set up are listed in /providers.
+            for p in providers.iter().filter(|p| p.available || !p.bundled) {
                 if !p.available {
                     items.push(ModalItem {
                         label: format!("{} (unavailable)", p.id),
@@ -449,6 +450,15 @@ pub(crate) fn models(
                         alt: Some(format!("/models default {reference}")),
                     });
                 }
+            }
+            if items.is_empty() {
+                items.push(placeholder(
+                    "no models ready",
+                    "Start a server on this machine and run /setup, or run `cutoffharness \
+                     setup` in a terminal to give a hosted service its key. /providers lists \
+                     what is configured.",
+                    theme,
+                ));
             }
         }
     }
@@ -952,6 +962,8 @@ pub(crate) fn providers(
                     Line::raw(""),
                     if p.available {
                         Line::styled("usable", theme.ok)
+                    } else if p.bundled {
+                        Line::styled("offered by the defaults bundle; not set up", theme.dim)
                     } else {
                         Line::styled("unavailable", theme.warn)
                     },
@@ -989,6 +1001,8 @@ pub(crate) fn providers(
                     },
                     hint: if p.available {
                         format!("{} models", p.models.len())
+                    } else if p.bundled {
+                        "not set up".into()
                     } else {
                         "unavailable".into()
                     },
@@ -1152,8 +1166,9 @@ pub(crate) fn setup(
     let items = match servers {
         None => vec![placeholder(
             "looking for servers…",
-            "Checking 127.0.0.1 on the default ports of Ollama (11434), llama.cpp (8080), \
-             vLLM (8000), LM Studio (1234) and SGLang (30000). Nothing leaves this machine.",
+            "Checking the providers in providers.d that point at this machine (Ollama, \
+             llama.cpp, vLLM, LM Studio and SGLang out of the box). Nothing leaves this \
+             machine.",
             theme,
         )],
         Some([]) => vec![ModalItem {
@@ -1161,9 +1176,9 @@ pub(crate) fn setup(
             hint: String::new(),
             detail: vec![
                 Line::styled(
-                    "Nothing answered on the default ports. Start one, for example \
-                     `ollama serve` or `llama-server --jinja -m <model.gguf>`, then run \
-                     /setup again.",
+                    "None of the servers on this machine in providers.d answered. Start \
+                     one, for example `ollama serve` or `llama-server --jinja -m \
+                     <model.gguf>`, then run /setup again.",
                     theme.dim,
                 ),
                 Line::raw(""),

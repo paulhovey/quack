@@ -332,6 +332,27 @@ pub struct AllowList {
     #[serde(deserialize_with = "list::de")]
     #[schemars(with = "ListOrAppend")]
     pub allowed: Vec<String>,
+    /// Host globs a provider's `base_url` or a remote MCP server's `url` must match, e.g.
+    /// `["llm.corp.example", "127.0.0.1"]`. Empty allows every host.
+    #[serde(deserialize_with = "list::de")]
+    #[schemars(with = "ListOrAppend")]
+    pub hosts: Vec<String>,
+}
+
+impl AllowList {
+    /// Whether policy allows an item with this id and, for a network item, this URL.
+    pub fn allows(&self, id: &str, url: Option<&str>) -> bool {
+        use crate::items::glob_match;
+        let id_ok = self.allowed.is_empty() || self.allowed.iter().any(|g| glob_match(g, id));
+        let host_ok = match url {
+            Some(url) if !self.hosts.is_empty() => {
+                let host = crate::url_host(url);
+                self.hosts.iter().any(|g| glob_match(g, host))
+            }
+            _ => true,
+        };
+        id_ok && host_ok
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

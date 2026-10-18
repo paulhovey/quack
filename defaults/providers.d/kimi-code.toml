@@ -1,0 +1,7 @@
+#:schema ../schemas/provider.json
+# Kimi Code plan. Plan keys only work on this endpoint; API keys use moonshot.toml.
+# Not contacted until KIMI_API_KEY is set or `cutoffharness setup` stores a key.
+name = "Kimi Code plan"
+group = "From the model makers"
+base_url = "https://api.kimi.com/coding/v1"
+api_key = { env = "KIMI_API_KEY" }

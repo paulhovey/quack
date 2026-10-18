@@ -1,0 +1,5 @@
+#:schema ../schemas/provider.json
+# vLLM on this machine. Its models are listed while it runs.
+name = "vLLM"
+base_url = "http://127.0.0.1:8000/v1"
+note = "Start vLLM with `--enable-auto-tool-choice --tool-call-parser <parser>` for your model so tool calls work."

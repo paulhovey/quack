@@ -1,0 +1,7 @@
+#:schema ../schemas/provider.json
+# Synthetic: open models, by subscription or usage.
+# Not contacted until SYNTHETIC_API_KEY is set or `cutoffharness setup` stores a key.
+name = "Synthetic"
+group = "Open-model services"
+base_url = "https://api.synthetic.new/openai/v1"
+api_key = { env = "SYNTHETIC_API_KEY" }

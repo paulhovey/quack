@@ -4,7 +4,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use cutoffharness_config::{ItemState, Loaded, ProviderFile, glob_match, load_providers};
+use cutoffharness_config::{
+    ItemState, LayerKind, Loaded, ProviderFile, glob_match, load_providers,
+};
 use cutoffharness_protocol::{ModelInfo, ProviderModels};
 use cutoffharness_providers::Provider;
 use tokio::task::JoinSet;
@@ -28,11 +30,13 @@ pub(crate) async fn catalog_of(config: Arc<Loaded>, only: Option<&str>) -> Vec<P
     for (order, item) in items.enumerate() {
         let network = config.settings.network.clone();
         tasks.spawn(async move {
-            let entry = match item.state {
+            let bundled = item.layer == LayerKind::Defaults;
+            let mut entry = match item.state {
                 ItemState::Loaded(file) => probe(&item.id, file, network).await,
                 ItemState::Disabled(why) => unavailable(&item.id, why),
                 ItemState::Failed(d) => unavailable(&item.id, d.one_line()),
             };
+            entry.bundled = bundled;
             (order, entry)
         });
     }
@@ -51,6 +55,7 @@ fn unavailable(id: &str, note: String) -> ProviderModels {
         available: false,
         note,
         models: Vec::new(),
+        bundled: false,
     }
 }
 
@@ -117,5 +122,6 @@ async fn probe(
         available,
         note,
         models,
+        bundled: false,
     }
 }

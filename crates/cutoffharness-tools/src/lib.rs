@@ -9,6 +9,7 @@ mod read;
 mod registry;
 mod search;
 mod shell;
+mod shell_split;
 mod skill;
 mod text;
 mod write;

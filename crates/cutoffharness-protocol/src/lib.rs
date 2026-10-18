@@ -323,6 +323,10 @@ pub struct ProviderModels {
     /// Why it is unavailable, or a short status.
     pub note: String,
     pub models: Vec<ModelInfo>,
+    /// From the defaults bundle and not changed by the user: when unavailable it is an
+    /// offer (a key not set, a server not running), not a problem.
+    #[serde(default)]
+    pub bundled: bool,
 }
 
 /// An MCP server from `mcp.d/` and its state.

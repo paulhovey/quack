@@ -1,0 +1,7 @@
+#:schema ../schemas/provider.json
+# DeepInfra: hosted open models.
+# Not contacted until DEEPINFRA_API_KEY is set or `cutoffharness setup` stores a key.
+name = "DeepInfra"
+group = "Open-model services"
+base_url = "https://api.deepinfra.com/v1/openai"
+api_key = { env = "DEEPINFRA_API_KEY" }

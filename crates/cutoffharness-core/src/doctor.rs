@@ -26,14 +26,24 @@ pub async fn run(config: Arc<Loaded>) -> Vec<DoctorCheck> {
         .await
         .unwrap_or_default();
 
+    // The bundle's providers that cannot be used yet are offers, not problems.
+    let (offers, providers): (Vec<_>, Vec<_>) = providers
+        .into_iter()
+        .partition(|p| p.bundled && !p.available);
     let usable = providers.iter().filter(|p| p.available).count();
+    let offered = match offers.len() {
+        0 => String::new(),
+        n => format!(" · {n} more offered by the defaults bundle"),
+    };
     checks.insert(
         2,
         match providers.len() {
             0 => check(
                 "providers",
                 CheckStatus::Fail,
-                "none configured: run `cutoffharness setup`, or add a file to providers.d (see `config paths`)",
+                format!(
+                    "none ready{offered}: run `cutoffharness setup`, or add a file to providers.d (see `config paths`)"
+                ),
             ),
             n => check(
                 "providers",
@@ -44,7 +54,7 @@ pub async fn run(config: Arc<Loaded>) -> Vec<DoctorCheck> {
                 } else {
                     CheckStatus::Ok
                 },
-                format!("{usable} of {n} usable"),
+                format!("{usable} of {n} usable{offered}"),
             ),
         },
     );
@@ -66,6 +76,15 @@ pub async fn run(config: Arc<Loaded>) -> Vec<DoctorCheck> {
                 detail,
             ),
         );
+    }
+    let cfg = config.clone();
+    let usable: Vec<String> = providers
+        .iter()
+        .filter(|p| p.available)
+        .map(|p| p.id.clone())
+        .collect();
+    if let Ok(c) = tokio::task::spawn_blocking(move || egress_check(&cfg, &usable)).await {
+        checks.push(c);
     }
     checks
 }
@@ -230,6 +249,49 @@ fn writable(dir: &Path) -> std::io::Result<()> {
     let probe = dir.join(".doctor-probe");
     std::fs::write(&probe, b"")?;
     std::fs::remove_file(probe)
+}
+
+/// Every host this configuration can send requests to: the usable providers and the
+/// enabled remote MCP servers. Nothing else is contacted.
+fn egress_check(config: &Loaded, usable: &[String]) -> DoctorCheck {
+    let mut hosts: Vec<String> = Vec::new();
+    let mut add = |url: &str| {
+        let h = cutoffharness_config::url_host(url).to_ascii_lowercase();
+        if !hosts.contains(&h) {
+            hosts.push(h);
+        }
+    };
+    for item in cutoffharness_config::load_providers(config) {
+        if let Some(f) = item.loaded()
+            && usable.contains(&item.id)
+        {
+            add(&f.base_url);
+        }
+    }
+    for item in cutoffharness_config::load_mcp(config) {
+        if let Some(f) = item.loaded()
+            && !f.url.is_empty()
+        {
+            add(&f.url);
+        }
+    }
+    let mut detail = if hosts.is_empty() {
+        "no hosts".to_owned()
+    } else {
+        hosts.join(", ")
+    };
+    let policy = &config.settings.policy;
+    let limits: Vec<&str> = policy
+        .providers
+        .hosts
+        .iter()
+        .chain(&policy.mcp.hosts)
+        .map(String::as_str)
+        .collect();
+    if !limits.is_empty() {
+        detail.push_str(&format!(" · policy allows only {}", limits.join(", ")));
+    }
+    check("network", CheckStatus::Info, detail)
 }
 
 /// MCP files: each one parses, names a transport, and a local server's program is on

@@ -1151,6 +1151,7 @@ mod tests {
         app.on_engine(Event::ModelCatalog {
             providers: vec![
                 ProviderModels {
+                    bundled: false,
                     id: "charm".into(),
                     available: true,
                     note: "2 models".into(),
@@ -1168,6 +1169,7 @@ mod tests {
                     ],
                 },
                 ProviderModels {
+                    bundled: false,
                     id: "novita".into(),
                     available: false,
                     note: "set NOVITA_API_KEY to use this provider".into(),
@@ -1197,6 +1199,7 @@ mod tests {
         app.take_ops();
         app.on_engine(Event::ModelCatalog {
             providers: vec![ProviderModels {
+                bundled: false,
                 id: "charm".into(),
                 available: true,
                 note: String::new(),

@@ -1,0 +1,7 @@
+#:schema ../schemas/provider.json
+# Novita AI: hosted open models.
+# Not contacted until NOVITA_API_KEY is set or `cutoffharness setup` stores a key.
+name = "Novita AI"
+group = "Open-model services"
+base_url = "https://api.novita.ai/openai/v1"
+api_key = { env = "NOVITA_API_KEY" }

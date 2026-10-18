@@ -4,9 +4,12 @@
 //! `edit:src/**` and `read:docs/**` (path globs relative to the workspace root).
 //! Order: deny floor → deny rules → session approvals → allow rules → ask rules → mode default.
 //!
-//! M1 matches shell commands as plain strings, so an allow rule never applies to a command
-//! containing shell control operators (`;`, `&&`, `|`, `$(`, …): `git status && rm -rf x`
-//! does not match `shell:git status*`. Parsing compound commands comes in M3.
+//! A shell command is split into its simple commands first (`git status && rm -rf x` is
+//! `git status` and `rm -rf x`, and `$(...)` counts too). Deny and ask rules, and the deny
+//! floor, apply when the whole line or any one command matches. An allow rule applies only
+//! when every command is allowed (by a rule, or because it only reads, with at least one
+//! rule match) and nothing is redirected to a file. A line the splitter can't read
+//! (backticks, subshells, heredocs, `if`/`for`) gets no allow rule at all.
 
 use std::path::{Path, PathBuf};
 
@@ -15,6 +18,7 @@ use cutoffharness_config::settings::{PermissionMode, PermissionSettings};
 
 use crate::paths;
 use crate::registry::Subject;
+use crate::shell_split::{self, Split};
 
 /// Commands refused in every mode, even `full-auto`. Matched after collapsing whitespace.
 const DENY_FLOOR: &[&str] = &[
@@ -68,12 +72,9 @@ const READ_ONLY_GIT: &[&str] = &[
     "rev-parse",
 ];
 
-/// A single command that only reads: `git status`, `rg foo src`, but not `find -delete`.
+/// A simple command that only reads: `git status`, `rg foo src`, but not `find -delete`.
 fn read_only_command(cmd: &str) -> bool {
     let cmd = normalize(cmd);
-    if has_control_operators(&cmd) {
-        return false;
-    }
     let mut words = cmd.split(' ');
     match words.next() {
         Some("git") => words.next().is_some_and(|w| READ_ONLY_GIT.contains(&w)),
@@ -128,10 +129,7 @@ impl Rule {
     fn matches(&self, subject: &Subject, root: &Path) -> bool {
         let rel = |p: &Path| p.strip_prefix(root).unwrap_or(p).to_path_buf();
         match (self, subject) {
-            (Self::Shell(pat), Subject::Shell(cmd)) => {
-                let cmd = normalize(cmd);
-                !has_control_operators(&cmd) && glob_match(pat, &cmd)
-            }
+            (Self::Shell(pat), Subject::Shell(cmd)) => glob_match(pat, &normalize(cmd)),
             (Self::Edit(g), Subject::Edit(p)) => g.is_match(rel(p)),
             (Self::Read(g), Subject::Read(p)) => g.is_match(rel(p)),
             (Self::Mcp(pat), Subject::Mcp { server, tool, .. }) => {
@@ -146,10 +144,61 @@ fn normalize(cmd: &str) -> String {
     cmd.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn has_control_operators(cmd: &str) -> bool {
-    ["&&", "||", ";", "|", "`", "$(", ">", "<", "\n", "&"]
-        .iter()
-        .any(|op| cmd.contains(op))
+/// A shell command line as the rules see it.
+struct ShellLine {
+    whole: String,
+    split: Option<Split>,
+}
+
+impl ShellLine {
+    fn new(cmd: &str) -> Self {
+        Self {
+            whole: normalize(cmd),
+            split: shell_split::split(cmd),
+        }
+    }
+
+    /// The whole line and each simple command in it.
+    fn pieces(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.whole.as_str()).chain(
+            self.split
+                .iter()
+                .flat_map(|s| s.parts.iter().map(String::as_str)),
+        )
+    }
+
+    /// Some rule matches the whole line or one of its commands.
+    fn hit(&self, rules: &[Rule], root: &Path) -> bool {
+        self.pieces().any(|p| {
+            let one = Subject::Shell(p.to_owned());
+            rules.iter().any(|r| r.matches(&one, root))
+        })
+    }
+
+    /// Every command is allowed by a rule or only reads, at least one by a rule, and
+    /// nothing is written through a redirection.
+    fn allowed(&self, rules: &[Rule], root: &Path) -> bool {
+        let Some(split) = self.split.as_ref().filter(|s| !s.writes) else {
+            return false;
+        };
+        let mut matched = false;
+        for p in &split.parts {
+            let one = Subject::Shell(p.clone());
+            if rules.iter().any(|r| r.matches(&one, root)) {
+                matched = true;
+            } else if !read_only_command(p) {
+                return false;
+            }
+        }
+        matched
+    }
+
+    /// Every command only reads and nothing is redirected to a file.
+    fn read_only(&self) -> bool {
+        self.split
+            .as_ref()
+            .is_some_and(|s| !s.writes && s.parts.iter().all(|p| read_only_command(p)))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -207,31 +256,41 @@ impl Permissions {
                 && !self.session.contains(subject);
             return if ask { Decision::Ask } else { Decision::Allow };
         }
-        if let Subject::Shell(cmd) = subject {
-            let cmd = normalize(cmd);
-            if DENY_FLOOR.iter().any(|p| glob_match(p, &cmd)) {
-                return Decision::Deny("blocked by the built-in safety list".into());
-            }
+        let shell = match subject {
+            Subject::Shell(cmd) => Some(ShellLine::new(cmd)),
+            _ => None,
+        };
+        if let Some(line) = &shell
+            && line
+                .pieces()
+                .any(|p| DENY_FLOOR.iter().any(|f| glob_match(f, p)))
+        {
+            return Decision::Deny("blocked by the built-in safety list".into());
         }
-        if self.deny.iter().any(|r| r.matches(subject, &self.root)) {
+        let hit = |rules: &[Rule]| match &shell {
+            Some(line) => line.hit(rules, &self.root),
+            None => rules.iter().any(|r| r.matches(subject, &self.root)),
+        };
+        let allowed = || match &shell {
+            Some(line) => line.allowed(&self.allow, &self.root),
+            None => self.allow.iter().any(|r| r.matches(subject, &self.root)),
+        };
+        if hit(&self.deny) {
             return Decision::Deny("denied by a [permissions] deny rule".into());
         }
         if self.plan {
-            match subject {
-                Subject::Edit(_) => {
+            match (subject, &shell) {
+                (Subject::Edit(_), _) => {
                     return Decision::Deny(
                         "plan mode: no changes until the user accepts the plan".into(),
                     );
                 }
-                Subject::Shell(cmd)
-                    if !read_only_command(cmd)
-                        && !self.allow.iter().any(|r| r.matches(subject, &self.root)) =>
-                {
+                (_, Some(line)) if !line.read_only() && !allowed() => {
                     return Decision::Deny(
                         "plan mode: only read-only commands run while planning".into(),
                     );
                 }
-                Subject::Shell(_) => return Decision::Allow,
+                (_, Some(_)) => return Decision::Allow,
                 _ => {}
             }
         }
@@ -250,12 +309,10 @@ impl Permissions {
         if self.mode == PermissionMode::ReadOnly && matches!(subject, Subject::Edit(_)) {
             return Decision::Deny("read-only mode: file changes are not allowed".into());
         }
-        if self.session.contains(subject)
-            || self.allow.iter().any(|r| r.matches(subject, &self.root))
-        {
+        if self.session.contains(subject) || allowed() {
             return Decision::Allow;
         }
-        if self.ask.iter().any(|r| r.matches(subject, &self.root)) {
+        if hit(&self.ask) {
             return Decision::Ask;
         }
         let inside = |p: &Path| paths::inside(&self.root, p);
@@ -371,6 +428,49 @@ mod tests {
     }
 
     #[test]
+    fn compound_commands_are_checked_per_command() {
+        let p = perms(
+            PermissionMode::Ask,
+            &["shell:git status*", "shell:cargo test*", "shell:echo *"],
+            &[],
+        );
+        assert_eq!(p.check(&shell("git status && rm -rf x")), Decision::Ask);
+        assert_eq!(p.check(&shell("git status && cargo test")), Decision::Allow);
+        // Commands that only read may join an allowed one, but not stand alone.
+        assert_eq!(
+            p.check(&shell("cargo test 2>&1 | tail -50")),
+            Decision::Allow
+        );
+        assert_eq!(p.check(&shell("cat a | head")), Decision::Ask);
+        // Operators inside quotes are text.
+        assert_eq!(p.check(&shell("echo 'a && rm b'")), Decision::Allow);
+        // Substitutions run too; redirections write; unreadable lines get no allow.
+        assert_eq!(p.check(&shell("echo $(rm x)")), Decision::Ask);
+        assert_eq!(p.check(&shell("echo hi > notes.txt")), Decision::Ask);
+        assert_eq!(p.check(&shell("echo `rm x`")), Decision::Ask);
+
+        // Deny rules and the floor see every command, even in full-auto.
+        let full = perms(PermissionMode::FullAuto, &[], &["shell:rm *"]);
+        assert!(matches!(
+            full.check(&shell("git status && rm -rf x")),
+            Decision::Deny(_)
+        ));
+        assert!(matches!(
+            full.check(&shell("echo \"$(rm x)\"")),
+            Decision::Deny(_)
+        ));
+        let full = perms(PermissionMode::FullAuto, &[], &[]);
+        assert!(matches!(
+            full.check(&shell("cd /tmp; rm -rf /")),
+            Decision::Deny(_)
+        ));
+        assert_eq!(
+            full.check(&shell("cargo build && cargo test")),
+            Decision::Allow
+        );
+    }
+
+    #[test]
     fn session_approvals() {
         let mut p = perms(PermissionMode::Ask, &[], &[]);
         p.allow_session(shell("make"));
@@ -396,7 +496,11 @@ mod tests {
         assert_eq!(p.check(&shell("git status")), Decision::Allow);
         assert_eq!(p.check(&shell("rg foo src")), Decision::Allow);
         assert_eq!(p.check(&shell("cargo check -q")), Decision::Allow);
+        assert_eq!(p.check(&shell("rg foo | head -5")), Decision::Allow);
+        assert_eq!(p.check(&shell("git log 2>/dev/null")), Decision::Allow);
         for bad in [
+            "git log | xargs rm",
+            "ls $(touch x)",
             "git push",
             "find . -delete",
             "ls; rm x",

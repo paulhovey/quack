@@ -1,0 +1,6 @@
+#:schema ../schemas/provider.json
+# Ollama on this machine. Its models are listed while it runs.
+name = "Ollama"
+base_url = "http://127.0.0.1:11434"
+api = "ollama"
+note = "Uses Ollama's native API so each request sets the context window (its OpenAI endpoint silently cuts long prompts)."

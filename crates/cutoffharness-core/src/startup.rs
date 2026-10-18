@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use cutoffharness_config::provider::ModelEntry;
 use cutoffharness_config::settings::MemoryWrites;
 use cutoffharness_config::{
-    Item, ItemState, Loaded, ProjectStatus, ProviderFile, glob_match, load_providers,
+    Item, ItemState, LayerKind, Loaded, ProjectStatus, ProviderFile, glob_match, load_providers,
 };
 use cutoffharness_instructions::skills;
 use cutoffharness_profiles::{
@@ -402,8 +402,18 @@ async fn resolve_model(
     candidates.sort_by(|a, b| b.0.layer.cmp(&a.0.layer).then_with(|| a.0.id.cmp(&b.0.id)));
     let mut reasons = Vec::new();
     for (item, file) in candidates {
+        // The bundle's hosted services are offers: one is used once the user picks a
+        // model, never on its own, since it may cost money.
+        let offer =
+            item.layer == LayerKind::Defaults && !cutoffharness_config::is_loopback(&file.base_url);
         if let Some(missing) = missing_env_key(file) {
-            reasons.push(format!("{}: {missing} not set", item.id));
+            if !offer {
+                reasons.push(format!("{}: {missing} not set", item.id));
+            }
+            continue;
+        }
+        if offer {
+            reasons.push(format!("{}: key set; pick a model in /models", item.id));
             continue;
         }
         match try_provider(
@@ -421,6 +431,7 @@ async fn resolve_model(
             Err(e) => reasons.push(e),
         }
     }
+    reasons.push("/setup finds servers on this machine and sets up hosted services".into());
     let msg = format!("no usable provider · {}", reasons.join(" · "));
     Err((
         LoadState::NeedsAttention {

@@ -1,0 +1,7 @@
+#:schema ../schemas/provider.json
+# Charm Hyper: open coding models.
+# Not contacted until CHARM_API_KEY is set or `cutoffharness setup` stores a key.
+name = "Charm Hyper"
+group = "Open-model services"
+base_url = "https://hyper.charm.land/v1"
+api_key = { env = "CHARM_API_KEY" }

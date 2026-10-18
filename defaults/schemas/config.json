@@ -7,6 +7,11 @@
           "$ref": "#/$defs/ListOrAppend",
           "default": [],
           "description": "Id globs. Empty allows everything."
+        },
+        "hosts": {
+          "$ref": "#/$defs/ListOrAppend",
+          "default": [],
+          "description": "Host globs a provider's `base_url` or a remote MCP server's `url` must match, e.g.\n`[\"llm.corp.example\", \"127.0.0.1\"]`. Empty allows every host."
         }
       },
       "type": "object"
@@ -267,7 +272,8 @@
         "mcp": {
           "$ref": "#/$defs/AllowList",
           "default": {
-            "allowed": []
+            "allowed": [],
+            "hosts": []
           }
         },
         "project_config": {
@@ -277,7 +283,8 @@
         "providers": {
           "$ref": "#/$defs/AllowList",
           "default": {
-            "allowed": []
+            "allowed": [],
+            "hosts": []
           }
         }
       },
@@ -509,11 +516,13 @@
         "locked": [],
         "max_permission_mode": null,
         "mcp": {
-          "allowed": []
+          "allowed": [],
+          "hosts": []
         },
         "project_config": "trusted-only",
         "providers": {
-          "allowed": []
+          "allowed": [],
+          "hosts": []
         }
       },
       "description": "Only honoured in the system layer."

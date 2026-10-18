@@ -1,0 +1,7 @@
+#:schema ../schemas/provider.json
+# DeepSeek's API.
+# Not contacted until DEEPSEEK_API_KEY is set or `cutoffharness setup` stores a key.
+name = "DeepSeek API"
+group = "From the model makers"
+base_url = "https://api.deepseek.com"
+api_key = { env = "DEEPSEEK_API_KEY" }

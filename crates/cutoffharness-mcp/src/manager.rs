@@ -447,15 +447,8 @@ impl McpManager {
         if !self.network.offline {
             return Ok(());
         }
-        let host = url
-            .split("://")
-            .nth(1)
-            .unwrap_or(url)
-            .split(['/', '?'])
-            .next()
-            .unwrap_or_default();
-        let host = host.rsplit_once(':').map_or(host, |(h, _)| h);
-        let local = matches!(host, "localhost" | "127.0.0.1" | "[::1]");
+        let host = cutoffharness_config::url_host(url);
+        let local = cutoffharness_config::is_loopback(url);
         if local
             || self
                 .network

@@ -91,11 +91,7 @@ async fn detected_server_becomes_a_provider_and_the_default_model() {
     let text = std::fs::read_to_string(providers_d.join("llama-cpp.toml")).expect("file");
     assert_eq!(
         text,
-        format!(
-            "# llama.cpp on this machine, found by setup.\n\
-             # Start llama-server with `--jinja` so tool calls work.\n\
-             base_url = \"{base_url}\"\n"
-        )
+        format!("# Added by setup.\nbase_url = \"{base_url}\"\n")
     );
     let configured = next_matching(&mut engine, |e| {
         matches!(e, Event::SessionConfigured { .. })

@@ -25,8 +25,15 @@ pub struct ProviderFile {
     /// Defaults to the file stem.
     #[serde(default)]
     pub id: Option<String>,
+    /// Shown by setup and `/providers`; defaults to the id.
     #[serde(default)]
     pub name: String,
+    /// Heading setup lists a hosted service under.
+    #[serde(default)]
+    pub group: String,
+    /// A hint shown by setup, e.g. a server flag tool calls need.
+    #[serde(default)]
+    pub note: String,
     /// Wire protocol: `openai-chat` (default), `openai-responses`, `anthropic-messages`, `ollama`.
     #[serde(default = "openai_chat")]
     pub api: String,
@@ -101,6 +108,16 @@ fn models_de<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<ModelEntry>, 
         .into_iter()
         .map(|o| o.0)
         .collect())
+}
+
+/// A provider file's text with `api_key` read from the OS credential store entry `name`,
+/// keeping its comments and other settings.
+pub fn with_keyring_key(text: &str, name: &str) -> Result<String, String> {
+    let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e| format!("{e}"))?;
+    let mut key = toml_edit::InlineTable::new();
+    key.insert("keyring", name.into());
+    doc["api_key"] = toml_edit::value(key);
+    Ok(doc.to_string())
 }
 
 impl ProviderFile {
@@ -337,6 +354,18 @@ impl Default for Serving {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keyring_key_replaces_the_variable_and_keeps_the_rest() {
+        let text = "#:schema ../schemas/provider.json\n# A service.\nname = \"X\"\n\
+                    base_url = \"https://x/v1\"\napi_key = { env = \"X_KEY\" }\n";
+        let out = with_keyring_key(text, "x").expect("edit");
+        assert_eq!(
+            out,
+            "#:schema ../schemas/provider.json\n# A service.\nname = \"X\"\n\
+             base_url = \"https://x/v1\"\napi_key = { keyring = \"x\" }\n"
+        );
+    }
 
     #[test]
     fn minimal_file() {

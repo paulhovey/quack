@@ -1,0 +1,5 @@
+#:schema ../schemas/provider.json
+# SGLang on this machine. Its models are listed while it runs.
+name = "SGLang"
+base_url = "http://127.0.0.1:30000/v1"
+note = "Start SGLang with `--tool-call-parser <parser>` for your model so tool calls work."

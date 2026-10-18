@@ -530,18 +530,18 @@ impl Engine {
             return self
                 .warn("wait for the current turn to finish before adding a provider".into());
         }
-        let comment = crate::setup::local_comment(id);
-        let added = match crate::setup::add_provider(&self.config, id, base_url, api, &comment) {
-            Ok(a) => a,
-            Err(message) => {
-                return self.emit(Event::Error {
-                    error: EngineError {
-                        kind: EngineErrorKind::Config,
-                        message: format!("cannot add the provider: {message}"),
-                    },
-                });
-            }
-        };
+        let added =
+            match crate::setup::add_provider(&self.config, id, base_url, api, "Added by setup.") {
+                Ok(a) => a,
+                Err(message) => {
+                    return self.emit(Event::Error {
+                        error: EngineError {
+                            kind: EngineErrorKind::Config,
+                            message: format!("cannot add the provider: {message}"),
+                        },
+                    });
+                }
+            };
         self.emit(Event::ProviderAdded {
             id: added.id.clone(),
             path: added.path.map(|p| p.display().to_string()),

@@ -41,18 +41,26 @@ impl Io<'_> {
 pub(crate) async fn run(config: Arc<Loaded>, io: &mut Io<'_>) -> i32 {
     io.say("Checking the providers you have…");
     let providers = setup::providers(config.clone()).await;
-    if providers.is_empty() {
-        io.say("  none configured yet\n");
-    } else {
-        for p in &providers {
-            let mark = if p.available { "✓" } else { "✗" };
-            io.say(&format!("  {mark} {:<14} {}", p.id, p.note));
-        }
-        io.say("");
+    // Bundled providers that cannot be used yet are offers, listed under options 1 and 2.
+    let (offers, shown): (Vec<_>, Vec<_>) =
+        providers.iter().partition(|p| p.bundled && !p.available);
+    if shown.is_empty() {
+        io.say("  none ready yet");
     }
+    for p in &shown {
+        let mark = if p.available { "✓" } else { "✗" };
+        io.say(&format!("  {mark} {:<14} {}", p.id, p.note));
+    }
+    if !offers.is_empty() {
+        io.say(&format!(
+            "  ({} more from the defaults bundle, ready once they run or have a key)",
+            offers.len()
+        ));
+    }
+    io.say("");
     loop {
         io.say("What would you like to do?");
-        io.say("  1  look for model servers on this machine (Ollama, llama.cpp, vLLM, …)");
+        io.say("  1  look for model servers on this machine");
         io.say("  2  use a hosted service with an API key");
         io.say("  3  add an OpenAI-compatible server by its URL");
         io.say("  q  quit");
@@ -77,10 +85,20 @@ pub(crate) async fn run(config: Arc<Loaded>, io: &mut Io<'_>) -> i32 {
     }
 }
 
-/// Detect local servers and add the chosen one. Returns the provider id.
+/// Look for the configured servers on this machine and pick one. Returns the provider id.
 async fn local(config: &Arc<Loaded>, io: &mut Io<'_>) -> Result<Option<String>, String> {
-    io.say("Looking on 127.0.0.1 (ports 11434, 8080, 8000, 1234, 30000)…");
-    let found = setup::detect(config.clone()).await;
+    let candidates = setup::local_candidates(config);
+    if candidates.is_empty() {
+        io.say("No servers on this machine are configured. Use option 3 with the");
+        io.say("server's URL, for example http://127.0.0.1:8080/v1.");
+        return Ok(None);
+    }
+    let names: Vec<String> = candidates
+        .iter()
+        .map(|c| format!("{} {}", c.name, c.base_url))
+        .collect();
+    io.say(&format!("Looking for {}…", names.join(", ")));
+    let found = setup::detect_in(config.clone(), candidates).await;
     if found.is_empty() {
         io.say("No server answered. Start one (for example `ollama serve`, or");
         io.say("`llama-server --jinja -m <model.gguf>`) and try again, or use option 3");
@@ -88,16 +106,12 @@ async fn local(config: &Arc<Loaded>, io: &mut Io<'_>) -> Result<Option<String>, 
         return Ok(None);
     }
     for (i, s) in found.iter().enumerate() {
-        let note = s
-            .configured
-            .as_ref()
-            .map_or_else(String::new, |id| format!("  (already set up as `{id}`)"));
         let models = match s.models.len() {
             1 => "1 model".to_owned(),
             n => format!("{n} models"),
         };
         io.say(&format!(
-            "  {}  {:<10} {:<28} {models}{note}",
+            "  {}  {:<10} {:<28} {models}",
             i + 1,
             s.name,
             s.base_url,
@@ -106,6 +120,9 @@ async fn local(config: &Arc<Loaded>, io: &mut Io<'_>) -> Result<Option<String>, 
     let Some(server) = choose(io, &found, "Which one? [1] ")? else {
         return Ok(None);
     };
+    if !server.note.is_empty() {
+        io.say(&format!("Note: {}", server.note));
+    }
     if let Some(id) = &server.configured {
         return Ok(Some(id.clone()));
     }
@@ -114,81 +131,64 @@ async fn local(config: &Arc<Loaded>, io: &mut Io<'_>) -> Result<Option<String>, 
         &server.id,
         &server.base_url,
         server.api.as_deref(),
-        &setup::local_comment(&server.id),
+        "Added by setup.",
     )?;
     if let Some(path) = &added.path {
         io.say(&format!("Wrote {}", path.display()));
     }
-    if !server.note.is_empty() {
-        io.say(&format!("Note: {}", server.note));
-    }
     Ok(Some(added.id))
 }
 
-/// A hosted service from setup's list, with its key in the credential store or a variable.
+/// A configured hosted service, with its key from a variable or the credential store.
 fn hosted(config: &Loaded, io: &mut Io<'_>) -> Result<Option<String>, String> {
-    let services: Vec<(setup::Hosted, Option<String>)> = setup::hosted_services()
-        .into_iter()
-        .map(|s| {
-            let set_up = setup::configured_at(config, s.base_url);
-            (s, set_up)
-        })
-        .collect();
+    let services = setup::services(config);
+    if services.is_empty() {
+        io.say("No hosted services are configured. Use option 3 with the service's URL.");
+        return Ok(None);
+    }
     let mut group = "";
-    for (i, (s, set_up)) in services.iter().enumerate() {
+    for (i, s) in services.iter().enumerate() {
         if s.group != group {
-            group = s.group;
+            group = &s.group;
             io.say(&format!("  {group}"));
         }
-        let state = match set_up {
-            Some(id) => format!("set up as `{id}`"),
-            None if std::env::var_os(s.env).is_some() => format!("{} is set", s.env),
-            None => "needs an API key".into(),
+        let state = match (&s.env, s.ready) {
+            (_, true) => "ready".to_owned(),
+            (Some(env), false) => format!("needs {env}"),
+            (None, false) => "needs a key".to_owned(),
         };
         io.say(&format!("  {:>4}  {:<28} {state}", i + 1, s.name));
     }
     io.say("  For another service, use option 3 with its URL.");
-    let Some((service, set_up)) = choose(io, &services, "Which one? [1] ")? else {
+    let Some(service) = choose(io, &services, "Which one? [1] ")? else {
         return Ok(None);
     };
-    if let Some(id) = set_up {
-        return Ok(Some(id.clone()));
+    if service.ready {
+        return Ok(Some(service.id.clone()));
     }
-    let key = if std::env::var_os(service.env).is_some() {
-        io.say(&format!("Using the key in {}.", service.env));
-        setup::KeyFrom::Env
-    } else {
-        io.say(&format!(
-            "Where should the {} API key come from?",
-            service.name
-        ));
-        io.say("  1  the OS credential store (stored now, recommended)");
-        io.say(&format!(
-            "  2  the {} environment variable (you set it)",
-            service.env
-        ));
-        match io.ask("> [1] ").as_deref() {
-            None => return Ok(None),
-            Some("2") => setup::KeyFrom::Env,
-            Some(_) => {
-                store_key(io, service.id)?;
-                setup::KeyFrom::Keyring
-            }
+    let env = service.env.clone().unwrap_or_default();
+    io.say(&format!(
+        "Where should the {} API key come from?",
+        service.name
+    ));
+    io.say("  1  the OS credential store (stored now, recommended)");
+    io.say(&format!("  2  the {env} environment variable (you set it)"));
+    match io.ask("> [1] ").as_deref() {
+        None => Ok(None),
+        Some("2") => {
+            io.say(&format!("Set {env} in your shell profile, for example"));
+            io.say(&format!("  export {env}=…            (bash, zsh)"));
+            io.say(&format!("  $env:{env} = \"…\"         (PowerShell)"));
+            io.say("then start cutoffharness, or run setup again to pick a model.");
+            Ok(None)
         }
-    };
-    let added = setup::add_hosted(config, service, key)?;
-    if let Some(path) = &added.path {
-        io.say(&format!("Wrote {}", path.display()));
+        Some(_) => {
+            store_key(io, &service.id)?;
+            let path = setup::use_keyring_key(config, service)?;
+            io.say(&format!("Wrote {}", path.display()));
+            Ok(Some(service.id.clone()))
+        }
     }
-    if key == setup::KeyFrom::Env && std::env::var_os(service.env).is_none() {
-        let env = service.env;
-        io.say(&format!("Set {env} in your shell profile, for example"));
-        io.say(&format!("  export {env}=…            (bash, zsh)"));
-        io.say(&format!("  $env:{env} = \"…\"         (PowerShell)"));
-        io.say("then start cutoffharness, or run setup again to pick a model.");
-        return Ok(None);
-    }
-    Ok(Some(added.id))
 }
 
 /// Any OpenAI-compatible endpoint.
@@ -205,6 +205,7 @@ fn by_url(config: &Loaded, io: &mut Io<'_>) -> Result<Option<String>, String> {
         .filter(|s| !s.is_empty())
         .unwrap_or(suggested);
     setup::check_id(&id)?;
+    setup::check_policy(config, &id, &url)?;
     let key = (io.secret)("API key, if it needs one (input hidden; Enter for none): ")
         .map_err(|e| format!("cannot read the key: {e}"))?;
     let mut text = setup::provider_text("Added by setup.", &url, None);
@@ -394,20 +395,24 @@ mod tests {
         assert_eq!(file, format!("# Added by setup.\nbase_url = \"{url}\"\n"));
         let cfg = std::fs::read_to_string(tmp.path().join("user/config.toml")).expect("config");
         assert!(cfg.contains(&format!("default = \"{id}/coder\"")), "{cfg}");
-        assert!(out.contains("none configured yet"), "{out}");
+        assert!(out.contains("none ready yet"), "{out}");
     }
 
     #[tokio::test]
-    async fn wizard_adds_a_hosted_service_reading_its_variable() {
+    async fn wizard_offers_configured_services_and_says_how_to_set_a_key() {
         let tmp = tempfile::tempdir().expect("tempdir");
+        // A service from a lower layer, as the defaults bundle provides them.
+        let dir = tmp.path().join("system/providers.d");
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::fs::write(
+            dir.join("example.toml"),
+            "name = \"Example\"\ngroup = \"Hosted\"\nbase_url = \"https://api.example.com/v1\"\n\
+             api_key = { env = \"CUTOFFHARNESS_TEST_UNSET_KEY\" }\n",
+        )
+        .expect("write");
         let config = Arc::new(isolated(tmp.path()));
-        // Option 2, Novita, the environment variable.
-        let n = setup::hosted_services()
-            .iter()
-            .position(|s| s.id == "novita")
-            .expect("novita")
-            + 1;
-        let mut input = std::io::Cursor::new(format!("2\n{n}\n2\n").into_bytes());
+        // Option 2, the first service, the environment variable.
+        let mut input = std::io::Cursor::new(b"2\n1\n2\nq\n".to_vec());
         let mut out = Vec::new();
         let mut io = Io {
             input: &mut input,
@@ -417,13 +422,14 @@ mod tests {
         let code = run(config, &mut io).await;
         let out = String::from_utf8_lossy(&out);
         assert_eq!(code, exit::OK, "{out}");
-        let file = std::fs::read_to_string(tmp.path().join("user/providers.d/novita.toml"))
-            .expect("provider file");
-        assert_eq!(
-            file,
-            "# Novita AI, added by setup.\nbase_url = \"https://api.novita.ai/openai/v1\"\napi_key = { env = \"NOVITA_API_KEY\" }\n"
+        assert!(out.contains("  Hosted\n"), "{out}");
+        assert!(out.contains("needs CUTOFFHARNESS_TEST_UNSET_KEY"), "{out}");
+        assert!(
+            out.contains("export CUTOFFHARNESS_TEST_UNSET_KEY="),
+            "{out}"
         );
-        assert!(out.contains("needs an API key"), "{out}");
+        // Nothing is written for a key read from a variable.
+        assert!(!tmp.path().join("user/providers.d").exists());
     }
 
     #[test]

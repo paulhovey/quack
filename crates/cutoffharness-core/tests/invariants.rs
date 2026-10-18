@@ -391,6 +391,45 @@ async fn no_egress_beyond_the_configured_provider() {
     }
 }
 
+/// A system policy's `hosts` disables every provider elsewhere, including the bundle's and
+/// the user's own, so nothing else can be contacted or picked.
+#[test]
+fn policy_hosts_leave_only_allowed_servers() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let system = tmp.path().join("system");
+    std::fs::create_dir_all(&system).expect("mkdir");
+    std::fs::write(
+        system.join("config.toml"),
+        "[policy.providers]\nhosts = [\"127.0.0.1\"]\n",
+    )
+    .expect("policy");
+    let loaded = configure(
+        tmp.path(),
+        "https://elsewhere.example",
+        Some(&defaults_bundle()),
+        "",
+    );
+    let items = cutoffharness_config::load_providers(&loaded);
+    assert!(items.len() > 10, "the bundle loaded");
+    for item in &items {
+        match item.loaded() {
+            Some(f) => assert!(
+                cutoffharness_config::url_host(&f.base_url) == "127.0.0.1",
+                "{} at {} is allowed",
+                item.id,
+                f.base_url
+            ),
+            None => assert!(
+                matches!(&item.state, cutoffharness_config::ItemState::Disabled(why) if why.contains("policy")),
+                "{}: {:?}",
+                item.id,
+                item.state
+            ),
+        }
+    }
+    assert!(items.iter().any(|i| i.id == "mock" && i.loaded().is_none()));
+}
+
 /// The request after a resume is byte-for-byte the request the live session would have
 /// sent: same system prompt, tools, history (tool calls, results, reasoning) and params.
 #[tokio::test]

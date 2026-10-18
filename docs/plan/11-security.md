@@ -49,6 +49,16 @@ This follows maki's approach: parse the command with **tree-sitter-bash** (Unix 
 - A small built-in classifier marks known read-only commands (`ls`, `cat`, `git status/diff/log`, `rg`, `Get-ChildItem`, `Get-Content`, …) as safe to auto-allow in `ask` mode. The list is overridable in TOML.
 - Parse failure → **ask**, never allow.
 
+#### As implemented (2026-10-18, ahead of M3)
+
+A small hand-written splitter (`cutoffharness-tools/src/shell_split.rs`, no new crates) handles the forms models actually write before tree-sitter is added: quotes, escapes, line continuations, `;` `&&` `||` `|` `|&` `&`, newlines, `$(…)` (its commands are checked too) and redirections.
+
+- **Deny rules and the deny floor** match the whole line or any one command in it. `full-auto` with `deny = ["shell:rm *"]` now refuses `git status && rm -rf x`. Before this, it allowed it, because rules only saw the whole string.
+- **Allow rules** apply only when every command is allowed: by a rule, or because it only reads, provided at least one command matched a rule. So `cargo test 2>&1 | tail -50` runs under `shell:cargo test*`, while `cat a | head` still asks, as `cat a` does.
+- **Redirection to a file** (`>`, `>>`, `&>`; not `/dev/null`, `NUL` or `2>&1`) means no allow rule applies, and plan mode refuses it.
+- **Opaque lines get no allow rule** but are still checked against deny rules as a whole: backticks, subshells `( )`, `{ }`, heredocs, `<( )`, `$(( ))`, `if`/`for`/`while`/`case`, and comments. They ask, or run in `full-auto`.
+- **Not yet:** `bash -c "…"`, `eval` and `Invoke-Expression` are not looked into, so deny rules don't see inside them. Redirect targets aren't treated as edits to those paths. There is no PowerShell-specific reading; a PowerShell backtick escape makes the line opaque, which only ever asks more.
+
 ## OS sandboxing (`cutoffharness-sandbox`)
 
 Sandboxing applies to `shell` commands and, optionally, stdio MCP/LSP servers (`sandbox = true` in their TOML). Policies:

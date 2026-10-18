@@ -127,7 +127,7 @@ Left out on purpose: a hosted marketplace, telemetry-backed features and cloud e
 - Memory: markdown notes plus an index per scope (global, and project in the data dir or the repo), the index in the prompt via `{{ memory_index }}`, a lenient `memory` tool, `memory.writes = "ask"`, and `/memory` ([07](07-sessions-memory-checkpoints.md#behaviour))
 - `cutoffharness setup` and `/setup`: local server detection (loopback only), hosted services with the key stored in the OS credential store, or any URL, then the default model ([14](14-packaging-and-distribution.md#as-implemented-2026-10-18))
 - Mistral Large 4 through Mistral's API: a Mistral dialect in `openai-chat` (strict fields, `none`/`high` effort, reasoning sent back as `thinking` parts, 9-character tool-call ids, `prompt_cache_key`); not yet run live ([02](02-providers.md#mistral-large-4-2026-10-18))
-- The defaults bundle no longer ships provider files: a provider is just a server, and engine ports, tool-call notes and hosted services live in setup ([02](02-providers.md#servers-not-engines-2026-10-18))
+- Default providers are data again: 5 local servers and 13 hosted services in `defaults/providers.d`, each unused until it runs or has a key, and hosted ones never auto-selected. The binary names no server, so deleting the files removes them completely. `[policy.providers] hosts` and `[policy.mcp] hosts` limit what can be contacted at all, and `doctor` lists the reachable hosts ([02](02-providers.md#servers-not-engines-2026-10-18))
 
 **Exit criteria**
 - [ ] A 50-step task completes inside a 32k window with a current ~30B Qwen coding model on llama.cpp
@@ -154,7 +154,7 @@ Landed early (2026-10-18): `/undo` from edit pre-images ([07](07-sessions-memory
 **Exit criteria**
 - [ ] GitHub MCP server works on Windows via `npx` (`.cmd` resolution) and on Linux/macOS
 - [ ] A malicious `.cutoffharness/mcp.d` in an untrusted repo doesn't execute
-- [ ] `git status && rm -rf x` is split and needs approval for `rm` in `ask` mode
+- [x] `git status && rm -rf x` is split and needs approval for `rm` in `ask` mode (hand-written splitter for now; deny rules now see every command, even in `full-auto`; [11](11-security.md#as-implemented-2026-10-18-ahead-of-m3))
 - [ ] Rewind restores files byte-exactly, CRLF files included
 
 ## M4 — IDE-grade feedback: "it knows when it broke the build"

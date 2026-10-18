@@ -118,8 +118,10 @@ otel_endpoint = ""                # empty = disabled (default). Never enabled im
 
 [policy]                          # only honoured in the SYSTEM layer
 locked = ["network.offline", "permissions.deny", "providers.allowed"]
-providers.allowed = ["corp-vllm"] # restrict selectable providers
+providers.allowed = ["corp-vllm"] # restrict selectable providers by id
+providers.hosts = ["llm.corp.example"]  # and by base_url host: nothing else can be contacted
 mcp.allowed = ["corp-*"]
+mcp.hosts = ["mcp.corp.example"]  # remote MCP servers' url hosts
 project_config = "trusted-only"   # trusted-only | never | always
 ```
 

@@ -1,0 +1,4 @@
+#:schema ../schemas/provider.json
+# LM Studio on this machine. Its models are listed while it runs.
+name = "LM Studio"
+base_url = "http://127.0.0.1:1234/v1"

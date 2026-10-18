@@ -237,9 +237,9 @@ Errors are normalized into `ProviderError { kind, status, retryable, message, ra
 
 vLLM, SGLang, llama.cpp, LM Studio and the hosted services are all OpenAI-compatible servers. Their provider files would differ only in `base_url`, and in the key for hosted ones. Engine quirks are detected from responses, not from file names: llama.cpp by `owned_by: "llamacpp"` in `/models` (then `/props` for the served window), and vLLM by `max_model_len`. Ollama is the one exception, because its native API (`api = "ollama"`) is used to set the context window per request.
 
-So no provider files ship in the defaults bundle. A provider is a server the user names (`gpu-box`, `work-vllm`), whether it runs on this machine or somewhere else. The engine names and hosted services live in `cutoffharness-core/src/setup.rs` instead:
+The defaults bundle ships one small file per engine and service (`name`, `base_url`, and `api_key = { env = ... }` for hosted ones, plus an optional `group` heading and `note`). The binary names no server: setup, `/setup` and auto-selection work from whatever providers are loaded, so a company that deletes the files, ships the bundle without them, or sets `[defaults] dir = "none"` gets a binary that only knows its own providers. (A first version kept this list in `setup.rs` with no files shipped. It was moved back the same day: compiled-in addresses could not be removed.)
 
-| Engine | Default address setup probes | Needed for tool calls |
+| Engine | Default address | Needed for tool calls |
 |---|---|---|
 | Ollama | `127.0.0.1:11434` (native API) | — |
 | llama.cpp `llama-server` | `127.0.0.1:8080/v1` | `--jinja` |
@@ -247,7 +247,15 @@ So no provider files ship in the defaults bundle. A provider is a server the use
 | LM Studio | `127.0.0.1:1234/v1` | — |
 | SGLang | `127.0.0.1:30000/v1` | `--tool-call-parser <parser>` |
 
-The hosted services are a list in the setup wizard, in two groups: open-model services (OpenRouter, Synthetic, Charm Hyper, Together, Fireworks, DeepInfra, Novita) and the model makers' own APIs and coding plans (Mistral, including Vibe plan keys; Kimi Code plan; Moonshot; Z.ai GLM Coding Plan; Z.ai API; DeepSeek). Coding-plan keys only work on their plan's endpoint, so Kimi and Z.ai each appear twice. DeepSeek has no separate coding plan. Picking one writes its `base_url` and an `api_key` from the credential store or its usual variable. A file that setup writes carries the engine's tool-call note as a comment.
+The hosted services come in two groups: open-model services (OpenRouter, Synthetic, Charm Hyper, Together, Fireworks, DeepInfra, Novita) and the model makers' own APIs and coding plans (Mistral, including Vibe plan keys; Kimi Code plan; Moonshot; Z.ai GLM Coding Plan; Z.ai API; DeepSeek). Coding-plan keys only work on their plan's endpoint, so Kimi and Z.ai each appear twice. DeepSeek has no separate coding plan.
+
+How the bundled providers behave:
+
+- **Hosted, no key:** never contacted. `/models` leaves them out, and `/providers`, `doctor` and the wizard show them as "not set up" or "offered" rather than as errors.
+- **Hosted, key set:** listed and usable, but never auto-selected. The user picks a model, since a paid service shouldn't start by itself. When setup stores a key in the credential store, it copies the file to the user layer with `api_key = { keyring = "<id>" }`, keeping its comments.
+- **Local:** probed only on loopback, and auto-selected (after the user's own providers) when no default model is set. So a running llama.cpp or Ollama works with no setup at all.
+
+Restricting them is covered in `defaults/providers.d/README.md`. `[policy.providers] hosts = [...]` in the system layer disables every provider whose `base_url` host doesn't match, which an id allow-list can't do, since a user could reuse an allowed id. `[policy.mcp] hosts` does the same for remote MCP servers. `doctor`'s `network` line lists every host the configuration can reach.
 
 A server elsewhere needs only its URL, plus a key if it was started with one (for example vLLM's `--api-key`):
 
@@ -256,7 +264,7 @@ base_url = "https://gpu-box.example.com/v1"
 api_key = { env = "GPU_BOX_KEY" }
 ```
 
-`defaults/providers.d/` stays as the place where a company's bundle ships its own providers ([14](14-packaging-and-distribution.md#enterprise-builds)).
+A company's bundle ships its own providers in the same folder ([14](14-packaging-and-distribution.md#enterprise-builds)).
 
 ## Mistral Large 4 (2026-10-18)
 

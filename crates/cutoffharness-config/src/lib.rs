@@ -24,7 +24,7 @@ mod trust;
 
 pub use diagnostic::FileDiagnostic;
 pub use edit::{SettingRow, set_in_file};
-pub use items::{Item, ItemState, glob_match, load_dir_items, load_items};
+pub use items::{Item, ItemState, glob_match, is_loopback, load_dir_items, load_items, url_host};
 pub use load::{
     ConfigError, LayerReport, LayerStatus, LoadOptions, Loaded, Origin, ProjectStatus, load,
     load_with,
@@ -50,7 +50,8 @@ pub fn load_mcp(loaded: &Loaded) -> Vec<Item<McpServerFile>> {
     items::apply_toggles(
         &mut items,
         &loaded.settings.mcp.disabled,
-        &loaded.settings.policy.mcp.allowed,
+        &loaded.settings.policy.mcp,
+        |f| (!f.url.is_empty()).then_some(f.url.as_str()),
     );
     items
 }
@@ -61,7 +62,8 @@ pub fn load_providers(loaded: &Loaded) -> Vec<Item<ProviderFile>> {
     items::apply_toggles(
         &mut items,
         &loaded.settings.providers.disabled,
-        &loaded.settings.policy.providers.allowed,
+        &loaded.settings.policy.providers,
+        |f| Some(f.base_url.as_str()),
     );
     items
 }

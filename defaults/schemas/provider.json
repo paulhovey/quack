@@ -504,6 +504,11 @@
       "default": true,
       "type": "boolean"
     },
+    "group": {
+      "default": "",
+      "description": "Heading setup lists a hosted service under.",
+      "type": "string"
+    },
     "headers": {
       "additionalProperties": {
         "$ref": "#/$defs/Secret"
@@ -538,6 +543,12 @@
     },
     "name": {
       "default": "",
+      "description": "Shown by setup and `/providers`; defaults to the id.",
+      "type": "string"
+    },
+    "note": {
+      "default": "",
+      "description": "A hint shown by setup, e.g. a server flag tool calls need.",
       "type": "string"
     },
     "tls": {

@@ -14,7 +14,7 @@ CUTOFFHARNESS_DEFAULTS_DIR=defaults cargo run
 
 | Directory | Contents | Lands in |
 |---|---|---|
-| `providers.d/` | Empty: for a company's own providers. `cutoffharness setup` writes users' providers | — |
+| `providers.d/` | Servers on this machine (Ollama, llama.cpp, vLLM, LM Studio, SGLang) and hosted services, each unused until it runs or has a key; see its README for restricting them | M1 |
 | `profiles.d/` | Model profiles: `<id>/profile.toml` + prompt templates | M1 (`generic`), M2 (the rest) |
 | `mcp.d/` | Example MCP servers, all `enabled = false`: everything, filesystem, time, github | M3 (landed early) |
 | `lsp.d/` | Language server files; never auto-installed | M4 |

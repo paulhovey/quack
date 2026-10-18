@@ -1,0 +1,7 @@
+#:schema ../schemas/provider.json
+# OpenRouter: many open models behind one key.
+# Not contacted until OPENROUTER_API_KEY is set or `cutoffharness setup` stores a key.
+name = "OpenRouter"
+group = "Open-model services"
+base_url = "https://openrouter.ai/api/v1"
+api_key = { env = "OPENROUTER_API_KEY" }
