@@ -1,0 +1,4 @@
+#:schema ../schemas/provider.json
+# DeepInfra (hosted open models). Set DEEPINFRA_API_KEY. Models are discovered.
+base_url = "https://api.deepinfra.com/v1/openai"
+api_key = { env = "DEEPINFRA_API_KEY" }

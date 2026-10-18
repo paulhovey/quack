@@ -63,7 +63,7 @@ async fn empty_config_starts_cleanly_with_no_builtins() {
         "{provider:?}"
     );
 
-    // A turn still completes (stub engine until adapters land), and interrupt is honoured.
+    // With no model a turn fails fast with an explanation instead of hanging.
     engine
         .submit(Op::UserTurn {
             items: vec![InputItem::text("hi")],
@@ -94,7 +94,7 @@ async fn turns_submitted_during_startup_are_queued() {
     loop {
         match next(&mut engine.events).await {
             Event::TurnQueued { .. } => queued = true,
-            Event::TurnComplete { .. } => break,
+            Event::TurnComplete { .. } | Event::TurnAborted { .. } => break,
             Event::TurnStarted { .. } => assert!(queued, "turn started before startup finished"),
             _ => {}
         }

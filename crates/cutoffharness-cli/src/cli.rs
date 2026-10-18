@@ -29,6 +29,34 @@ pub(crate) struct Global {
     /// Override a setting, e.g. -c ui.ascii=true. Repeatable.
     #[arg(short = 'c', long = "config", global = true, value_name = "KEY=VALUE")]
     pub overrides: Vec<String>,
+    /// Resume the most recent session in this project.
+    #[arg(long = "continue", global = true, conflicts_with = "resume")]
+    pub continue_: bool,
+    /// Resume a saved session by id (or unique prefix); `cutoffharness sessions` lists them.
+    #[arg(long, global = true, value_name = "ID")]
+    pub resume: Option<String>,
+    /// Permission mode for this run; shorthand for -c permissions.mode=MODE.
+    #[arg(long, global = true, value_enum)]
+    pub permission_mode: Option<PermissionModeArg>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum PermissionModeArg {
+    ReadOnly,
+    Ask,
+    AutoEdit,
+    FullAuto,
+}
+
+impl PermissionModeArg {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read-only",
+            Self::Ask => "ask",
+            Self::AutoEdit => "auto-edit",
+            Self::FullAuto => "full-auto",
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -42,6 +70,8 @@ pub(crate) enum Cmd {
         #[command(subcommand)]
         cmd: ConfigCmd,
     },
+    /// List saved sessions for this project.
+    Sessions,
     /// Check the environment: config, directories, terminal.
     Doctor,
     /// Run as a Zed Agent Client Protocol agent on stdio.

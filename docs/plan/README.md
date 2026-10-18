@@ -6,7 +6,7 @@ A fast, context-efficient coding agent for **self-hosted and open-weight models*
 
 ## Guiding principles
 
-1. **Nothing built in.** The binary has no provider, MCP server, LSP server, or model definitions compiled into it. All of them are TOML files on disk. We ship a separate set of *default* TOML files that anyone can delete, replace, or never install. A company can fork, delete `defaults/providers/*.toml`, add `internal-vllm.toml`, and ship that.
+1. **Nothing built in.** The binary has no provider, MCP server, LSP server, or model definitions compiled into it. All of them are TOML files on disk. We ship a separate set of *default* TOML files that anyone can delete, replace, or never install. A company can fork, delete `defaults/providers.d/*.toml`, add `internal-vllm.toml`, and ship that.
 2. **Protocols are code, endpoints are data.** The binary knows how to *speak* a handful of wire protocols (OpenAI chat, Anthropic messages, …). Each one sits behind a cargo feature, so a minimal enterprise build can compile out everything except the one protocol it uses.
 3. **No hidden egress.** No telemetry, no update checks, no auto-downloads (LSP servers, tokenizers, grammars) unless explicitly enabled. An `offline` policy hard-blocks every network path except configured providers.
 4. **Context is the scarce resource.** Self-hosted models usually run with 32k–128k context and slow prefill. Every feature is judged by its token cost and its effect on the KV/prefix cache.

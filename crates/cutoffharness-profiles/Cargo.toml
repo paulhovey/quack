@@ -10,8 +10,13 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
-cutoffharness-protocol.workspace = true
 cutoffharness-config.workspace = true
+minijinja = { version = "3.0.1", default-features = false, features = ["builtins", "serde"] }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

@@ -1,0 +1,4 @@
+#:schema ../schemas/provider.json
+# Ollama on this machine. Ollama's default context is small and long sessions get cut
+# silently: start it with OLLAMA_CONTEXT_LENGTH=32768 (or more). Models are discovered.
+base_url = "http://127.0.0.1:11434/v1"

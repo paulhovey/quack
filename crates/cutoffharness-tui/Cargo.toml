@@ -16,6 +16,7 @@ cutoffharness-core.workspace = true
 crossterm.workspace = true
 futures.workspace = true
 nucleo-matcher.workspace = true
+pulldown-cmark = { version = "0.13.4", default-features = false }
 ratatui.workspace = true
 tokio.workspace = true
 tracing.workspace = true

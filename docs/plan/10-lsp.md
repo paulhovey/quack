@@ -33,7 +33,7 @@ min_severity = "warning"               # error | warning | info | hint
 max_items = 20                         # per file, in a tool result
 ```
 
-`defaults/lsp/` ships commented files for: rust-analyzer, gopls, pyright / basedpyright, typescript-language-server, clangd, jdtls, omnisharp / csharp-ls, lua-language-server, bash-language-server, powershell-editor-services, taplo, yaml-language-server. Each file includes a comment with the install command. **We never run that command ourselves.**
+`defaults/lsp.d/` ships commented files for: rust-analyzer, gopls, pyright / basedpyright, typescript-language-server, clangd, jdtls, omnisharp / csharp-ls, lua-language-server, bash-language-server, powershell-editor-services, taplo, yaml-language-server. Each file includes a comment with the install command. **We never run that command ourselves.**
 
 ## Client manager (`cutoffharness-lsp`)
 

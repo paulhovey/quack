@@ -3,6 +3,7 @@
 
 use serde_json::{Value, json};
 
+use crate::profile::ProfileFile;
 use crate::provider::ProviderFile;
 use crate::settings::Settings;
 
@@ -13,10 +14,7 @@ pub fn all() -> Vec<(&'static str, Value)> {
     vec![
         ("config.json", gen_(schemars::schema_for!(Settings))),
         ("provider.json", gen_(schemars::schema_for!(ProviderFile))),
-        (
-            "profile.json",
-            stub("Model profile (profiles.d/<id>/profile.toml)", "M1"),
-        ),
+        ("profile.json", gen_(schemars::schema_for!(ProfileFile))),
         ("mcp.json", stub("MCP server (mcp.d/<id>.toml)", "M3")),
         ("lsp.json", stub("LSP server (lsp.d/<id>.toml)", "M4")),
         ("hook.json", stub("Hook (hooks.d/<id>.toml)", "M3")),

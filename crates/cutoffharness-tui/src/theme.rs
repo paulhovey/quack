@@ -127,3 +127,36 @@ impl Glyphs {
         }
     }
 }
+
+/// Token counts for display: `850`, `12.3k`, `256k`, `1M`, `1.05M`.
+pub(crate) fn tokens(n: u32) -> String {
+    let n = f64::from(n);
+    let trim = |s: String| {
+        if s.contains('.') {
+            s.trim_end_matches('0').trim_end_matches('.').to_owned()
+        } else {
+            s
+        }
+    };
+    if n >= 1_000_000.0 {
+        format!("{}M", trim(format!("{:.2}", n / 1_000_000.0)))
+    } else if n >= 100_000.0 {
+        format!("{:.0}k", n / 1000.0)
+    } else if n >= 1000.0 {
+        format!("{}k", trim(format!("{:.1}", n / 1000.0)))
+    } else {
+        format!("{n}")
+    }
+}
+
+#[cfg(test)]
+mod token_tests {
+    #[test]
+    fn token_display() {
+        assert_eq!(super::tokens(850), "850");
+        assert_eq!(super::tokens(12_345), "12.3k");
+        assert_eq!(super::tokens(262_144), "262k");
+        assert_eq!(super::tokens(1_000_000), "1M");
+        assert_eq!(super::tokens(1_048_576), "1.05M");
+    }
+}

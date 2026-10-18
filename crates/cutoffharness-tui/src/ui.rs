@@ -7,7 +7,10 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use cutoffharness_protocol::LoadState;
 
-use crate::app::{App, Entry};
+use cutoffharness_config::settings::ShowReasoning;
+use cutoffharness_protocol::ApprovalRequest;
+
+use crate::app::{App, Entry, ToolEntry};
 use crate::wrap::wrap;
 
 const MAX_INPUT_LINES: usize = 6;
@@ -37,18 +40,33 @@ pub(crate) fn draw(f: &mut Frame<'_>, app: &App) {
     draw_input(f, app, input);
     draw_status(f, app, status);
     draw_popup(f, app, transcript);
+    draw_approval(f, app, transcript);
     if let Some(modal) = &app.modal {
         modal.draw(f, &app.theme, &app.glyphs);
     }
 }
 
 fn draw_header(f: &mut Frame<'_>, app: &App, area: Rect) {
+    let name = format!(" cutoffharness {}", app.info.version);
+    let room = usize::from(area.width).saturating_sub(name.width() + 3);
+    let cwd = &app.info.cwd;
+    // Keep the end of a long path: the project folder is the useful part.
+    let cwd = if cwd.width() > room && room > 1 {
+        let tail: String = cwd
+            .chars()
+            .rev()
+            .take(room - 1)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        format!("…{tail}")
+    } else {
+        cwd.clone()
+    };
     let line = Line::from(vec![
-        Span::styled(
-            format!(" cutoffharness {}", app.info.version),
-            app.theme.accent,
-        ),
-        Span::styled(format!(" · {}", app.info.cwd), app.theme.dim),
+        Span::styled(name, app.theme.accent),
+        Span::styled(format!(" · {cwd}"), app.theme.dim),
     ]);
     f.render_widget(Paragraph::new(line), area);
 }
@@ -85,18 +103,59 @@ fn draw_panel(f: &mut Frame<'_>, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(lines), area);
 }
 
+/// Diff and output lines shown under a finished tool call.
+const TOOL_DETAIL_LINES: usize = 24;
+/// Live output lines shown while a tool runs, and for failures.
+const TOOL_LIVE_LINES: usize = 6;
+/// Output lines shown under a successful command.
+const TOOL_OK_LINES: usize = 3;
+
 fn transcript_rows(app: &App, width: usize) -> Vec<Line<'static>> {
     let t = &app.theme;
     let mut rows = Vec::new();
-    for entry in &app.transcript {
+    let body_width = width.saturating_sub(3);
+    for (i, entry) in app.transcript.iter().enumerate() {
         let (prefix, prefix_style, body_style, text) = match entry {
-            Entry::User(s) => (app.glyphs.prompt, t.user, t.user, s),
-            Entry::Assistant(s) => (app.glyphs.assistant, t.accent, Style::new(), s),
-            Entry::System(s) => (" ", t.dim, t.dim, s),
-            Entry::Warning(s) => ("!", t.warn, t.warn, s),
-            Entry::Error(s) => (app.glyphs.fail, t.error, t.error, s),
+            Entry::User(s) => (app.glyphs.prompt, t.user, t.user, s.clone()),
+            Entry::Assistant(s) if s.trim().is_empty() => continue,
+            Entry::Assistant(s) => {
+                for (i, row) in crate::markdown::render(s, body_width, t, app.info.ui.ascii)
+                    .into_iter()
+                    .enumerate()
+                {
+                    let lead = if i == 0 {
+                        format!(" {} ", app.glyphs.assistant)
+                    } else {
+                        "   ".into()
+                    };
+                    let mut spans = vec![Span::styled(lead, t.accent)];
+                    spans.extend(row);
+                    rows.push(Line::from(spans));
+                }
+                rows.push(Line::raw(""));
+                continue;
+            }
+            Entry::Reasoning(s) => match app.info.ui.show_reasoning {
+                ShowReasoning::Hidden => continue,
+                ShowReasoning::Collapsed => {
+                    let words = s.split_whitespace().count();
+                    ("~", t.dim, t.dim, format!("thought for {words} words"))
+                }
+                ShowReasoning::Expanded => ("~", t.dim, t.dim, s.trim().to_owned()),
+            },
+            Entry::Tool(tool) => {
+                tool_rows(app, tool, body_width, &mut rows);
+                // Consecutive tool calls read as one block.
+                if !matches!(app.transcript.get(i + 1), Some(Entry::Tool(_)) | None) {
+                    rows.push(Line::raw(""));
+                }
+                continue;
+            }
+            Entry::System(s) => (" ", t.dim, t.dim, s.clone()),
+            Entry::Warning(s) => ("!", t.warn, t.warn, s.clone()),
+            Entry::Error(s) => (app.glyphs.fail, t.error, t.error, s.clone()),
         };
-        for (i, row) in wrap(text, width.saturating_sub(3)).into_iter().enumerate() {
+        for (i, row) in wrap(&text, body_width).into_iter().enumerate() {
             let lead = if i == 0 {
                 format!(" {prefix} ")
             } else {
@@ -110,6 +169,77 @@ fn transcript_rows(app: &App, width: usize) -> Vec<Line<'static>> {
         rows.push(Line::raw(""));
     }
     rows
+}
+
+fn tool_rows(app: &App, tool: &ToolEntry, width: usize, rows: &mut Vec<Line<'static>>) {
+    let t = &app.theme;
+    let (icon, style) = match tool.ok {
+        None => (app.spinner(), t.accent),
+        Some(true) => (app.glyphs.ok, t.ok),
+        Some(false) => (app.glyphs.fail, t.error),
+    };
+    let mut head = vec![
+        Span::styled(format!(" {icon} "), style),
+        Span::raw(truncate(&tool.summary, width.saturating_sub(2))),
+    ];
+    if !tool.result.is_empty() {
+        let room = width.saturating_sub(tool.summary.width() + 3);
+        head.push(Span::styled(
+            format!(" · {}", truncate(&tool.result, room)),
+            t.dim,
+        ));
+    }
+    rows.push(Line::from(head));
+
+    let is_diff = tool.detail.starts_with("--- ");
+    let lines: Vec<&str> = tool.detail.lines().collect();
+    let shown: Vec<&str> = if tool.ok.is_none() {
+        lines[lines.len().saturating_sub(TOOL_LIVE_LINES)..].to_vec()
+    } else if is_diff {
+        // Skip the ---/+++ header; hunks carry the information.
+        lines
+            .iter()
+            .skip(2)
+            .take(TOOL_DETAIL_LINES)
+            .copied()
+            .collect()
+    } else if tool.ok == Some(false) {
+        lines[lines.len().saturating_sub(TOOL_LIVE_LINES)..].to_vec()
+    } else {
+        // Successful command output: the tail is usually what matters.
+        lines[lines.len().saturating_sub(TOOL_OK_LINES)..].to_vec()
+    };
+    let hidden = if is_diff {
+        lines.len().saturating_sub(2 + shown.len())
+    } else {
+        0
+    };
+    for l in shown {
+        let style = if !is_diff {
+            t.dim
+        } else if l.starts_with('+') {
+            t.ok
+        } else if l.starts_with('-') {
+            t.error
+        } else if l.starts_with("@@") {
+            t.accent
+        } else {
+            t.dim
+        };
+        rows.push(Line::from(vec![
+            Span::raw("     "),
+            Span::styled(
+                truncate(&l.replace('\t', "    "), width.saturating_sub(3)),
+                style,
+            ),
+        ]));
+    }
+    if hidden > 0 {
+        rows.push(Line::styled(
+            format!("     … {hidden} more diff lines"),
+            t.dim,
+        ));
+    }
 }
 
 fn draw_transcript(f: &mut Frame<'_>, app: &App, area: Rect) {
@@ -175,12 +305,22 @@ fn draw_input(f: &mut Frame<'_>, app: &App, area: Rect) {
 fn draw_status(f: &mut Frame<'_>, app: &App, area: Rect) {
     let t = &app.theme;
     let model = app.info.model.as_deref().unwrap_or("no model");
-    let left = format!(
+    let mut left = format!(
         " {model} · profile: {} · {}",
         app.info.profile, app.info.permission_mode
     );
+    if let Some((used, budget)) = app.context {
+        let k = crate::theme::tokens;
+        if budget > 0 {
+            left.push_str(&format!(" · {}/{} ctx", k(used), k(budget)));
+        } else {
+            left.push_str(&format!(" · {} ctx", k(used)));
+        }
+    }
     let mut right: Vec<Span<'_>> = Vec::new();
-    if app.turn_running {
+    if app.approval.is_some() {
+        right.push(Span::styled("waiting for approval", t.warn));
+    } else if app.turn_running {
         right.push(Span::styled(
             format!("{} working · esc to interrupt", app.spinner()),
             t.accent,
@@ -250,6 +390,74 @@ fn draw_popup(f: &mut Frame<'_>, app: &App, above: Rect) {
     let block = Block::bordered()
         .border_set(app.glyphs.border)
         .border_style(app.theme.border);
+    f.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// Bottom overlay asking to allow a tool call.
+fn draw_approval(f: &mut Frame<'_>, app: &App, above: Rect) {
+    let Some(approval) = &app.approval else {
+        return;
+    };
+    let t = &app.theme;
+    let (title, body): (String, Vec<Line<'_>>) = match &approval.request {
+        ApprovalRequest::Shell { command, cwd } => (
+            if cwd == "." {
+                " Run this command? ".to_owned()
+            } else {
+                format!(" Run this command in {cwd}? ")
+            },
+            command
+                .lines()
+                .map(|l| Line::from(vec![Span::styled("$ ", t.accent), Span::raw(l.to_owned())]))
+                .collect(),
+        ),
+        ApprovalRequest::Edit { path, diff } => (
+            format!(" Apply this change to {path}? "),
+            diff.lines()
+                .skip(2)
+                .map(|l| {
+                    let style = if l.starts_with('+') {
+                        t.ok
+                    } else if l.starts_with('-') {
+                        t.error
+                    } else if l.starts_with("@@") {
+                        t.accent
+                    } else {
+                        t.dim
+                    };
+                    Line::styled(l.replace('\t', "    "), style)
+                })
+                .collect(),
+        ),
+        ApprovalRequest::Tool { name, arguments } => (
+            format!(" Allow {name}? "),
+            vec![Line::styled(arguments.clone(), t.dim)],
+        ),
+    };
+    let max_body = usize::from(above.height.saturating_sub(4)).max(1);
+    let shown = body.len().min(max_body);
+    let height = u16::try_from(shown).unwrap_or(0) + 3;
+    let area = Rect {
+        x: above.x,
+        y: above.bottom().saturating_sub(height),
+        width: above.width,
+        height: height.min(above.height),
+    };
+    let mut lines: Vec<Line<'_>> = body.into_iter().take(shown).collect();
+    lines.push(Line::from(vec![
+        Span::styled(" y ", t.selected),
+        Span::raw(" allow  "),
+        Span::styled(" a ", t.selected),
+        Span::raw(" allow for this session  "),
+        Span::styled(" n ", t.selected),
+        Span::raw(" deny  "),
+        Span::styled("ctrl-c interrupts", t.dim),
+    ]));
+    f.render_widget(Clear, area);
+    let block = Block::bordered()
+        .title(Span::styled(title, t.warn))
+        .border_set(app.glyphs.border)
+        .border_style(t.warn);
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
@@ -349,6 +557,57 @@ mod tests {
         let mut app = started_app();
         app.modal = Some(crate::modal::help(&app.theme));
         insta::assert_snapshot!(render(&app, 60, 20));
+    }
+
+    #[test]
+    fn tool_calls_and_approval_80x24() {
+        use crate::app::Approval;
+        use cutoffharness_protocol::{CallId, ToolCallInfo, ToolResultSummary};
+        let mut app = App::new(test_info());
+        app.on_engine(Event::StartupComplete);
+        app.transcript.push(Entry::User("rename the helper".into()));
+        app.on_engine(Event::ReasoningDelta {
+            text: "Need to find the helper first.".into(),
+        });
+        app.on_engine(Event::ToolCallBegin {
+            call: ToolCallInfo {
+                call_id: CallId("1".into()),
+                name: "grep".into(),
+                summary: "grep fn helper".into(),
+            },
+        });
+        app.on_engine(Event::ToolCallEnd {
+            call_id: CallId("1".into()),
+            result: ToolResultSummary {
+                ok: true,
+                summary: "1 matches in 1 files".into(),
+                detail: None,
+            },
+        });
+        app.on_engine(Event::ToolCallBegin {
+            call: ToolCallInfo {
+                call_id: CallId("2".into()),
+                name: "edit".into(),
+                summary: "edit src/lib.rs".into(),
+            },
+        });
+        app.on_engine(Event::ToolCallEnd {
+            call_id: CallId("2".into()),
+            result: ToolResultSummary {
+                ok: true,
+                summary: "+1 -1".into(),
+                detail: Some("--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@\n-fn helper() {}\n+fn assist() {}\n fn main() {}\n".into()),
+            },
+        });
+        app.approval = Some(Approval {
+            call_id: CallId("3".into()),
+            request: ApprovalRequest::Shell {
+                command: "cargo test".into(),
+                cwd: ".".into(),
+            },
+        });
+        app.context = Some((12_345, 104_000));
+        insta::assert_snapshot!(render(&app, 80, 24));
     }
 
     #[test]

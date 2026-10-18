@@ -24,6 +24,7 @@ cutoffharness-acp = { workspace = true, optional = true }
 cutoffharness-providers.workspace = true
 cutoffharness-context.workspace = true
 cutoffharness-tools.workspace = true
+cutoffharness-store.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 miette.workspace = true

@@ -21,6 +21,8 @@
         └── checkpoints/               # file pre-images (see Checkpoints)
 ```
 
+Implemented in M1: `session_start`, `resume`, `message` (each chat message exactly as sent, so replay is exact), `tool` (UI summary), `approval`, `usage`. A session directory is created at the first turn, so starting and quitting leaves nothing behind. Resume also repairs a tool call left without a result by a crash.
+
 ### Event log format
 
 Each line is one JSON object with `{"v":1, "t":"<type>", "ts":"…", ...}`:
@@ -48,8 +50,8 @@ Rules:
 
 ### Commands
 
-- `cutoffharness --continue` / `-c` resumes the most recent session in this project.
-- `cutoffharness --resume [id]` / `/resume` opens the picker (title, age, turns, model, first message preview, fuzzy search).
+- `cutoffharness --continue` resumes the most recent session in this project. (No short flag: `-c` is the config override.)
+- `cutoffharness --resume <id>` resumes by id or unique prefix; `cutoffharness sessions` lists them. `/resume` opens the picker (title, age, turns, model, first message preview, fuzzy search).
 - `/fork` starts a new session that branches from the current point. Its `session_start` records `parent` + event index.
 - `/rewind` picks a previous user message. The conversation is truncated to before it (by appending a `rewind` event; nothing is deleted), and the user is optionally offered to **restore files** to the matching checkpoint.
 - `/title <text>`. Automatic titles come from the `small` model after the first turn, if one is configured. Otherwise the title is the truncated first message, with no extra model call.

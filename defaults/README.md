@@ -14,10 +14,10 @@ CUTOFFHARNESS_DEFAULTS_DIR=defaults cargo run
 
 | Directory | Contents | Lands in |
 |---|---|---|
-| `providers/` | One provider per file (`providers.d` format) | M1 (novita, fireworks, openrouter; llama-cpp, ollama, vllm protocol-only) |
-| `profiles/` | Model profiles: `<id>/profile.toml` + prompt templates | M1 (`generic`), M2 (the rest) |
-| `mcp/` | Example MCP servers, all `enabled = false` | M3 |
-| `lsp/` | Language server files; never auto-installed | M4 |
+| `providers.d/` | One provider per file | M1: novita, fireworks, together, openrouter, deepinfra; llama-cpp, ollama, vllm, lmstudio, sglang |
+| `profiles.d/` | Model profiles: `<id>/profile.toml` + prompt templates | M1 (`generic`), M2 (the rest) |
+| `mcp.d/` | Example MCP servers, all `enabled = false` | M3 |
+| `lsp.d/` | Language server files; never auto-installed | M4 |
 | `grammars/` | tree-sitter query files (`tags.scm`, …) | M2 |
 | `themes/` | Extra themes (dark and light are compiled in) | M3 |
 | `schemas/` | JSON Schema for editor completion; regenerate with `cutoffharness config schema --dir defaults/schemas` | — |

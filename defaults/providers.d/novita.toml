@@ -1,0 +1,4 @@
+#:schema ../schemas/provider.json
+# Novita AI (hosted open models). Set NOVITA_API_KEY. Models are discovered.
+base_url = "https://api.novita.ai/openai/v1"
+api_key = { env = "NOVITA_API_KEY" }

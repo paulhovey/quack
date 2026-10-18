@@ -1,13 +1,19 @@
-use std::sync::Arc;
-use std::time::Duration;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 
 use cutoffharness_config::Loaded;
-use cutoffharness_protocol::{Event, InputItem, Op, SessionId, SessionInfo, TurnId, Usage};
+use cutoffharness_protocol::{
+    EngineError, EngineErrorKind, Event, InputItem, Op, SessionId, SessionInfo, TurnId,
+};
+use cutoffharness_providers::Message;
+use cutoffharness_tools::Permissions;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::startup::{self, StartupOutcome};
+use crate::session::{self, Resume, SharedLog};
+use crate::startup::{self, Setup, StartupOutcome};
+use crate::turn::{self, Approvals, TurnCtx};
 
 const EVENT_CAPACITY: usize = 4096;
 const OP_CAPACITY: usize = 64;
@@ -38,21 +44,44 @@ impl EngineHandle {
     }
 }
 
+/// The conversation once a model is ready.
+#[derive(Debug)]
+struct Conversation {
+    setup: Arc<Setup>,
+    perms: Arc<Mutex<Permissions>>,
+    /// `None` while a turn task owns it.
+    history: Option<Vec<Message>>,
+}
+
 #[derive(Debug)]
 pub struct Engine {
     config: Arc<Loaded>,
     tx: broadcast::Sender<Event>,
     session: SessionInfo,
-    outcome: Option<StartupOutcome>,
+    started: bool,
+    problem: Option<String>,
+    convo: Option<Conversation>,
     next_turn: u64,
-    queued: Vec<Vec<InputItem>>,
+    queued: VecDeque<Vec<InputItem>>,
     running: Option<(TurnId, CancellationToken)>,
+    approvals: Approvals,
+    resume: Resume,
+    /// Created at the first turn (no empty sessions) or reopened on resume.
+    log: Option<SharedLog>,
+    turns: u32,
+    title: Option<String>,
+    switch_tx: Option<mpsc::Sender<Result<Setup, String>>>,
 }
 
 impl Engine {
     /// Spawn the engine on the current tokio runtime. Startup runs in the background;
     /// the returned handle is subscribed before any event is sent, so nothing is missed.
     pub fn spawn(config: Arc<Loaded>) -> EngineHandle {
+        Self::spawn_with(config, Resume::New)
+    }
+
+    /// Like [`spawn`](Self::spawn), resuming a saved session.
+    pub fn spawn_with(config: Arc<Loaded>, resume: Resume) -> EngineHandle {
         let (tx, events) = broadcast::channel(EVENT_CAPACITY);
         let (ops, ops_rx) = mpsc::channel(OP_CAPACITY);
         let session = SessionInfo {
@@ -65,10 +94,18 @@ impl Engine {
             config,
             tx: tx.clone(),
             session,
-            outcome: None,
+            started: false,
+            problem: None,
+            convo: None,
             next_turn: 0,
-            queued: Vec::new(),
+            queued: VecDeque::new(),
             running: None,
+            approvals: Approvals::default(),
+            resume,
+            log: None,
+            turns: 0,
+            title: None,
+            switch_tx: None,
         };
         let task = tokio::spawn(engine.run(ops_rx));
         EngineHandle {
@@ -89,21 +126,28 @@ impl Engine {
             session: self.session.clone(),
         });
         let mut startup = tokio::spawn(startup::run(self.config.clone(), self.tx.clone()));
-        let (done_tx, mut done_rx) = mpsc::channel::<TurnId>(8);
+        let (done_tx, mut done_rx) = mpsc::channel::<(TurnId, Vec<Message>)>(8);
+        let (switch_tx, mut switch_rx) = mpsc::channel::<Result<Setup, String>>(2);
+        self.switch_tx = Some(switch_tx);
 
         loop {
             tokio::select! {
-                outcome = &mut startup, if self.outcome.is_none() => {
-                    self.outcome = Some(outcome.unwrap_or_default());
+                outcome = &mut startup, if !self.started => {
+                    self.started = true;
+                    self.on_started(outcome.unwrap_or_default());
                     self.emit(Event::StartupComplete);
-                    for items in std::mem::take(&mut self.queued) {
-                        self.start_turn(items, done_tx.clone());
-                    }
+                    self.next_queued(&done_tx);
                 }
-                Some(turn) = done_rx.recv() => {
+                Some(result) = switch_rx.recv() => self.on_switched(result),
+                Some((turn, history)) = done_rx.recv() => {
+                    if let Some(c) = &mut self.convo {
+                        c.history = Some(history);
+                    }
+                    self.sync_log();
                     if self.running.as_ref().is_some_and(|(t, _)| *t == turn) {
                         self.running = None;
                     }
+                    self.next_queued(&done_tx);
                 }
                 op = ops.recv() => {
                     let Some(op) = op else { break };
@@ -120,15 +164,167 @@ impl Engine {
         self.emit(Event::ShutdownComplete);
     }
 
+    fn on_started(&mut self, outcome: StartupOutcome) {
+        self.problem = outcome.problem;
+        let Some(setup) = outcome.setup else {
+            if self.resume != Resume::New {
+                self.warn("cannot resume: no model is ready".into());
+            }
+            return;
+        };
+        self.session.model = Some(setup.model_ref.clone());
+        self.session.profile = setup.profile.id.clone();
+        let history = self.resume_history(&setup.model_ref);
+        self.emit(Event::SessionConfigured {
+            session: self.session.clone(),
+        });
+        self.convo = Some(Conversation {
+            perms: Arc::new(Mutex::new(setup.permissions.clone())),
+            setup: Arc::new(setup),
+            history: Some(history),
+        });
+    }
+
+    /// Load the requested session, if any, and reopen its log for appending.
+    fn resume_history(&mut self, model: &str) -> Vec<Message> {
+        let entry = match session::find(&self.config, &self.resume) {
+            Ok(Some(e)) => e,
+            Ok(None) => return Vec::new(),
+            Err(e) => {
+                self.warn(format!("cannot resume: {e}; starting a new session"));
+                return Vec::new();
+            }
+        };
+        let ps = session::project_sessions(&self.config);
+        let records = match ps.read(&entry) {
+            Ok(r) => r,
+            Err(e) => {
+                self.warn(format!(
+                    "cannot read session {}: {e}; starting a new session",
+                    entry.id
+                ));
+                return Vec::new();
+            }
+        };
+        let (history, items, turns) = session::replay(&records);
+        match ps.reopen(entry.clone()) {
+            Ok(log) => {
+                let log = Arc::new(Mutex::new(log));
+                session::record(
+                    Some(&log),
+                    "resume",
+                    serde_json::json!({ "model": model, "version": env!("CARGO_PKG_VERSION") }),
+                );
+                self.log = Some(log);
+            }
+            Err(e) => self.warn(format!(
+                "session log is read-only ({e}); new turns will not be saved"
+            )),
+        }
+        self.session.id = SessionId(entry.id.clone());
+        self.turns = turns;
+        self.title = Some(entry.title.clone()).filter(|t| !t.is_empty());
+        self.emit(Event::SessionResumed {
+            session: self.session.clone(),
+            items,
+        });
+        history
+    }
+
+    fn on_switched(&mut self, result: Result<Setup, String>) {
+        let setup = match result {
+            Ok(s) => s,
+            Err(e) => {
+                self.emit(Event::Error {
+                    error: EngineError {
+                        kind: EngineErrorKind::Provider,
+                        message: format!("cannot switch model: {e}"),
+                    },
+                });
+                return;
+            }
+        };
+        self.session.model = Some(setup.model_ref.clone());
+        self.session.profile = setup.profile.id.clone();
+        session::record(
+            self.log.as_ref(),
+            "model_switch",
+            serde_json::json!({ "to": setup.model_ref, "profile": setup.profile.id }),
+        );
+        match &mut self.convo {
+            // Keep the history and the session's approvals.
+            Some(c) => c.setup = Arc::new(setup),
+            None => {
+                self.convo = Some(Conversation {
+                    perms: Arc::new(Mutex::new(setup.permissions.clone())),
+                    setup: Arc::new(setup),
+                    history: Some(Vec::new()),
+                });
+                self.problem = None;
+            }
+        }
+        self.emit(Event::SessionConfigured {
+            session: self.session.clone(),
+        });
+    }
+
+    fn warn(&self, message: String) {
+        self.emit(Event::Warning { message });
+    }
+
+    /// Create the session log on the first turn.
+    fn ensure_log(&mut self) {
+        if self.log.is_some() {
+            return;
+        }
+        let ps = session::project_sessions(&self.config);
+        let model = self.session.model.clone().unwrap_or_default();
+        match std::fs::create_dir_all(&ps.dir).and_then(|()| ps.create(&self.session.id.0, &model))
+        {
+            Ok(log) => {
+                let log = Arc::new(Mutex::new(log));
+                session::record(
+                    Some(&log),
+                    "session_start",
+                    serde_json::json!({
+                        "version": env!("CARGO_PKG_VERSION"),
+                        "os": std::env::consts::OS,
+                        "cwd": self.session.cwd,
+                        "model": model,
+                        "profile": self.session.profile,
+                    }),
+                );
+                self.log = Some(log);
+            }
+            Err(e) => self.warn(format!(
+                "cannot save this session ({e}); continuing without a log"
+            )),
+        }
+    }
+
+    fn sync_log(&mut self) {
+        if let Some(log) = &self.log
+            && let Ok(mut l) = log.lock()
+            && let Err(e) = l.sync(self.title.as_deref(), self.turns)
+        {
+            tracing::warn!(error = %e, "could not sync session log");
+        }
+    }
+
     /// Returns false when the engine should stop.
-    fn handle(&mut self, op: Op, done: &mpsc::Sender<TurnId>) -> bool {
+    fn handle(&mut self, op: Op, done: &mpsc::Sender<(TurnId, Vec<Message>)>) -> bool {
         match op {
             Op::UserTurn { items, .. } => {
-                if self.outcome.is_none() {
+                if !self.started {
                     self.emit(Event::TurnQueued {
                         waiting_for: "startup".into(),
                     });
-                    self.queued.push(items);
+                    self.queued.push_back(items);
+                } else if self.running.is_some() {
+                    self.emit(Event::TurnQueued {
+                        waiting_for: "the current turn".into(),
+                    });
+                    self.queued.push_back(items);
                 } else {
                     self.start_turn(items, done.clone());
                 }
@@ -136,6 +332,43 @@ impl Engine {
             Op::Interrupt => {
                 if let Some((_, cancel)) = &self.running {
                     cancel.cancel();
+                }
+                self.queued.clear();
+            }
+            Op::ApprovalResponse { call_id, decision } => {
+                let waiting = self
+                    .approvals
+                    .lock()
+                    .ok()
+                    .and_then(|mut p| p.remove(&call_id.0));
+                match waiting {
+                    Some(tx) => {
+                        let _ = tx.send(decision);
+                    }
+                    None => self.emit(Event::Warning {
+                        message: format!("no pending approval for call {}", call_id.0),
+                    }),
+                }
+            }
+            Op::ListModels => {
+                let config = self.config.clone();
+                let tx = self.tx.clone();
+                let current = self.session.model.clone();
+                tokio::spawn(async move {
+                    let providers = crate::models::catalog(config).await;
+                    let _ = tx.send(Event::ModelCatalog { providers, current });
+                });
+            }
+            Op::SetModel { provider, model } => {
+                if self.running.is_some() {
+                    self.warn("wait for the current turn to finish before switching models".into());
+                } else if let Some(done) = self.switch_tx.clone() {
+                    let config = self.config.clone();
+                    let tx = self.tx.clone();
+                    tokio::spawn(async move {
+                        let r = startup::switch(config, tx, provider.0, model.0).await;
+                        let _ = done.send(r).await;
+                    });
                 }
             }
             Op::Shutdown => return false,
@@ -146,60 +379,77 @@ impl Engine {
         true
     }
 
-    fn start_turn(&mut self, items: Vec<InputItem>, done: mpsc::Sender<TurnId>) {
-        if let Some((_, cancel)) = self.running.take() {
-            cancel.cancel();
+    fn next_queued(&mut self, done: &mpsc::Sender<(TurnId, Vec<Message>)>) {
+        if self.running.is_none()
+            && let Some(items) = self.queued.pop_front()
+        {
+            self.start_turn(items, done.clone());
         }
+    }
+
+    fn start_turn(&mut self, items: Vec<InputItem>, done: mpsc::Sender<(TurnId, Vec<Message>)>) {
         self.next_turn += 1;
         let turn = TurnId(self.next_turn);
+        let prompt = items
+            .iter()
+            .filter_map(|i| match i {
+                InputItem::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let Some(convo) = &mut self.convo else {
+            let message = match &self.problem {
+                Some(p) => format!("No model is ready: {p}"),
+                None => "No model is ready.".to_owned(),
+            };
+            self.emit(Event::TurnStarted { turn });
+            self.emit(Event::Error {
+                error: EngineError {
+                    kind: EngineErrorKind::Config,
+                    message,
+                },
+            });
+            self.emit(Event::TurnAborted {
+                turn,
+                reason: "no model".into(),
+            });
+            return;
+        };
+        let Some(history) = convo.history.take() else {
+            return;
+        };
+        let setup = convo.setup.clone();
+        let perms = convo.perms.clone();
+        self.ensure_log();
+        self.turns += 1;
+        if self.title.is_none() {
+            let first: String = prompt
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .chars()
+                .take(80)
+                .collect();
+            self.title = Some(first);
+        }
         let cancel = CancellationToken::new();
         self.running = Some((turn, cancel.clone()));
-        let reply = stub_reply(&items, self.outcome.as_ref());
-        let tx = self.tx.clone();
+        let ctx = TurnCtx {
+            turn,
+            setup,
+            perms,
+            approvals: self.approvals.clone(),
+            tx: self.tx.clone(),
+            cancel,
+            log: self.log.clone(),
+        };
         tokio::spawn(async move {
-            let _ = tx.send(Event::TurnStarted { turn });
-            let mut sent = 0u32;
-            for chunk in reply.split_inclusive(' ') {
-                tokio::select! {
-                    () = cancel.cancelled() => {
-                        let _ = tx.send(Event::TurnAborted { turn, reason: "interrupted".into() });
-                        let _ = done.send(turn).await;
-                        return;
-                    }
-                    () = tokio::time::sleep(Duration::from_millis(12)) => {}
-                }
-                sent += 1;
-                let _ = tx.send(Event::AssistantDelta {
-                    text: chunk.to_owned(),
-                });
-            }
-            let usage = Usage {
-                prompt_tokens: 0,
-                completion_tokens: sent,
-                cached_prompt_tokens: None,
-            };
-            let _ = tx.send(Event::TurnComplete { turn, usage });
-            let _ = done.send(turn).await;
+            let history = turn::run(ctx, history, prompt).await;
+            let _ = done.send((turn, history)).await;
         });
     }
-}
-
-fn stub_reply(items: &[InputItem], outcome: Option<&StartupOutcome>) -> String {
-    let prompt: String = items
-        .iter()
-        .filter_map(|i| match i {
-            InputItem::Text { text } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-    let model = outcome
-        .and_then(|o| o.model.as_deref())
-        .unwrap_or("no model selected");
-    format!(
-        "Scaffold engine ({model}): provider adapters land in M1, so nothing was sent to a model. \
-         You said: \"{prompt}\""
-    )
 }
 
 fn op_name(op: &Op) -> &'static str {
@@ -208,6 +458,7 @@ fn op_name(op: &Op) -> &'static str {
         Op::Interrupt => "interrupt",
         Op::ApprovalResponse { .. } => "approval_response",
         Op::SetModel { .. } => "set_model",
+        Op::ListModels => "list_models",
         Op::Compact => "compact",
         Op::Undo { .. } => "undo",
         Op::ResumeSession { .. } => "resume_session",

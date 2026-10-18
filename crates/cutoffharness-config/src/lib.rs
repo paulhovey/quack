@@ -11,6 +11,7 @@ mod list;
 mod load;
 mod merge;
 mod paths;
+pub mod profile;
 pub mod provider;
 pub mod schema;
 mod secret;
@@ -18,14 +19,14 @@ pub mod settings;
 mod trust;
 
 pub use diagnostic::FileDiagnostic;
-pub use items::{Item, ItemState, load_items};
+pub use items::{Item, ItemState, glob_match, load_dir_items, load_items};
 pub use load::{
     ConfigError, LayerReport, LayerStatus, LoadOptions, Loaded, Origin, ProjectStatus, load,
     load_with,
 };
 pub use paths::{Dirs, Env, LayerKind, find_workspace_root};
 pub use provider::ProviderFile;
-pub use secret::Secret;
+pub use secret::{Secret, SecretError, expand_home};
 pub use settings::Settings;
 pub use trust::TrustDecision;
 

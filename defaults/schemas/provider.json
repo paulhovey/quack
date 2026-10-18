@@ -133,7 +133,7 @@
           "$ref": "#/$defs/Reasoning",
           "default": {
             "effort": "",
-            "format": "none",
+            "format": "auto",
             "preserve_in_history": null
           }
         },
@@ -180,6 +180,17 @@
       ],
       "type": "object"
     },
+    "ModelSpec": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/ModelEntry"
+        }
+      ],
+      "description": "Schema-only view of a `models` element."
+    },
     "Reasoning": {
       "additionalProperties": false,
       "properties": {
@@ -189,7 +200,7 @@
         },
         "format": {
           "$ref": "#/$defs/ReasoningFormat",
-          "default": "none"
+          "default": "auto"
         },
         "preserve_in_history": {
           "default": null,
@@ -203,13 +214,22 @@
       "type": "object"
     },
     "ReasoningFormat": {
-      "enum": [
-        "none",
-        "reasoning_content",
-        "reasoning",
-        "think-tags"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "none",
+            "reasoning_content",
+            "reasoning",
+            "think-tags"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "auto",
+          "description": "Read `reasoning_content` / `reasoning` fields, and split `<think>` tags when the reply opens with one.",
+          "type": "string"
+        }
+      ]
     },
     "Sampling": {
       "additionalProperties": false,
@@ -437,7 +457,8 @@
   "additionalProperties": false,
   "properties": {
     "api": {
-      "description": "Wire protocol: `openai-chat`, `openai-responses`, `anthropic-messages`, `ollama`.",
+      "default": "openai-chat",
+      "description": "Wire protocol: `openai-chat` (default), `openai-responses`, `anthropic-messages`, `ollama`.",
       "type": "string"
     },
     "api_key": {
@@ -508,8 +529,9 @@
     },
     "models": {
       "default": [],
+      "description": "Model ids as plain strings, or tables for per-model settings.",
       "items": {
-        "$ref": "#/$defs/ModelEntry"
+        "$ref": "#/$defs/ModelSpec"
       },
       "type": "array"
     },
@@ -528,7 +550,6 @@
     }
   },
   "required": [
-    "api",
     "base_url"
   ],
   "title": "ProviderFile",

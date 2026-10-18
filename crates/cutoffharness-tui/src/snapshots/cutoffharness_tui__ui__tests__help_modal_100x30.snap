@@ -1,5 +1,6 @@
 ---
 source: crates/cutoffharness-tui/src/ui.rs
+assertion_line: 517
 expression: "render(&app, 100, 30)"
 ---
 " cutoffharness 0.1.0 · ~/src/project                                                                "
@@ -8,13 +9,13 @@ expression: "render(&app, 100, 30)"
 " ? pr│ Commands │ Keys                                                                        │     "
 " ✓ pr│ filter:                                                                                │     "
 " ⠋ to│╭──────────────────────────────────────╮╭──────────────────────────────────────────────╮│     "
-" · in││ /models                           M1 ││ /models                                      ││     "
+" · in││ /models                              ││ /models [provider/model]                     ││     "
 " · co││ /providers                        M1 ││                                              ││     "
-" · me││ /profiles                         M2 ││ Pick a model for this session or set the     ││     "
-" · mc││ /resume                           M1 ││ default                                      ││     "
+" · me││ /profiles                         M2 ││ Pick a model for this session; with an       ││     "
+" · mc││ /resume                           M1 ││ argument, switch directly                    ││     "
 " ✗ ls││ /new                                 ││                                              ││     "
 "     ││ /rewind                           M3 ││ aliases   /model                             ││     "
-"     ││ /undo                             M3 ││ status    planned for M1                     ││     "
+"     ││ /undo                             M3 ││ status    available                          ││     "
 "   Ty││ /fork                             M3 ││                                              ││     "
 "     ││ /title                            M1 ││                                              ││     "
 "     ││ /export                           M3 ││                                              ││     "

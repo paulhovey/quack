@@ -1,12 +1,13 @@
 ---
 source: crates/cutoffharness-tui/src/ui.rs
+assertion_line: 524
 expression: "render(&app, 60, 20)"
 ---
 "╭ Help ────────────────────────────────────────────────────╮"
 "│ Commands │ Keys                                          │"
 "│ filter:                                                  │"
 "│╭────────────────────────────────────────────────────────╮│"
-"││ /models                                             M1 ││"
+"││ /models                                                ││"
 "││ /providers                                          M1 ││"
 "││ /profiles                                           M2 ││"
 "││ /resume                                             M1 ││"
@@ -15,10 +16,10 @@ expression: "render(&app, 60, 20)"
 "││ /undo                                               M3 ││"
 "│╰────────────────────────────────────────────────────────╯│"
 "│╭────────────────────────────────────────────────────────╮│"
-"││ /models                                                ││"
+"││ /models [provider/model]                               ││"
 "││                                                        ││"
-"││ Pick a model for this session or set the default       ││"
-"││                                                        ││"
+"││ Pick a model for this session; with an argument,       ││"
+"││ switch directly                                        ││"
 "│╰────────────────────────────────────────────────────────╯│"
 "│ ↑↓ move   tab switch tab   ⏎ use   esc close             │"
 "╰──────────────────────────────────────────────────────────╯"

@@ -1,0 +1,7 @@
+#:schema ../../schemas/profile.json
+description = "Short, general prompt for any model; internal tool names"
+source = "Original (cutoffharness project, Apache-2.0)"
+
+[match]
+model = ["*"]
+priority = 0

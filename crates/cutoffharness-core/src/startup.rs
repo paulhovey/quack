@@ -3,16 +3,50 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use cutoffharness_config::{ItemState, Loaded, ProjectStatus, ProviderFile, load_providers};
+use cutoffharness_config::provider::ModelEntry;
+use cutoffharness_config::{
+    Item, ItemState, Loaded, ProjectStatus, ProviderFile, glob_match, load_providers,
+};
+use cutoffharness_profiles::{
+    InternalTool, Profile, PromptVars, ToolSurface, load_profiles, select,
+};
 use cutoffharness_protocol::{Event, LoadState, Subsystem};
+use cutoffharness_providers::{DiscoveredModel, Provider};
+use cutoffharness_shell::ShellKind;
+use cutoffharness_tools::{Permissions, ReadTracker, Registry, ToolCtx};
 use tokio::sync::broadcast;
 use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
+
+use crate::env;
+
+const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Everything a turn needs, resolved once per session.
+#[derive(Debug)]
+pub(crate) struct Setup {
+    pub provider: Provider,
+    pub model: ModelEntry,
+    /// `<provider>/<model>` as shown to the user.
+    pub model_ref: String,
+    pub profile: Profile,
+    /// Rendered once; byte-stable for the session.
+    pub system: String,
+    pub surface: ToolSurface,
+    pub registry: Arc<Registry>,
+    /// Template for per-call contexts (cancel and output are replaced per call).
+    pub tool_ctx: ToolCtx,
+    pub permissions: Permissions,
+    /// Planned context budget in tokens, when the window is known.
+    pub budget: Option<u32>,
+}
 
 /// What startup resolved, for the engine's use.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 pub(crate) struct StartupOutcome {
-    /// `<provider>/<model>` when the configured model resolved.
-    pub model: Option<String>,
+    pub setup: Option<Setup>,
+    /// Why there is no setup, for the error shown when a turn is submitted.
+    pub problem: Option<String>,
 }
 
 struct Reporter {
@@ -29,6 +63,12 @@ impl Reporter {
     }
 }
 
+fn warn(tx: &broadcast::Sender<Event>, message: impl Into<String>) {
+    let _ = tx.send(Event::Warning {
+        message: message.into(),
+    });
+}
+
 pub(crate) async fn run(config: Arc<Loaded>, tx: broadcast::Sender<Event>) -> StartupOutcome {
     let reporter = |subsystem| Reporter {
         tx: tx.clone(),
@@ -38,23 +78,15 @@ pub(crate) async fn run(config: Arc<Loaded>, tx: broadcast::Sender<Event>) -> St
         reporter(s).send(LoadState::Pending);
     }
     for warning in &config.warnings {
-        let _ = tx.send(Event::Warning {
-            message: warning.clone(),
-        });
+        warn(&tx, warning.clone());
     }
     reporter(Subsystem::Project).send(project_state(config.project));
-    reporter(Subsystem::Profile).send(LoadState::Ready {
-        detail: "empty (compiled-in)".into(),
+    reporter(Subsystem::Tokenizer).send(LoadState::Ready {
+        detail: "estimate, corrected by server usage".into(),
     });
 
     let mut placeholders = JoinSet::new();
     for (subsystem, work, milestone) in [
-        (Subsystem::Tokenizer, "selecting tokenizer", "M2"),
-        (
-            Subsystem::Instructions,
-            "scanning AGENTS.md and skills",
-            "M2",
-        ),
         (
             Subsystem::Compat,
             "looking for other harnesses' files",
@@ -76,7 +108,15 @@ pub(crate) async fn run(config: Arc<Loaded>, tx: broadcast::Sender<Event>) -> St
         });
     }
 
-    // Config + providers are real.
+    // Instructions (AGENTS.md) are cheap; read them while providers load.
+    let instr = reporter(Subsystem::Instructions);
+    instr.send(LoadState::Running {
+        detail: "reading AGENTS.md".into(),
+    });
+    let cfg_for_instr = config.clone();
+    let instructions = tokio::task::spawn_blocking(move || env::instructions(&cfg_for_instr));
+
+    // Config + providers.
     let cfg = reporter(Subsystem::Config);
     let prov = reporter(Subsystem::Provider);
     cfg.send(LoadState::Running {
@@ -91,7 +131,137 @@ pub(crate) async fn run(config: Arc<Loaded>, tx: broadcast::Sender<Event>) -> St
         .await
         .unwrap_or_default();
     let elapsed = started.elapsed().as_millis();
+    report_config(&cfg, &config, &providers, elapsed, &tx);
 
+    let (instructions, sources) = instructions.await.unwrap_or_default();
+    instr.send(if sources.is_empty() {
+        LoadState::Disabled {
+            reason: "no AGENTS.md found".into(),
+        }
+    } else {
+        LoadState::Ready {
+            detail: format!("{} · {} bytes", sources.join(", "), instructions.len()),
+        }
+    });
+
+    let resolved = resolve_model(&config, &providers, &prov, &tx).await;
+    let (provider, model, auto_picked) = match resolved {
+        Ok(r) => r,
+        Err((state, problem)) => {
+            prov.send(state);
+            reporter(Subsystem::Profile).send(LoadState::Disabled {
+                reason: "no model selected".into(),
+            });
+            while placeholders.join_next().await.is_some() {}
+            return StartupOutcome {
+                setup: None,
+                problem: Some(problem),
+            };
+        }
+    };
+    let model_ref = format!("{}/{}", provider.id, model.display_name());
+    let ctx_label = model.context_window.map_or_else(
+        || "context unknown".into(),
+        |c| format!("{}k ctx", c / 1024),
+    );
+    prov.send(LoadState::Ready {
+        detail: format!(
+            "{model_ref} ({ctx_label}){}",
+            if auto_picked {
+                " · auto-selected; set [model].default to choose"
+            } else {
+                ""
+            }
+        ),
+    });
+
+    let setup = build_setup(
+        &config,
+        provider,
+        model,
+        model_ref,
+        instructions,
+        &reporter(Subsystem::Profile),
+        &tx,
+    )
+    .await;
+    while placeholders.join_next().await.is_some() {}
+    StartupOutcome {
+        problem: setup
+            .is_none()
+            .then(|| "the model profile failed to load".to_owned()),
+        setup,
+    }
+}
+
+/// Switch to another provider/model mid-session (`/models`): resolve it like startup does
+/// and rebuild the profile, prompt and tool surface for it.
+pub(crate) async fn switch(
+    config: Arc<Loaded>,
+    tx: broadcast::Sender<Event>,
+    pid: String,
+    mid: String,
+) -> Result<Setup, String> {
+    let reporter = |subsystem| Reporter {
+        tx: tx.clone(),
+        subsystem,
+    };
+    let cfg = config.clone();
+    let providers = tokio::task::spawn_blocking(move || load_providers(&cfg))
+        .await
+        .unwrap_or_default();
+    let item = providers
+        .iter()
+        .find(|p| p.id == pid)
+        .ok_or_else(|| format!("provider `{pid}` not found"))?;
+    let file = match &item.state {
+        ItemState::Loaded(f) => f.clone(),
+        ItemState::Disabled(why) => return Err(format!("provider `{pid}` is disabled: {why}")),
+        ItemState::Failed(d) => return Err(d.one_line()),
+    };
+    let prov = reporter(Subsystem::Provider);
+    let (provider, model) = try_provider(
+        &config,
+        &pid,
+        file,
+        Some(&mid),
+        DISCOVERY_TIMEOUT,
+        &prov,
+        &tx,
+    )
+    .await?;
+    let model_ref = format!("{pid}/{}", model.display_name());
+    let ctx = model.context_window.map_or_else(
+        || "context unknown".into(),
+        |c| format!("{}k ctx", c / 1024),
+    );
+    prov.send(LoadState::Ready {
+        detail: format!("{model_ref} ({ctx})"),
+    });
+    let cfg = config.clone();
+    let (instructions, _) = tokio::task::spawn_blocking(move || env::instructions(&cfg))
+        .await
+        .unwrap_or_default();
+    build_setup(
+        &config,
+        provider,
+        model,
+        model_ref,
+        instructions,
+        &reporter(Subsystem::Profile),
+        &tx,
+    )
+    .await
+    .ok_or_else(|| "the model profile failed to load".to_owned())
+}
+
+fn report_config(
+    cfg: &Reporter,
+    config: &Loaded,
+    providers: &[Item<ProviderFile>],
+    elapsed: u128,
+    tx: &broadcast::Sender<Event>,
+) {
     let failed: Vec<String> = providers
         .iter()
         .filter_map(|p| match &p.state {
@@ -107,7 +277,7 @@ pub(crate) async fn run(config: Arc<Loaded>, tx: broadcast::Sender<Event>) -> St
         .count();
     let active = providers.iter().filter(|p| p.loaded().is_some()).count();
     for f in &failed {
-        let _ = tx.send(Event::Warning { message: f.clone() });
+        warn(tx, f.clone());
     }
     cfg.send(if failed.is_empty() {
         LoadState::Ready {
@@ -122,12 +292,303 @@ pub(crate) async fn run(config: Arc<Loaded>, tx: broadcast::Sender<Event>) -> St
             ),
         }
     });
+}
 
-    let (state, model) = resolve_model(&config.settings.model.default, &providers);
-    prov.send(state);
+type Resolved = (Provider, ModelEntry, bool);
+type Unresolved = (LoadState, String);
 
-    while placeholders.join_next().await.is_some() {}
-    StartupOutcome { model }
+/// Shorter discovery timeout while probing candidates for auto-selection.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Pick the provider and model, build the client, and discover models when needed.
+///
+/// With `[model].default` set, that provider is used. Without it, providers are tried in
+/// order (the user's own files before the defaults bundle) and the first one whose key is
+/// available and that answers is used.
+async fn resolve_model(
+    config: &Loaded,
+    providers: &[Item<ProviderFile>],
+    prov: &Reporter,
+    tx: &broadcast::Sender<Event>,
+) -> Result<Resolved, Unresolved> {
+    let failed = |msg: String| (LoadState::Failed { error: msg.clone() }, msg);
+    let wanted = config.settings.model.default.as_str();
+    if !wanted.is_empty() {
+        let Some((pid, mid)) = wanted.split_once('/') else {
+            return Err(failed(format!(
+                "[model].default `{wanted}` must be <provider>/<model>"
+            )));
+        };
+        let Some(item) = providers.iter().find(|p| p.id == pid) else {
+            return Err(failed(format!(
+                "provider `{pid}` not found in any providers.d/"
+            )));
+        };
+        let file = match &item.state {
+            ItemState::Loaded(p) => p.clone(),
+            ItemState::Disabled(why) => {
+                return Err(failed(format!("provider `{pid}` is disabled: {why}")));
+            }
+            ItemState::Failed(d) => return Err(failed(d.one_line())),
+        };
+        return try_provider(config, pid, file, Some(mid), DISCOVERY_TIMEOUT, prov, tx)
+            .await
+            .map(|(p, m)| (p, m, false))
+            .map_err(failed);
+    }
+
+    let mut candidates: Vec<(&Item<ProviderFile>, &ProviderFile)> = providers
+        .iter()
+        .filter_map(|i| i.loaded().map(|f| (i, f)))
+        .collect();
+    if candidates.is_empty() {
+        let msg = "no providers configured · add a file to providers.d/".to_owned();
+        return Err((
+            LoadState::NeedsAttention {
+                detail: msg.clone(),
+            },
+            msg,
+        ));
+    }
+    // Higher layers first (project, user, system, defaults), then by id.
+    candidates.sort_by(|a, b| b.0.layer.cmp(&a.0.layer).then_with(|| a.0.id.cmp(&b.0.id)));
+    let mut reasons = Vec::new();
+    for (item, file) in candidates {
+        if let Some(missing) = missing_env_key(file) {
+            reasons.push(format!("{}: {missing} not set", item.id));
+            continue;
+        }
+        match try_provider(
+            config,
+            &item.id,
+            file.clone(),
+            None,
+            PROBE_TIMEOUT,
+            prov,
+            tx,
+        )
+        .await
+        {
+            Ok((p, m)) => return Ok((p, m, true)),
+            Err(e) => reasons.push(e),
+        }
+    }
+    let msg = format!("no usable provider · {}", reasons.join(" · "));
+    Err((
+        LoadState::NeedsAttention {
+            detail: msg.clone(),
+        },
+        msg,
+    ))
+}
+
+/// The environment variable named by `api_key = { env = ... }`, when it is unset.
+fn missing_env_key(file: &ProviderFile) -> Option<String> {
+    match &file.api_key {
+        Some(cutoffharness_config::Secret::Env { env, .. }) if std::env::var_os(env).is_none() => {
+            Some(env.clone())
+        }
+        _ => None,
+    }
+}
+
+async fn try_provider(
+    config: &Loaded,
+    pid: &str,
+    file: ProviderFile,
+    wanted_model: Option<&str>,
+    timeout: Duration,
+    prov: &Reporter,
+    tx: &broadcast::Sender<Event>,
+) -> Result<(Provider, ModelEntry), String> {
+    prov.send(LoadState::Running {
+        detail: format!("connecting to {pid}"),
+    });
+    let network = config.settings.network.clone();
+    let id = pid.to_owned();
+    let provider = tokio::task::spawn_blocking(move || {
+        Provider::new(&id, file, &network, &|k| std::env::var_os(k))
+    })
+    .await
+    .map_err(|e| format!("{pid}: {e}"))?
+    .map_err(|e| format!("{pid}: {}", e.message))?;
+
+    // Discover when no models are listed (the short provider form) or when asked to.
+    let mut discovered: Vec<DiscoveredModel> = Vec::new();
+    let mut discovery_error = None;
+    // Also when the model to use is listed without a context window: the models endpoint
+    // usually reports it, and the budget depends on it.
+    let target = wanted_model
+        .and_then(|m| provider.file.model(m))
+        .or_else(|| provider.file.models.first());
+    let needs_window = wanted_model.is_none_or(|m| provider.file.model(m).is_some())
+        && target.is_some_and(|m| m.context_window.is_none());
+    if provider.file.models.is_empty() || provider.file.discovery.enabled || needs_window {
+        prov.send(LoadState::Running {
+            detail: format!("listing models at {pid}"),
+        });
+        match tokio::time::timeout(timeout, provider.list_models()).await {
+            Ok(Ok(list)) => {
+                let include = &provider.file.discovery.include;
+                discovered = list
+                    .into_iter()
+                    .filter(|m| include.is_empty() || include.iter().any(|g| glob_match(g, &m.id)))
+                    .collect();
+            }
+            Ok(Err(e)) => discovery_error = Some(e.message),
+            Err(_) => discovery_error = Some("listing models timed out".into()),
+        }
+    }
+
+    let mid = match wanted_model {
+        Some(m) => m.to_owned(),
+        None => provider
+            .file
+            .models
+            .first()
+            .map(|m| m.id.clone())
+            .or_else(|| discovered.first().map(|m| m.id.clone()))
+            .ok_or_else(|| match &discovery_error {
+                Some(e) => format!("{pid}: {e}"),
+                None => format!("{pid}: no models listed or discovered · add models = [\"…\"]"),
+            })?,
+    };
+    if let Some(e) = &discovery_error {
+        warn(tx, format!("provider `{pid}`: could not list models: {e}"));
+    }
+    let mut model = provider
+        .file
+        .model(&mid)
+        .cloned()
+        .unwrap_or_else(|| ModelEntry::new(mid.clone()));
+    if let Some(d) = discovered.iter().find(|d| d.id == model.id) {
+        model.context_window = model.context_window.or(d.context_window);
+    } else if !discovered.is_empty() && provider.file.model(&mid).is_none() {
+        warn(
+            tx,
+            format!("model `{mid}` is not in {pid}'s model list; trying it anyway"),
+        );
+    }
+    Ok((provider, model))
+}
+
+async fn build_setup(
+    config: &Arc<Loaded>,
+    provider: Provider,
+    model: ModelEntry,
+    model_ref: String,
+    instructions: String,
+    rep: &Reporter,
+    tx: &broadcast::Sender<Event>,
+) -> Option<Setup> {
+    rep.send(LoadState::Running {
+        detail: "loading profiles.d".into(),
+    });
+    let loaded = Arc::clone(config);
+    let (profiles, warnings) = tokio::task::spawn_blocking(move || load_profiles(&loaded))
+        .await
+        .unwrap_or_default();
+    for w in warnings {
+        warn(tx, w);
+    }
+    let mut names = vec![model.id.as_str()];
+    names.extend(model.alias.as_deref());
+    let profile = match select(&profiles, &model.profile, &names) {
+        Ok(p) => p,
+        Err(e) => {
+            rep.send(LoadState::Failed { error: e });
+            return None;
+        }
+    };
+
+    let root = config.dirs.workspace_root.clone();
+    let shell = ShellKind::detect(
+        &config.settings.tools.shell,
+        std::env::var("SHELL").ok().as_deref(),
+    );
+    let timeout = Duration::from_secs(config.settings.tools.default_timeout_secs.max(1));
+    let tool_ctx = ToolCtx {
+        root: root.clone(),
+        shell: shell.clone(),
+        default_timeout: timeout,
+        max_timeout: timeout.max(Duration::from_secs(600)),
+        cancel: CancellationToken::new(),
+        on_output: None,
+        reads: Arc::new(ReadTracker::default()),
+    };
+    let registry = Arc::new(Registry::builtin());
+    let internal: Vec<InternalTool> = registry
+        .iter()
+        .map(|t| InternalTool {
+            name: t.name().to_owned(),
+            description: t.description(&tool_ctx),
+            schema: t.schema(),
+        })
+        .collect();
+    let (surface, surface_warnings) = ToolSurface::build(&profile, &internal);
+    for w in surface_warnings {
+        warn(tx, w);
+    }
+
+    let vars = PromptVars {
+        os: std::env::consts::OS.into(),
+        shell: shell.label().into(),
+        cwd: root.display().to_string(),
+        workspace_root: root.display().to_string(),
+        date: env::today(),
+        model: model.id.clone(),
+        context_window: model.context_window,
+        instructions,
+        folder_listing: env::folder_listing(&root),
+        git_branch: env::git_branch(&root),
+    };
+    let system = match profile.render_system(&vars) {
+        Ok(s) => s,
+        Err(e) => {
+            rep.send(LoadState::Failed { error: e });
+            return None;
+        }
+    };
+    let mut settings = config.settings.permissions.clone();
+    if let Some(cap) = config.settings.policy.max_permission_mode {
+        settings.mode = settings.mode.min(cap);
+    }
+    let (permissions, perm_warnings) = Permissions::new(&settings, &root);
+    for w in perm_warnings {
+        warn(tx, format!("[permissions]: {w}"));
+    }
+
+    rep.send(LoadState::Ready {
+        detail: match &profile.dir {
+            Some(_) => format!(
+                "{} · {} tools · {} mode",
+                profile.id,
+                surface.tools.len(),
+                settings.mode.label()
+            ),
+            None => format!(
+                "empty (no profiles installed) · {} tools · {} mode",
+                surface.tools.len(),
+                settings.mode.label()
+            ),
+        },
+    });
+    let budget = model.context_window.map(|c| {
+        let ratio = config.settings.context.budget_ratio.clamp(0.1, 1.0);
+        (f64::from(c) * ratio) as u32
+    });
+    Some(Setup {
+        provider,
+        model,
+        model_ref,
+        profile,
+        system,
+        surface,
+        registry,
+        tool_ctx,
+        permissions,
+        budget,
+    })
 }
 
 fn project_state(status: ProjectStatus) -> LoadState {
@@ -142,7 +603,7 @@ fn project_state(status: ProjectStatus) -> LoadState {
             detail: "trusted (settings only)".into(),
         },
         ProjectStatus::Untrusted => LoadState::NeedsAttention {
-            detail: "project config found but not trusted; skipped (trust prompt lands in M1)"
+            detail: "project config found but not trusted; skipped (trust prompt lands in M3)"
                 .into(),
         },
         ProjectStatus::Ignored => LoadState::Disabled {
@@ -152,75 +613,4 @@ fn project_state(status: ProjectStatus) -> LoadState {
             reason: "disabled by policy".into(),
         },
     }
-}
-
-fn resolve_model(
-    wanted: &str,
-    providers: &[cutoffharness_config::Item<ProviderFile>],
-) -> (LoadState, Option<String>) {
-    if wanted.is_empty() {
-        let hint = if providers.iter().any(|p| p.loaded().is_some()) {
-            "no model selected · set [model].default or use /models"
-        } else {
-            "no providers configured · add a file to providers.d/"
-        };
-        return (
-            LoadState::NeedsAttention {
-                detail: hint.into(),
-            },
-            None,
-        );
-    }
-    let Some((pid, mid)) = wanted.split_once('/') else {
-        return (
-            LoadState::Failed {
-                error: format!("[model].default `{wanted}` must be <provider>/<model>"),
-            },
-            None,
-        );
-    };
-    let Some(item) = providers.iter().find(|p| p.id == pid) else {
-        return (
-            LoadState::Failed {
-                error: format!("provider `{pid}` not found in any providers.d/"),
-            },
-            None,
-        );
-    };
-    let provider = match &item.state {
-        ItemState::Loaded(p) => p,
-        ItemState::Disabled(why) => {
-            return (
-                LoadState::Failed {
-                    error: format!("provider `{pid}` is disabled: {why}"),
-                },
-                None,
-            );
-        }
-        ItemState::Failed(d) => {
-            return (
-                LoadState::Failed {
-                    error: d.one_line(),
-                },
-                None,
-            );
-        }
-    };
-    let ctx = provider
-        .model(mid)
-        .and_then(|m| m.context_window)
-        .map_or_else(
-            || "context unknown".into(),
-            |c| format!("{}k ctx", c / 1024),
-        );
-    let name = provider.model(mid).map_or(mid, |m| m.display_name());
-    (
-        LoadState::Ready {
-            detail: format!(
-                "{pid} · {name} ({ctx}) · {} adapter lands in M1",
-                provider.api
-            ),
-        },
-        Some(wanted.to_owned()),
-    )
 }

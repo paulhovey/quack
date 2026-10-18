@@ -1,0 +1,4 @@
+#:schema ../schemas/provider.json
+# vLLM on this machine. Start it with `--enable-auto-tool-choice --tool-call-parser <parser>`
+# for your model. The served model is discovered.
+base_url = "http://127.0.0.1:8000/v1"

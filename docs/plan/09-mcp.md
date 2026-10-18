@@ -101,7 +101,7 @@ Large MCP servers can carry 20–100 tools and over 10k tokens of schemas, which
 
 ## Default MCP files (shipped separately)
 
-`defaults/mcp/` contains **examples only**, and all are disabled (`enabled = false`): `filesystem.example.toml`, `github.example.toml`, `postgres.example.toml`, `playwright.example.toml`. We don't enable any third-party server by default.
+`defaults/mcp.d/` contains **examples only**, and all are disabled (`enabled = false`): `filesystem.example.toml`, `github.example.toml`, `postgres.example.toml`, `playwright.example.toml`. We don't enable any third-party server by default.
 
 ## Open questions
 

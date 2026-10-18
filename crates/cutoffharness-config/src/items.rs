@@ -67,6 +67,47 @@ pub fn load_items<T: DeserializeOwned>(
     by_id.into_values().collect()
 }
 
+/// Load `<layer>/<subdir>/<id>/<file>` for each layer (directory items such as profiles).
+/// The id is the directory name unless the file sets `id`.
+pub fn load_dir_items<T: DeserializeOwned>(
+    layers: &[(LayerKind, PathBuf)],
+    subdir: &str,
+    file: &str,
+) -> Vec<Item<T>> {
+    let mut by_id: BTreeMap<String, Item<T>> = BTreeMap::new();
+    for (layer, dir) in layers {
+        let Ok(entries) = std::fs::read_dir(dir.join(subdir)) else {
+            continue;
+        };
+        let mut dirs: Vec<PathBuf> = entries
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.join(file).is_file())
+            .collect();
+        dirs.sort();
+        for d in dirs {
+            let name = d
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let path = d.join(file);
+            let (id, state) = load_one::<T>(&path, name);
+            let state = state
+                .unwrap_or_else(|| ItemState::Disabled(format!("disabled by {}", path.display())));
+            by_id.insert(
+                id.clone(),
+                Item {
+                    id,
+                    path,
+                    layer: *layer,
+                    state,
+                },
+            );
+        }
+    }
+    by_id.into_values().collect()
+}
+
 /// `None` state means the file is a bare `enabled = false` override.
 fn load_one<T: DeserializeOwned>(path: &Path, stem: String) -> (String, Option<ItemState<T>>) {
     let text = match read_text(path) {
@@ -128,7 +169,7 @@ pub(crate) fn apply_toggles<T>(items: &mut [Item<T>], disabled: &[String], allow
 }
 
 /// Minimal `*` glob for id matching.
-pub(crate) fn glob_match(pattern: &str, text: &str) -> bool {
+pub fn glob_match(pattern: &str, text: &str) -> bool {
     let parts: Vec<&str> = pattern.split('*').collect();
     if parts.len() == 1 {
         return pattern == text;

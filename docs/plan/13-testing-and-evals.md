@@ -48,7 +48,7 @@ Pass rate, steps per task, tokens per task (prompt / cached / completion), wall 
 ### Outputs
 
 - `evals/results/<date>/<server>-<model>-<profile>.json`
-- `docs/compat.md`: a generated table of model × profile × server with pass rate and notes. Its results set default profile `[match]` priorities ([03](03-model-profiles.md#evaluating-profiles)) and default `tool_calling` / `edit_format` values in `defaults/providers/*.toml`.
+- `docs/compat.md`: a generated table of model × profile × server with pass rate and notes. Its results set default profile `[match]` priorities ([03](03-model-profiles.md#evaluating-profiles)) and default `tool_calling` / `edit_format` values in `defaults/providers.d/*.toml`.
 
 ### Recording fixtures
 

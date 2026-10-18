@@ -36,9 +36,9 @@ pub(crate) const COMMANDS: &[Command] = &[
     c(
         "models",
         &["model"],
-        "",
-        "Pick a model for this session or set the default",
-        Some("M1"),
+        "[provider/model]",
+        "Pick a model for this session; with an argument, switch directly",
+        None,
     ),
     c(
         "providers",

@@ -24,6 +24,8 @@ pub(crate) struct ModalItem {
     pub detail: Vec<Line<'static>>,
     /// Text inserted into the input when the item is activated, if any.
     pub action: Option<String>,
+    /// Run `action` as a command immediately instead of inserting it.
+    pub run: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -49,6 +51,8 @@ pub(crate) enum ModalOutcome {
     Close,
     /// Close and put this text in the input.
     Insert(String),
+    /// Close and run this command.
+    Run(String),
 }
 
 impl Modal {
@@ -119,9 +123,19 @@ impl Modal {
                 self.refilter();
             }
             KeyCode::Enter => {
-                return match self.selected_item().and_then(|i| i.action.clone()) {
-                    Some(text) => ModalOutcome::Insert(text),
-                    None => ModalOutcome::None,
+                return match self.selected_item() {
+                    Some(ModalItem {
+                        action: Some(text),
+                        run,
+                        ..
+                    }) => {
+                        if *run {
+                            ModalOutcome::Run(text.clone())
+                        } else {
+                            ModalOutcome::Insert(text.clone())
+                        }
+                    }
+                    _ => ModalOutcome::None,
                 };
             }
             KeyCode::Backspace => {
@@ -203,6 +217,9 @@ impl Modal {
 
         let mut spans = vec![Span::raw(" ")];
         for (key, what) in &self.footer {
+            if *key == "tab" && self.tabs.len() < 2 {
+                continue;
+            }
             spans.push(Span::styled(*key, theme.accent));
             spans.push(Span::styled(format!(" {what}   "), theme.dim));
         }
@@ -298,6 +315,7 @@ pub(crate) fn help(theme: &Theme) -> Modal {
                     c.name,
                     if c.args.is_empty() { "" } else { " " }
                 )),
+                run: false,
             }
         })
         .collect();
@@ -312,6 +330,7 @@ pub(crate) fn help(theme: &Theme) -> Modal {
                 Line::raw(*what),
             ],
             action: None,
+            run: false,
         })
         .collect();
     Modal::new(
@@ -326,6 +345,98 @@ pub(crate) fn help(theme: &Theme) -> Modal {
                 items: keys,
             },
         ],
+    )
+}
+
+/// The `/models` modal. `catalog` is `None` while the engine is still listing models.
+pub(crate) fn models(
+    catalog: Option<&[cutoffharness_protocol::ProviderModels]>,
+    current: Option<&str>,
+    theme: &Theme,
+) -> Modal {
+    let field = |k: &str, v: String| {
+        Line::from(vec![
+            Span::styled(format!("{k:<10}"), theme.dim),
+            Span::raw(v),
+        ])
+    };
+    let mut items = Vec::new();
+    match catalog {
+        None => items.push(ModalItem {
+            label: "listing models…".into(),
+            hint: String::new(),
+            detail: vec![Line::styled(
+                "Asking each provider for its models.",
+                theme.dim,
+            )],
+            action: None,
+            run: false,
+        }),
+        Some(providers) => {
+            for p in providers {
+                if !p.available {
+                    items.push(ModalItem {
+                        label: format!("{} (unavailable)", p.id),
+                        hint: String::new(),
+                        detail: vec![
+                            Line::styled(p.id.clone(), theme.accent),
+                            Line::raw(""),
+                            Line::raw(p.note.clone()),
+                        ],
+                        action: None,
+                        run: false,
+                    });
+                    continue;
+                }
+                for m in &p.models {
+                    let name = m.alias.clone().unwrap_or_else(|| m.id.clone());
+                    let reference = format!("{}/{}", p.id, name);
+                    let is_current = current == Some(reference.as_str());
+                    let ctx = m
+                        .context_window
+                        .map_or_else(String::new, crate::theme::tokens);
+                    let mut detail = vec![
+                        Line::styled(reference.clone(), theme.accent),
+                        Line::raw(""),
+                        field("provider", p.id.clone()),
+                        field("model id", m.id.clone()),
+                        field(
+                            "context",
+                            m.context_window
+                                .map_or_else(|| "unknown".into(), |c| format!("{c} tokens")),
+                        ),
+                        Line::raw(""),
+                    ];
+                    detail.push(if is_current {
+                        Line::styled("in use", theme.ok)
+                    } else {
+                        Line::styled("⏎ switch to this model for the session", theme.dim)
+                    });
+                    detail.push(Line::styled(
+                        format!("To make it the default: [model] default = \"{reference}\""),
+                        theme.dim,
+                    ));
+                    items.push(ModalItem {
+                        label: if is_current {
+                            format!("{reference} ●")
+                        } else {
+                            reference.clone()
+                        },
+                        hint: ctx,
+                        detail,
+                        action: Some(format!("/models {reference}")),
+                        run: true,
+                    });
+                }
+            }
+        }
+    }
+    Modal::new(
+        "Models",
+        vec![ModalTab {
+            title: "Models".into(),
+            items,
+        }],
     )
 }
 

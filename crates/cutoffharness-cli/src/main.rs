@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use cutoffharness_config::LoadOptions;
-use cutoffharness_core::Engine;
+use cutoffharness_core::{Engine, Resume};
 use cutoffharness_exec::exit;
 
 use cli::{Cli, Cmd, ConfigCmd};
@@ -26,10 +26,14 @@ fn main() -> ExitCode {
             return code(exit::CONFIG_ERROR);
         }
     };
+    let mut overrides = cli.global.overrides.clone();
+    if let Some(mode) = cli.global.permission_mode {
+        overrides.push(format!("permissions.mode=\"{}\"", mode.as_str()));
+    }
     let opts = LoadOptions {
         cwd,
         model: cli.global.model.clone(),
-        overrides: cli.global.overrides.clone(),
+        overrides,
     };
     let loaded = match cutoffharness_config::load(&opts) {
         Ok(l) => l,
@@ -41,6 +45,11 @@ fn main() -> ExitCode {
     let _log_guard = logging::init(&loaded.dirs.log_dir());
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "starting");
 
+    let resume = match (&cli.global.resume, cli.global.continue_) {
+        (Some(id), _) => Resume::Id(id.clone()),
+        (None, true) => Resume::Latest,
+        (None, false) => Resume::New,
+    };
     let command = match (cli.command, cli.print) {
         (Some(cmd), _) => cmd,
         (None, Some(prompt)) => Cmd::Exec(cli::ExecArgs {
@@ -58,6 +67,7 @@ fn main() -> ExitCode {
             ConfigCmd::Paths => commands::config_paths(&loaded),
         }),
         Cmd::Doctor => code(commands::doctor(&loaded)),
+        Cmd::Sessions => code(commands::sessions(&loaded)),
         #[cfg(feature = "acp")]
         Cmd::Acp => {
             eprintln!("ACP support lands in M6 (docs/plan/12-headless-and-acp.md)");
@@ -65,7 +75,7 @@ fn main() -> ExitCode {
         }
         Cmd::Tui => block_on(async move {
             let config = Arc::new(loaded);
-            let engine = Engine::spawn(config.clone());
+            let engine = Engine::spawn_with(config.clone(), resume);
             match cutoffharness_tui::run(engine, config).await {
                 Ok(()) => exit::OK,
                 Err(e) => {
@@ -83,7 +93,7 @@ fn main() -> ExitCode {
                 }
             };
             block_on(async move {
-                let engine = Engine::spawn(Arc::new(loaded));
+                let engine = Engine::spawn_with(Arc::new(loaded), resume);
                 cutoffharness_exec::run(engine, prompt, args.output_format.into()).await
             })
         }

@@ -1,6 +1,269 @@
 {
+  "$defs": {
+    "Defaults": {
+      "additionalProperties": false,
+      "description": "Defaults that a provider's model entry can override.",
+      "properties": {
+        "reasoning_format": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningFormat"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "sampling": {
+          "$ref": "#/$defs/Sampling",
+          "default": {
+            "min_p": null,
+            "repetition_penalty": null,
+            "temperature": null,
+            "top_k": null,
+            "top_p": null
+          }
+        }
+      },
+      "type": "object"
+    },
+    "Match": {
+      "additionalProperties": false,
+      "description": "Used when a model's `profile = \"auto\"`.",
+      "properties": {
+        "model": {
+          "default": [],
+          "description": "Globs over the model id or alias, e.g. `*qwen3-coder*`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "priority": {
+          "default": 0,
+          "description": "Highest matching priority wins.",
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "ParamMapping": {
+      "additionalProperties": false,
+      "properties": {
+        "to": {
+          "description": "Internal parameter name.",
+          "type": "string"
+        },
+        "transform": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Transform"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "to"
+      ],
+      "type": "object"
+    },
+    "Prompt": {
+      "additionalProperties": false,
+      "properties": {
+        "system": {
+          "default": "system.md",
+          "description": "minijinja template, relative to the profile directory.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ReasoningFormat": {
+      "oneOf": [
+        {
+          "enum": [
+            "none",
+            "reasoning_content",
+            "reasoning",
+            "think-tags"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "auto",
+          "description": "Read `reasoning_content` / `reasoning` fields, and split `<think>` tags when the reply opens with one.",
+          "type": "string"
+        }
+      ]
+    },
+    "Sampling": {
+      "additionalProperties": false,
+      "properties": {
+        "min_p": {
+          "default": null,
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "repetition_penalty": {
+          "default": null,
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "temperature": {
+          "default": null,
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "top_k": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "top_p": {
+          "default": null,
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ToolMapping": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "default": null,
+          "description": "Description shown to the model; default: the internal tool's own.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "maps_to": {
+          "default": null,
+          "description": "Internal tool, e.g. `read`, `edit`, `shell`. Defaults to `name`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Name the model sees.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ParamMapping"
+          },
+          "default": {},
+          "description": "Model-facing parameter name → mapping onto the internal parameter.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "Transform": {
+      "description": "The closed set of parameter transforms.",
+      "oneOf": [
+        {
+          "enum": [
+            "zero_to_one_based"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "abs_to_workspace",
+          "description": "Paths are accepted absolute or relative already; kept for profile compatibility.",
+          "type": "string"
+        }
+      ]
+    }
+  },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Stub: the full schema is generated once this file kind is implemented (M1).",
-  "title": "Model profile (profiles.d/<id>/profile.toml)",
+  "additionalProperties": false,
+  "properties": {
+    "defaults": {
+      "$ref": "#/$defs/Defaults",
+      "default": {
+        "reasoning_format": null,
+        "sampling": {
+          "min_p": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        }
+      }
+    },
+    "description": {
+      "default": "",
+      "type": "string"
+    },
+    "enabled": {
+      "default": true,
+      "type": "boolean"
+    },
+    "id": {
+      "default": null,
+      "description": "Defaults to the directory name.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "match": {
+      "$ref": "#/$defs/Match",
+      "default": {
+        "model": [],
+        "priority": 0
+      }
+    },
+    "prompt": {
+      "$ref": "#/$defs/Prompt",
+      "default": {
+        "system": "system.md"
+      }
+    },
+    "source": {
+      "description": "Where the prompt and tool descriptions come from. Required for shipped defaults.",
+      "type": "string"
+    },
+    "tools": {
+      "default": [],
+      "description": "Model-facing tool surface. Empty: all internal tools under their internal names.",
+      "items": {
+        "$ref": "#/$defs/ToolMapping"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "source"
+  ],
+  "title": "ProfileFile",
   "type": "object"
 }

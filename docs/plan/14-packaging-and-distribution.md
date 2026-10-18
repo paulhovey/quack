@@ -7,7 +7,7 @@ The **binary** and the **defaults** are separate artifacts:
 | Artifact | Contains | Who removes what |
 |---|---|---|
 | `cutoffharness` binary | Engine, adapters (per features), grammars (per features), two themes, empty fallback profile, minimal deny-list floor | Recompile with fewer features |
-| `cutoffharness-defaults` bundle | `providers/`, `profiles/`, `mcp/` (examples, disabled), `lsp/`, `themes/`, `grammars/` queries, `schemas/`, `compat.toml` (other-harness detection list), `tokenizers/` (optional) | Delete files |
+| `cutoffharness-defaults` bundle | `providers.d/`, `profiles.d/`, `mcp.d/` (examples, disabled), `lsp.d/`, `themes/`, `grammars/` queries, `schemas/`, `compat.toml` (other-harness detection list), `tokenizers/` (optional) | Delete files |
 
 ## Where defaults live after install
 
@@ -63,8 +63,8 @@ Documented recipe (`docs/enterprise.md`, to be written in M5):
 
 ```bash
 git clone https://github.com/<org>/cutoffharness && cd cutoffharness
-rm -rf defaults/providers/* defaults/mcp/*
-cp ~/corp/providers/corp-vllm.toml defaults/providers/
+rm -rf defaults/providers.d/* defaults/mcp.d/*
+cp ~/corp/providers/corp-vllm.toml defaults/providers.d/
 cargo vendor > .cargo/config.toml           # air-gapped builds
 cargo build --release --locked --offline \
   --no-default-features --features proto-openai-chat,lang-common,sandbox,tokenizers-hf

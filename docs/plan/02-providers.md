@@ -20,10 +20,12 @@
 
 | Feature | Adapter `api =` | Covers |
 |---|---|---|
-| `proto-openai-chat` | `openai-chat` | vLLM, SGLang, llama.cpp `llama-server`, LM Studio, TGI, Novita, Fireworks, Together, DeepInfra, OpenRouter, LiteLLM gateways, Ollama `/v1` |
+| (always built) | `openai-chat` | vLLM, SGLang, llama.cpp `llama-server`, LM Studio, TGI, Novita, Fireworks, Together, DeepInfra, OpenRouter, LiteLLM gateways, Ollama `/v1` |
 | `proto-openai-responses` | `openai-responses` | OpenAI Responses API and compatible gateways (vLLM has partial support) |
 | `proto-anthropic` | `anthropic-messages` | Anthropic-compatible endpoints (several open-model hosts, e.g. Z.AI and Moonshot, expose one) |
 | `proto-ollama` | `ollama` | Ollama native `/api/chat`, which allows per-request `num_ctx` and `keep_alive` |
+
+`openai-chat` is the baseline and is always compiled in: every build needs at least one adapter, and it covers nearly every server. The `proto-openai-chat` feature remains as a no-op for compatibility. The other adapters are the optional ones.
 
 Why a native Ollama adapter: Ollama's default context length is small, and the OpenAI-compatible endpoint does not reliably let us set `num_ctx` per request. Long sessions can then be **silently truncated**. The native adapter always sends `options.num_ctx` equal to the model's configured `context_window`. (Verify current Ollama behaviour when implementing.)
 
@@ -54,11 +56,31 @@ pub enum StreamEvent {
 
 ## Provider file schema
 
+### Minimal form (what most users write)
+
+User-facing files stay small: every option except `base_url` has a working default, and
+the documentation and shipped defaults lead with this form.
+
+```toml
+base_url = "https://api.example.com/v1"
+api_key = { env = "EXAMPLE_API_KEY" }   # omit for local servers
+models = ["qwen3-coder"]                # optional; omitted = discovered from /models
+```
+
+- `api` defaults to `openai-chat`.
+- `models` accepts plain ids. Use a table per model (`{ id = "...", context_window = 131072 }` or `[[models]]`) only to set per-model options.
+- With no `models`, the list is discovered from `GET /models` at startup. Discovery also runs when the selected model has no `context_window`, since most servers report it (`context_window`, vLLM `max_model_len`, OpenRouter `context_length`).
+- With no `[model].default`, startup picks the first usable provider: the user's own layers before the defaults bundle, skipping providers whose `api_key` environment variable is unset, and probing local servers with a short timeout. The startup panel says the model was auto-selected.
+
+### Full reference
+
+Everything below is optional.
+
 ```toml
 #:schema ../schemas/provider.json
 id = "corp-vllm"                       # default: file stem
 name = "Corp GPU cluster"
-api = "openai-chat"
+api = "openai-chat"                    # default
 base_url = "https://llm.corp.internal/v1"
 enabled = true
 
@@ -99,7 +121,7 @@ text_format = "auto"                   # used when mode=text or native fails: he
 parallel = true
 
 [models.reasoning]
-format = "reasoning_content"           # none | reasoning_content | reasoning | think-tags
+format = "auto"                        # auto (default) | none | reasoning_content | reasoning | think-tags
 preserve_in_history = false            # some models (interleaved thinking) need true
 effort = ""                            # passed through if supported
 
@@ -177,6 +199,7 @@ Every parser:
 |---|---|
 | `reasoning_content` | `delta.reasoning_content` (vLLM reasoning parsers, DeepSeek, SGLang) |
 | `reasoning` | `delta.reasoning` (OpenRouter, Ollama `think`) |
+| `auto` (default) | Both fields above, plus `<think>` splitting when the reply opens with `<think>` |
 | `think-tags` | `<think>…</think>` inline in content. Split out by a streaming tag parser that handles a missing opening tag (some templates prefill `<think>`) |
 | `none` | — |
 
@@ -213,7 +236,7 @@ Errors are normalized into `ProviderError { kind, status, retryable, message, ra
 
 ## Default provider files (shipped separately)
 
-`defaults/providers/`: `ollama.toml`, `llama-cpp.toml`, `vllm.toml`, `lmstudio.toml`, `sglang.toml`, `novita.toml`, `fireworks.toml`, `together.toml`, `openrouter.toml`, `deepinfra.toml`. Each file is fully commented, with every model entry tagged `# verified: <date>`. See [14](14-packaging-and-distribution.md) for how they are installed and removed.
+`defaults/providers.d/`: `ollama.toml`, `llama-cpp.toml`, `vllm.toml`, `lmstudio.toml`, `sglang.toml`, `novita.toml`, `fireworks.toml`, `together.toml`, `openrouter.toml`, `deepinfra.toml`. Each file is fully commented, with every model entry tagged `# verified: <date>`. See [14](14-packaging-and-distribution.md) for how they are installed and removed.
 
 ## Open questions
 

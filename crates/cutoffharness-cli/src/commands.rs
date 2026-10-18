@@ -23,6 +23,33 @@ pub(crate) fn config_check(loaded: &Loaded) -> i32 {
             }
         }
     }
+    let profiles = cutoffharness_config::load_dir_items::<cutoffharness_config::profile::ProfileFile>(
+        &loaded.item_layers(),
+        "profiles.d",
+        "profile.toml",
+    );
+    for item in profiles {
+        match item.state {
+            ItemState::Loaded(p) => {
+                let prompt = item.path.with_file_name(&p.prompt.system);
+                if prompt.is_file() {
+                    println!("ok       profile  {:<20} {}", item.id, item.path.display());
+                } else {
+                    eprintln!(
+                        "error: profile `{}`: prompt file {} is missing",
+                        item.id,
+                        prompt.display()
+                    );
+                    errors += 1;
+                }
+            }
+            ItemState::Disabled(why) => println!("disabled profile  {:<20} {why}", item.id),
+            ItemState::Failed(d) => {
+                eprintln!("{:?}", miette::Report::new(d));
+                errors += 1;
+            }
+        }
+    }
     for w in &loaded.warnings {
         eprintln!("warning: {w}");
     }
@@ -111,4 +138,29 @@ pub(crate) fn read_prompt(arg: &str) -> std::io::Result<String> {
     let mut s = String::new();
     std::io::stdin().read_to_string(&mut s)?;
     Ok(s.trim_end().to_owned())
+}
+
+pub(crate) fn sessions(loaded: &Loaded) -> i32 {
+    let (dir, list) = cutoffharness_core::list_sessions(loaded);
+    if list.is_empty() {
+        println!("no saved sessions for this project ({})", dir.display());
+        return exit::OK;
+    }
+    let now = cutoffharness_store::time::unix_now();
+    println!(
+        "{:<14} {:>5} {:>5}  {:<28} title",
+        "id", "age", "turns", "model"
+    );
+    for e in list.iter().take(50) {
+        let id: String = e.id.chars().take(12).collect();
+        let title: String = e.title.chars().take(60).collect();
+        println!(
+            "{id:<14} {:>5} {:>5}  {:<28} {title}",
+            cutoffharness_store::time::age(e.updated, now),
+            e.turns,
+            e.model
+        );
+    }
+    println!("\nresume with: cutoffharness --resume <id>   (or --continue for the latest)");
+    exit::OK
 }

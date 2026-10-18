@@ -8,6 +8,7 @@ mod app;
 mod commands;
 mod fuzzy;
 mod input;
+mod markdown;
 mod modal;
 mod theme;
 mod ui;

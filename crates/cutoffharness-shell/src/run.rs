@@ -1,0 +1,218 @@
+//! Run one command with merged, ordered output, a timeout and cancellation.
+
+use std::path::PathBuf;
+use std::process::Stdio;
+use std::time::Duration;
+
+use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
+
+use crate::ShellKind;
+
+/// Output kept in memory per command; the rest is counted but dropped.
+const MAX_CAPTURE: usize = 4 * 1024 * 1024;
+
+#[derive(Debug)]
+pub struct RunOptions {
+    pub cwd: PathBuf,
+    pub timeout: Duration,
+    pub cancel: CancellationToken,
+    /// Receives output chunks as they arrive (for live display).
+    pub on_output: Option<mpsc::UnboundedSender<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunResult {
+    /// `None` when killed by a signal, timeout or cancellation.
+    pub exit_code: Option<i32>,
+    /// stdout and stderr interleaved in arrival order.
+    pub output: String,
+    pub dropped_bytes: usize,
+    pub timed_out: bool,
+    pub cancelled: bool,
+}
+
+pub async fn run(shell: &ShellKind, script: &str, opts: RunOptions) -> std::io::Result<RunResult> {
+    let mut cmd = tokio::process::Command::new(shell.program());
+    cmd.args(shell.args(script))
+        .current_dir(&opts.cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        // Never wait on a pager or a credential prompt.
+        .env("GIT_PAGER", "cat")
+        .env("PAGER", "cat")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("DEBIAN_FRONTEND", "noninteractive");
+    #[cfg(unix)]
+    cmd.process_group(0);
+    #[cfg(windows)]
+    {
+        // CREATE_NO_WINDOW: no console window flashes up for GUI-subsystem children.
+        cmd.creation_flags(0x0800_0000);
+    }
+
+    let mut child = cmd.spawn()?;
+    let pid = child.id();
+    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    if let Some(out) = child.stdout.take() {
+        tokio::spawn(pump(out, tx.clone()));
+    }
+    if let Some(err) = child.stderr.take() {
+        tokio::spawn(pump(err, tx.clone()));
+    }
+    drop(tx);
+
+    let mut captured = Vec::new();
+    let mut dropped = 0usize;
+    let mut status = None;
+    let mut timed_out = false;
+    let mut cancelled = false;
+    let deadline = tokio::time::sleep(opts.timeout);
+    tokio::pin!(deadline);
+    let mut output_open = true;
+
+    loop {
+        tokio::select! {
+            chunk = rx.recv(), if output_open => match chunk {
+                Some(bytes) => {
+                    if let Some(live) = &opts.on_output {
+                        let _ = live.send(String::from_utf8_lossy(&bytes).into_owned());
+                    }
+                    let room = MAX_CAPTURE.saturating_sub(captured.len());
+                    captured.extend_from_slice(&bytes[..bytes.len().min(room)]);
+                    dropped += bytes.len().saturating_sub(room);
+                }
+                None => output_open = false,
+            },
+            s = child.wait(), if status.is_none() => {
+                status = Some(s?);
+            }
+            () = &mut deadline => {
+                timed_out = true;
+                break;
+            }
+            () = opts.cancel.cancelled() => {
+                cancelled = true;
+                break;
+            }
+        }
+        // Grandchildren may hold the pipes open after the shell exits; don't wait forever on them.
+        if status.is_some() && !output_open {
+            break;
+        }
+        if status.is_some() && output_open {
+            match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+                Ok(Some(bytes)) => {
+                    let room = MAX_CAPTURE.saturating_sub(captured.len());
+                    captured.extend_from_slice(&bytes[..bytes.len().min(room)]);
+                    dropped += bytes.len().saturating_sub(room);
+                    continue;
+                }
+                Ok(None) | Err(_) => break,
+            }
+        }
+    }
+
+    if timed_out || cancelled || status.is_none() {
+        kill_tree(pid);
+        let _ = child.kill().await;
+    } else {
+        // The shell exited; reap anything it left behind in its group.
+        kill_tree(pid);
+    }
+
+    Ok(RunResult {
+        exit_code: status.and_then(|s| s.code()),
+        output: String::from_utf8_lossy(&captured).into_owned(),
+        dropped_bytes: dropped,
+        timed_out,
+        cancelled,
+    })
+}
+
+async fn pump(mut r: impl AsyncRead + Unpin, tx: mpsc::UnboundedSender<Vec<u8>>) {
+    let mut buf = vec![0u8; 8192];
+    loop {
+        match r.read(&mut buf).await {
+            Ok(0) | Err(_) => return,
+            Ok(n) => {
+                if tx.send(buf[..n].to_vec()).is_err() {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn kill_tree(pid: Option<u32>) {
+    use nix::sys::signal::{Signal, killpg};
+    use nix::unistd::Pid;
+    if let Some(pid) = pid.and_then(|p| i32::try_from(p).ok()) {
+        // ESRCH (group already gone) is the normal case.
+        let _ = killpg(Pid::from_raw(pid), Signal::SIGKILL);
+    }
+}
+
+#[cfg(windows)]
+fn kill_tree(pid: Option<u32>) {
+    if let Some(pid) = pid {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn opts(timeout_ms: u64) -> RunOptions {
+        RunOptions {
+            cwd: std::env::temp_dir(),
+            timeout: Duration::from_millis(timeout_ms),
+            cancel: CancellationToken::new(),
+            on_output: None,
+        }
+    }
+
+    /// Runs on every OS with the default shell (pwsh/powershell/cmd on Windows).
+    #[tokio::test]
+    async fn default_shell_runs_echo() {
+        let sh = ShellKind::detect("auto", std::env::var("SHELL").ok().as_deref());
+        let r = run(&sh, "echo hello", opts(20_000)).await.expect("runs");
+        assert_eq!(r.exit_code, Some(0), "{r:?}");
+        assert!(r.output.contains("hello"), "{r:?}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn captures_both_streams_and_exit_code() {
+        let sh = ShellKind::detect("sh", None);
+        let r = run(&sh, "echo out; echo err >&2; exit 3", opts(5000))
+            .await
+            .expect("runs");
+        assert_eq!(r.exit_code, Some(3));
+        assert!(
+            r.output.contains("out") && r.output.contains("err"),
+            "{r:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn timeout_kills_the_group() {
+        let sh = ShellKind::detect("sh", None);
+        let started = std::time::Instant::now();
+        let r = run(&sh, "sleep 30 & sleep 30", opts(300))
+            .await
+            .expect("runs");
+        assert!(r.timed_out);
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+}

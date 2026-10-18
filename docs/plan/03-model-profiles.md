@@ -157,7 +157,7 @@ The system prompt and env templates use `minijinja` and these variables:
 
 `/profiles` shows the active profile and lets the user switch it for the session. `cutoffharness profile render <id> --model <m>` prints the full rendered prompt and tool schemas, for debugging and token accounting.
 
-## Default profiles (shipped separately, in `defaults/profiles/`)
+## Default profiles (shipped separately, in `defaults/profiles.d/`)
 
 | Profile | Target | Basis / provenance |
 |---|---|---|

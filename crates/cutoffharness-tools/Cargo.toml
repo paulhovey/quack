@@ -11,9 +11,23 @@ publish.workspace = true
 
 [dependencies]
 cutoffharness-protocol.workspace = true
+cutoffharness-config.workspace = true
 cutoffharness-shell.workspace = true
 cutoffharness-lsp.workspace = true
 cutoffharness-sandbox = { workspace = true, optional = true }
+futures.workspace = true
+globset = "0.4.20"
+ignore = "0.4.33"
+regex.workspace = true
+serde_json.workspace = true
+similar = "3.2.0"
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [features]
 sandbox = ["dep:cutoffharness-sandbox"]

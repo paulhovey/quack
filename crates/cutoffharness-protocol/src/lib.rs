@@ -30,6 +30,8 @@ pub enum Op {
         provider: ProviderId,
         model: ModelId,
     },
+    /// Ask for the model catalogue; answered with `Event::ModelCatalog`.
+    ListModels,
     Compact,
     Undo {
         checkpoint: Option<CheckpointId>,
@@ -57,6 +59,17 @@ pub enum Event {
     SessionConfigured {
         session: SessionInfo,
     },
+    /// Every configured provider with its models (declared and discovered).
+    ModelCatalog {
+        providers: Vec<ProviderModels>,
+        /// `<provider>/<model>` in use, if any.
+        current: Option<String>,
+    },
+    /// A saved session was loaded; `items` is its transcript for display.
+    SessionResumed {
+        session: SessionInfo,
+        items: Vec<ReplayItem>,
+    },
     ShutdownComplete,
     // turn
     TurnStarted {
@@ -69,6 +82,11 @@ pub enum Event {
         text: String,
     },
     ReasoningDelta {
+        text: String,
+    },
+    /// Replaces the text streamed so far in this step, e.g. after tool calls printed as
+    /// text were turned into real calls.
+    AssistantRewrite {
         text: String,
     },
     ToolCallBegin {
@@ -176,6 +194,45 @@ pub struct ToolCallInfo {
 pub struct ToolResultSummary {
     pub ok: bool,
     pub summary: String,
+    /// Full diff or output for display.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderModels {
+    pub id: String,
+    /// False when the provider cannot be used right now (missing key, unreachable).
+    pub available: bool,
+    /// Why it is unavailable, or a short status.
+    pub note: String,
+    pub models: Vec<ModelInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelInfo {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u32>,
+}
+
+/// A transcript entry of a resumed session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ReplayItem {
+    User {
+        text: String,
+    },
+    Assistant {
+        text: String,
+    },
+    Tool {
+        summary: String,
+        ok: bool,
+        result: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

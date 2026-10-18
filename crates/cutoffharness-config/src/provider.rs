@@ -1,4 +1,14 @@
 //! `providers.d/<id>.toml` schema (docs/plan/02-providers.md#provider-file-schema).
+//!
+//! Only `base_url` is required. A typical file is three lines:
+//!
+//! ```toml
+//! base_url = "https://api.example.com/v1"
+//! api_key = { env = "EXAMPLE_API_KEY" }
+//! models = ["qwen3-coder"]
+//! ```
+//!
+//! Everything else is optional and defaults to what works for OpenAI-compatible servers.
 
 use std::collections::BTreeMap;
 
@@ -17,7 +27,8 @@ pub struct ProviderFile {
     pub id: Option<String>,
     #[serde(default)]
     pub name: String,
-    /// Wire protocol: `openai-chat`, `openai-responses`, `anthropic-messages`, `ollama`.
+    /// Wire protocol: `openai-chat` (default), `openai-responses`, `anthropic-messages`, `ollama`.
+    #[serde(default = "openai_chat")]
     pub api: String,
     pub base_url: String,
     #[serde(default = "yes")]
@@ -38,12 +49,58 @@ pub struct ProviderFile {
     pub http: Http,
     #[serde(default)]
     pub discovery: Discovery,
-    #[serde(default)]
+    /// Model ids as plain strings, or tables for per-model settings.
+    #[serde(default, deserialize_with = "models_de")]
+    #[schemars(with = "Vec<ModelSpec>")]
     pub models: Vec<ModelEntry>,
 }
 
 fn yes() -> bool {
     true
+}
+
+fn openai_chat() -> String {
+    "openai-chat".into()
+}
+
+/// Schema-only view of a `models` element.
+#[derive(JsonSchema)]
+#[serde(untagged)]
+#[allow(dead_code)]
+enum ModelSpec {
+    Id(String),
+    Full(Box<ModelEntry>),
+}
+
+/// Accepts `"id"` or a table per element, keeping `deny_unknown_fields` errors for tables
+/// (an untagged enum would turn every mistake into "did not match any variant").
+fn models_de<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<ModelEntry>, D::Error> {
+    struct One(ModelEntry);
+    impl<'de> Deserialize<'de> for One {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            struct V;
+            impl<'de> serde::de::Visitor<'de> for V {
+                type Value = ModelEntry;
+                fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    f.write_str("a model id string or a table with `id`")
+                }
+                fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<ModelEntry, E> {
+                    Ok(ModelEntry::new(v))
+                }
+                fn visit_map<A: serde::de::MapAccess<'de>>(
+                    self,
+                    m: A,
+                ) -> Result<ModelEntry, A::Error> {
+                    ModelEntry::deserialize(serde::de::value::MapAccessDeserializer::new(m))
+                }
+            }
+            d.deserialize_any(V).map(One)
+        }
+    }
+    Ok(Vec::<One>::deserialize(d)?
+        .into_iter()
+        .map(|o| o.0)
+        .collect())
 }
 
 impl ProviderFile {
@@ -147,6 +204,25 @@ fn auto() -> String {
 }
 
 impl ModelEntry {
+    /// An entry with every setting at its default.
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            alias: None,
+            context_window: None,
+            max_output: None,
+            profile: auto(),
+            vision: false,
+            tool_calling: ToolCalling::default(),
+            reasoning: Reasoning::default(),
+            tokenizer: Tokenizer::default(),
+            sampling: Sampling::default(),
+            extra_body: toml::Table::new(),
+            cost: None,
+            serving: Serving::default(),
+        }
+    }
+
     pub fn display_name(&self) -> &str {
         self.alias.as_deref().unwrap_or(&self.id)
     }
@@ -191,7 +267,9 @@ pub struct Reasoning {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ReasoningFormat {
+    /// Read `reasoning_content` / `reasoning` fields, and split `<think>` tags when the reply opens with one.
     #[default]
+    Auto,
     None,
     #[serde(rename = "reasoning_content")]
     ReasoningContent,
@@ -253,5 +331,34 @@ impl Default for Serving {
             prefill_tps: None,
             prefix_cache: true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn minimal_file() {
+        let p: ProviderFile = toml::from_str(
+            r#"
+            base_url = "https://api.example.com/v1"
+            api_key = { env = "EXAMPLE_API_KEY" }
+            models = ["qwen3-coder", { id = "glm-4.6", context_window = 131072 }]
+            "#,
+        )
+        .expect("parses");
+        assert_eq!(p.api, "openai-chat");
+        assert_eq!(p.models[0], ModelEntry::new("qwen3-coder"));
+        assert_eq!(p.models[1].context_window, Some(131072));
+    }
+
+    #[test]
+    fn model_table_typos_are_reported_precisely() {
+        let err = toml::from_str::<ProviderFile>(
+            "base_url = \"x\"\n[[models]]\nid = \"m\"\ncontext_windw = 1\n",
+        )
+        .expect_err("typo");
+        assert!(err.to_string().contains("context_windw"), "{err}");
     }
 }

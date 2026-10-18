@@ -3,7 +3,10 @@ use std::time::{Duration, Instant};
 use crossterm::event::{Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use cutoffharness_config::Loaded;
 use cutoffharness_config::settings::{StartupPanel, UiSettings};
-use cutoffharness_protocol::{Event, InputItem, LoadState, Op, Subsystem, TurnOverrides};
+use cutoffharness_protocol::{
+    ApprovalDecision, ApprovalRequest, CallId, Event, InputItem, LoadState, ModelId, Op,
+    ProviderId, ReplayItem, Subsystem, TurnOverrides,
+};
 
 use crate::commands::{self, COMMANDS, Command};
 use crate::fuzzy;
@@ -52,9 +55,29 @@ impl AppInfo {
 pub(crate) enum Entry {
     User(String),
     Assistant(String),
+    Reasoning(String),
+    Tool(ToolEntry),
     System(String),
     Warning(String),
     Error(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ToolEntry {
+    pub call_id: CallId,
+    pub summary: String,
+    /// `None` while running.
+    pub ok: Option<bool>,
+    pub result: String,
+    /// Live output while running; the full diff or output once done.
+    pub detail: String,
+}
+
+/// A tool call waiting for the user's decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Approval {
+    pub call_id: CallId,
+    pub request: ApprovalRequest,
 }
 
 #[derive(Debug)]
@@ -73,6 +96,9 @@ pub struct App {
     popup_dismissed: bool,
     pub(crate) turn_running: bool,
     pub(crate) queued: bool,
+    pub(crate) approval: Option<Approval>,
+    /// `(used, budget)` tokens from the last response.
+    pub(crate) context: Option<(u32, u32)>,
     panel_collapsed: bool,
     frame: u64,
     dirty: bool,
@@ -99,6 +125,8 @@ impl App {
             popup_dismissed: false,
             turn_running: false,
             queued: false,
+            approval: None,
+            context: None,
             panel_collapsed: false,
             frame: 0,
             dirty: true,
@@ -200,18 +228,97 @@ impl App {
                 self.queued = true;
                 self.note(format!("queued, waiting for {waiting_for}"));
             }
+            Event::SessionConfigured { session } => {
+                self.info.model = session.model;
+                self.info.profile = session.profile;
+            }
+            Event::ModelCatalog { providers, current } => {
+                // Only refresh a /models modal that is still open.
+                if self.modal.as_ref().is_some_and(|m| m.title == "Models") {
+                    self.modal = Some(modal::models(
+                        Some(&providers),
+                        current.as_deref(),
+                        &self.theme,
+                    ));
+                }
+            }
+            Event::SessionResumed { session, items } => {
+                self.panel_collapsed = true;
+                let short: String = session.id.0.chars().take(12).collect();
+                self.note(format!("resumed session {short} ({} entries)", items.len()));
+                for item in items {
+                    self.transcript.push(match item {
+                        ReplayItem::User { text } => Entry::User(text),
+                        ReplayItem::Assistant { text } => Entry::Assistant(text),
+                        ReplayItem::Tool {
+                            summary,
+                            ok,
+                            result,
+                        } => Entry::Tool(ToolEntry {
+                            call_id: CallId(String::new()),
+                            summary,
+                            ok: Some(ok),
+                            result,
+                            detail: String::new(),
+                        }),
+                    });
+                }
+            }
             Event::TurnStarted { .. } => {
                 self.queued = false;
                 self.turn_running = true;
-                self.transcript.push(Entry::Assistant(String::new()));
             }
             Event::AssistantDelta { text } => match self.transcript.last_mut() {
                 Some(Entry::Assistant(buf)) => buf.push_str(&text),
-                _ => self.transcript.push(Entry::Assistant(text)),
+                _ => self
+                    .transcript
+                    .push(Entry::Assistant(text.trim_start().to_owned())),
             },
-            Event::TurnComplete { .. } => self.turn_running = false,
+            Event::AssistantRewrite { text } => {
+                let last = self
+                    .transcript
+                    .iter()
+                    .rposition(|e| matches!(e, Entry::Assistant(_)));
+                if let Some(i) = last {
+                    self.transcript[i] = Entry::Assistant(text);
+                }
+            }
+            Event::ReasoningDelta { text } => match self.transcript.last_mut() {
+                Some(Entry::Reasoning(buf)) => buf.push_str(&text),
+                _ => self
+                    .transcript
+                    .push(Entry::Reasoning(text.trim_start().to_owned())),
+            },
+            Event::ToolCallBegin { call } => self.transcript.push(Entry::Tool(ToolEntry {
+                call_id: call.call_id,
+                summary: call.summary,
+                ok: None,
+                result: String::new(),
+                detail: String::new(),
+            })),
+            Event::ToolCallOutputDelta { call_id, chunk } => {
+                if let Some(t) = self.tool_mut(&call_id) {
+                    t.detail.push_str(&chunk);
+                }
+            }
+            Event::ToolCallEnd { call_id, result } => {
+                if let Some(t) = self.tool_mut(&call_id) {
+                    t.ok = Some(result.ok);
+                    t.result = result.summary;
+                    t.detail = result.detail.unwrap_or_default();
+                }
+            }
+            Event::ApprovalRequest { call_id, request } => {
+                self.approval = Some(Approval { call_id, request });
+            }
+            Event::ContextUpdate { used, budget, .. } => self.context = Some((used, budget)),
+            Event::TurnComplete { .. } => {
+                self.turn_running = false;
+                self.approval = None;
+            }
             Event::TurnAborted { reason, .. } => {
                 self.turn_running = false;
+                self.approval = None;
                 self.note(reason);
             }
             Event::Warning { message } => self.transcript.push(Entry::Warning(message)),
@@ -242,6 +349,9 @@ impl App {
         if ctrl && key.code == KeyCode::Char('c') {
             return self.ctrl_c();
         }
+        if self.approval.is_some() {
+            return self.on_approval_key(key);
+        }
         if let Some(modal) = &mut self.modal {
             match modal.on_key(key) {
                 ModalOutcome::None => {}
@@ -250,6 +360,10 @@ impl App {
                     self.modal = None;
                     self.input.set(&text);
                     self.popup_dismissed = true;
+                }
+                ModalOutcome::Run(text) => {
+                    self.modal = None;
+                    self.execute(&text);
                 }
             }
             return;
@@ -302,6 +416,36 @@ impl App {
         }
     }
 
+    fn tool_mut(&mut self, id: &CallId) -> Option<&mut ToolEntry> {
+        self.transcript.iter_mut().rev().find_map(|e| match e {
+            Entry::Tool(t) if &t.call_id == id => Some(t),
+            _ => None,
+        })
+    }
+
+    fn on_approval_key(&mut self, key: KeyEvent) {
+        let decision = match key.code {
+            KeyCode::Char('y' | 'Y') | KeyCode::Enter => ApprovalDecision::AllowOnce,
+            KeyCode::Char('a' | 'A') => ApprovalDecision::AllowSession,
+            KeyCode::Char('n' | 'N') | KeyCode::Esc => ApprovalDecision::Deny,
+            KeyCode::PageUp => {
+                self.scroll += 10;
+                return;
+            }
+            KeyCode::PageDown => {
+                self.scroll = self.scroll.saturating_sub(10);
+                return;
+            }
+            _ => return,
+        };
+        if let Some(a) = self.approval.take() {
+            self.ops.push(Op::ApprovalResponse {
+                call_id: a.call_id,
+                decision,
+            });
+        }
+    }
+
     fn edited(&mut self, f: fn(&mut Input)) {
         f(&mut self.input);
         self.popup_dismissed = false;
@@ -310,6 +454,11 @@ impl App {
 
     fn ctrl_c(&mut self) {
         if self.modal.take().is_some() {
+            return;
+        }
+        if self.approval.is_some() {
+            self.approval = None;
+            self.ops.push(Op::Interrupt);
             return;
         }
         if !self.input.is_empty() {
@@ -337,13 +486,8 @@ impl App {
             return;
         }
         self.scroll = 0;
-        if let Some(rest) = text.strip_prefix('/') {
-            let (name, args) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
-            match commands::find(name) {
-                Some(cmd) => self.run_command(cmd, args.trim()),
-                None => self.note(format!("unknown command /{name}; /help lists commands")),
-            }
-            return;
+        if text.starts_with('/') {
+            return self.execute(&text);
         }
         self.panel_collapsed = true;
         self.transcript.push(Entry::User(text.clone()));
@@ -353,9 +497,33 @@ impl App {
         });
     }
 
-    fn run_command(&mut self, cmd: &Command, _args: &str) {
+    /// Run a `/command args` line.
+    fn execute(&mut self, text: &str) {
+        let rest = text.trim().trim_start_matches('/');
+        let (name, args) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+        match commands::find(name) {
+            Some(cmd) => self.run_command(cmd, args.trim()),
+            None => self.note(format!("unknown command /{name}; /help lists commands")),
+        }
+    }
+
+    fn run_command(&mut self, cmd: &Command, args: &str) {
         self.popup_selected = 0;
         match cmd.name {
+            "models" if !args.is_empty() => match args.split_once('/') {
+                Some((provider, model)) if !provider.is_empty() && !model.is_empty() => {
+                    self.note(format!("switching to {args}…"));
+                    self.ops.push(Op::SetModel {
+                        provider: ProviderId(provider.to_owned()),
+                        model: ModelId(model.to_owned()),
+                    });
+                }
+                _ => self.note("usage: /models <provider>/<model>".into()),
+            },
+            "models" => {
+                self.modal = Some(modal::models(None, self.info.model.as_deref(), &self.theme));
+                self.ops.push(Op::ListModels);
+            }
             "help" => self.modal = Some(modal::help(&self.theme)),
             "quit" => self.quit = true,
             "new" => {
@@ -446,6 +614,53 @@ mod tests {
         );
         press(&mut app, KeyCode::Esc);
         assert_eq!(app.take_ops(), vec![Op::Interrupt]);
+    }
+
+    #[test]
+    fn models_modal_lists_catalog_and_switches() {
+        use cutoffharness_protocol::{ModelInfo, ProviderModels};
+        let mut app = App::new(info());
+        type_str(&mut app, "/models");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.take_ops(), vec![Op::ListModels]);
+        app.on_engine(Event::ModelCatalog {
+            providers: vec![
+                ProviderModels {
+                    id: "charm".into(),
+                    available: true,
+                    note: "2 models".into(),
+                    models: vec![
+                        ModelInfo {
+                            id: "glm-5.3".into(),
+                            alias: None,
+                            context_window: Some(1_000_000),
+                        },
+                        ModelInfo {
+                            id: "qwen3.8-flash".into(),
+                            alias: None,
+                            context_window: None,
+                        },
+                    ],
+                },
+                ProviderModels {
+                    id: "novita".into(),
+                    available: false,
+                    note: "set NOVITA_API_KEY to use this provider".into(),
+                    models: Vec::new(),
+                },
+            ],
+            current: Some("charm/glm-5.3".into()),
+        });
+        type_str(&mut app, "qwen");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.modal.is_none());
+        assert_eq!(
+            app.take_ops(),
+            vec![Op::SetModel {
+                provider: ProviderId("charm".into()),
+                model: ModelId("qwen3.8-flash".into()),
+            }]
+        );
     }
 
     #[test]

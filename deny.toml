@@ -21,6 +21,11 @@ allow = [
     "Unicode-3.0",
     "CDLA-Permissive-2.0",
 ]
+# MPL-2.0 is file-level copyleft: using the crate unmodified is fine for an Apache-2.0
+# binary, but it is allowed per crate rather than globally so new uses get a review.
+exceptions = [
+    { name = "nucleo-matcher", allow = ["MPL-2.0"] },
+]
 
 [bans]
 multiple-versions = "warn"

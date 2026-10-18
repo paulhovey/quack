@@ -31,10 +31,10 @@ cutoffharness/
 │   ├── cutoffharness-acp/           # Zed Agent Client Protocol server (feature-gated, later)
 │   └── cutoffharness-cli/           # The `cutoffharness` binary: arg parsing, picks a client
 ├── defaults/                  # Default TOML files. NOT compiled in (see 14-packaging)
-│   ├── providers/
-│   ├── profiles/
-│   ├── mcp/
-│   ├── lsp/
+│   ├── providers.d/
+│   ├── profiles.d/
+│   ├── mcp.d/
+│   ├── lsp.d/
 │   └── grammars/              # tree-sitter query files (tags.scm etc.)
 ├── docs/
 └── tests/                     # Cross-crate integration tests, fixtures
@@ -172,8 +172,8 @@ Path handling rules, enforced by a lint/test helper:
 | Config | `serde`, `toml`, `toml_edit` | `toml_edit` for writes that keep user comments |
 | Config schema | `schemars` | Generates JSON Schema for taplo/editor completion |
 | Errors | `thiserror` (libs), `anyhow` (bin), `miette` | miette for pretty config errors with spans |
-| HTTP | `reqwest` (rustls, no native-tls), `eventsource-stream` | |
-| TLS | `rustls`, `rustls-platform-verifier` | OS trust store |
+| HTTP | `reqwest` 0.13 (rustls with aws-lc-rs, no native-tls) | SSE is decoded by a small in-house parser. aws-lc-sys needs a C toolchain (clang on Windows ARM64); watch the CI matrix |
+| TLS | `rustls`, `rustls-platform-verifier` (via reqwest) | OS trust store |
 | MCP | `rmcp` | Official Rust SDK |
 | ACP | `agent-client-protocol` | Feature-gated |
 | LSP | `lsp-types`, `async-lsp` (evaluate) or hand-rolled JSON-RPC | |
@@ -216,6 +216,8 @@ A minimal enterprise build:
 ```
 cargo build --release --no-default-features --features proto-openai-chat,lang-common,sandbox
 ```
+
+`openai-chat` is always compiled in, so `proto-openai-chat` is effectively a no-op; the other `proto-*` features are real.
 
 If a provider TOML names a protocol that was compiled out, the provider fails to load with an error saying which feature is missing. Nothing else is affected.
 

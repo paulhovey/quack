@@ -30,6 +30,26 @@ Primary manual test target: **hosted open-model services** (Novita, Fireworks, T
 
 ## M1 — Foundation: "it can code with a local model"
 
+### Progress (2026-10-17)
+
+Landed, with tests (unit, mock-server integration, TUI snapshots) and clippy clean on Linux plus Windows/macOS cross-checks:
+- `openai-chat` adapter: SSE streaming, retries with backoff and `Retry-After`, normalized errors, `reasoning_content`/`reasoning`/`<think>` handling, tool-call delta assembly, model discovery
+- Secrets: `env`, `file`, `cmd`, plain (`keyring` gives a clear "not supported yet" error)
+- Simplified provider files: only `base_url` is required, `api` defaults to `openai-chat`, `models` takes plain ids, discovery when no models are listed, auto-selection when `[model].default` is unset
+- Agent loop: multi-step tool use, approvals, interrupt, repetition guard, lenient argument parsing, duplicate call-id repair
+- Tools: `read`, `write`, `edit` (exact → trailing-whitespace → indentation → blank-line fuzzy matching, CRLF/BOM preserved, stale-read guard), `glob`, `grep`, `list_dir`, `shell` (process-group kill on Unix, `taskkill /T` on Windows, output head/tail trimming)
+- Permissions: modes, `shell:`/`edit:`/`read:` rules, compiled-in deny floor, session approvals; allow rules never match compound shell commands
+- Profiles: loader, selection (`[match]` globs, `generic` fallback, compiled-in empty), minijinja rendering, tool renames and transforms; `generic` profile shipped
+- AGENTS.md from the user layer and workspace root
+- Text tool-call fallback: `hermes` and `qwen3-xml` calls printed in content are promoted to real calls (`tool_calling.text_format`, `"none"` disables)
+- Sessions: JSONL log per session plus a per-project index, written as the turn happens (crash-safe, torn last line repaired), `--continue`, `--resume <id>`, `cutoffharness sessions`
+- `/models`: catalogue of every provider (declared plus discovered models, unavailable ones with the reason), switching mid-session keeps history and approvals; `/models provider/model` switches directly
+- TUI: markdown rendering, tool calls with diffs and output, reasoning, approval box, context usage; `exec`: tool activity on stderr, headless denials, `--permission-mode`
+- Defaults bundle v0: novita, fireworks, together, openrouter, deepinfra, llama-cpp, ollama, vllm, lmstudio, sglang (none tagged verified yet). The bundle folders now use the layer layout (`providers.d/`, `profiles.d/`, …)
+- Verified live against one hosted OpenAI-compatible service (Charm Hyper, `qwen3.8-flash`): a bug-fix task via `exec`, and a shell approval in the TUI
+
+Still open for M1: `/resume` picker and `/config` modal, saving a default model from `/models`, streaming suppression of text tool calls (they are cleaned up after the step), native `ollama` adapter, Windows Job Objects, `estimate` correction from usage, `keyring`, and the exit criteria below. `cargo deny` and the macOS/Windows builds of `aws-lc-sys` (reqwest's TLS crypto) are only checked in CI.
+
 - Workspace scaffold, CI matrix (Linux/macOS/Windows), `cargo-deny`, Apache-2.0 + NOTICE
 - `cutoffharness-protocol` (Op/Event), `cutoffharness-core` loop with interrupt and loop guards
 - `cutoffharness-config`: layers, per-OS paths, `providers.d`, secrets (env/cmd/keyring/file), miette diagnostics, `config check`
