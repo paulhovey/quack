@@ -76,7 +76,8 @@ At load time, frontmatter is validated (`name` matches the directory, `descripti
 - **`skill` tool:** returns the body in a `<skill name=… directory=…>` block. It is hidden when there are no skills. Loading a skill is always allowed (its own permission subject), so skills in the user's folder don't prompt.
 - **`/<name> [request]`** works in the TUI (also in the slash popup) and in `exec`. The engine replaces it with the skill block plus the request. The session title keeps what the user typed.
 - **`/skills`** lists them, with where each came from.
-- **Not done yet:** the detection prompt for other harnesses' folders, and custom commands.
+- **Other agents' instruction files (2026-10-18):** read by default rather than offered first. The names come from `[instructions]` in `compat.toml` (defaults bundle, system, user or trusted project folder; the highest present wins) and are tried after `[instructions] files` in each folder, so a folder with AGENTS.md uses only that, and duplicates are never loaded. The user's global file falls back to `~/.claude/CLAUDE.md` / `~/.gemini/GEMINI.md` when there is no AGENTS.md in the config folder. Files that are links to, copies of, or just `@AGENTS.md` pointers to the root AGENTS.md don't count. When the root has others, a startup notice offers `/init`, which runs a turn asking the model to merge them into AGENTS.md (without touching the originals, then suggesting a one-line `@AGENTS.md` in each); with no others it updates or writes AGENTS.md. `[instructions] other_agents = false` turns this off. Folder rules (`.cursor/rules/`) are not read yet.
+- **Not done yet:** the detection prompt for other harnesses' skill and command folders, and custom commands.
 
 ## Other harnesses' files
 

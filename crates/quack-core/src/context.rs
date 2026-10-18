@@ -173,10 +173,7 @@ pub(crate) async fn compact_now(
 }
 
 /// Stream a request with no tools and return its text.
-async fn summarize(
-    ctx: &TurnCtx,
-    req: quack_providers::ChatRequest,
-) -> Result<String, String> {
+async fn summarize(ctx: &TurnCtx, req: quack_providers::ChatRequest) -> Result<String, String> {
     let s = &ctx.setup;
     let mut rx = s
         .provider

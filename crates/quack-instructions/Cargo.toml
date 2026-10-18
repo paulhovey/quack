@@ -12,6 +12,7 @@ publish.workspace = true
 [dependencies]
 quack-protocol.workspace = true
 quack-config.workspace = true
+toml.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

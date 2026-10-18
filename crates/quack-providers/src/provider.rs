@@ -2,10 +2,10 @@
 
 use std::time::Duration;
 
+use futures::StreamExt;
 use quack_config::provider::ReasoningFormat;
 use quack_config::settings::NetworkSettings;
 use quack_config::{Env, ProviderFile, expand_home};
-use futures::StreamExt;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;

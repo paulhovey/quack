@@ -38,12 +38,10 @@ pub struct RunResult {
 
 pub async fn run(shell: &ShellKind, script: &str, opts: RunOptions) -> std::io::Result<RunResult> {
     let mut cmd = match &opts.sandbox {
-        Some(policy) => quack_sandbox::command(
-            policy,
-            shell.program().as_os_str(),
-            shell.args(script),
-        )
-        .map_err(std::io::Error::other)?,
+        Some(policy) => {
+            quack_sandbox::command(policy, shell.program().as_os_str(), shell.args(script))
+                .map_err(std::io::Error::other)?
+        }
         None => {
             let mut c = tokio::process::Command::new(shell.program());
             c.args(shell.args(script));

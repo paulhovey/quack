@@ -128,12 +128,17 @@ fn location(uri: &str, line: usize, col: usize) -> Value {
 }
 
 fn functions(uri: &str, docs: &HashMap<String, String>) -> Vec<(String, usize, String)> {
-    let Some(text) = docs.get(uri) else { return Vec::new() };
+    let Some(text) = docs.get(uri) else {
+        return Vec::new();
+    };
     text.lines()
         .enumerate()
         .filter_map(|(i, l)| {
             let rest = l.trim_start().strip_prefix("fn ")?;
-            let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
             Some((name, i, uri.to_owned()))
         })
         .collect()
@@ -141,7 +146,9 @@ fn functions(uri: &str, docs: &HashMap<String, String>) -> Vec<(String, usize, S
 
 fn word_at(params: &Value, docs: &HashMap<String, String>) -> Option<String> {
     let text = docs.get(params["textDocument"]["uri"].as_str()?)?;
-    let line = text.lines().nth(usize::try_from(params["position"]["line"].as_u64()?).ok()?)?;
+    let line = text
+        .lines()
+        .nth(usize::try_from(params["position"]["line"].as_u64()?).ok()?)?;
     let col = usize::try_from(params["position"]["character"].as_u64()?).ok()?;
     let ident = |c: char| c.is_alphanumeric() || c == '_';
     let chars: Vec<char> = line.chars().collect();
@@ -167,9 +174,14 @@ fn publish(uri: &str, docs: &HashMap<String, String>) {
             diags.push(json!({ "range": range(i, c), "severity": 2, "message": "found WARN" }));
         }
     }
-    send(&json!({ "jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
-        "params": { "uri": uri, "diagnostics": diags } }));
-    let other = uri.rsplit_once('/').map(|(dir, _)| format!("{dir}/other.fx")).unwrap();
+    send(
+        &json!({ "jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
+        "params": { "uri": uri, "diagnostics": diags } }),
+    );
+    let other = uri
+        .rsplit_once('/')
+        .map(|(dir, _)| format!("{dir}/other.fx"))
+        .unwrap();
     if other != uri {
         let broken = text.contains("BREAK_OTHER");
         let diags = if broken {
@@ -177,7 +189,9 @@ fn publish(uri: &str, docs: &HashMap<String, String>) {
         } else {
             json!([])
         };
-        send(&json!({ "jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
-            "params": { "uri": other, "diagnostics": diags } }));
+        send(
+            &json!({ "jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
+            "params": { "uri": other, "diagnostics": diags } }),
+        );
     }
 }

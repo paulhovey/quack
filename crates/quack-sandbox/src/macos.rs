@@ -35,10 +35,12 @@ pub(crate) fn profile(writable: usize, network: bool) -> String {
     for d in DEVICES {
         p.push_str(&format!("    (require-not (literal \"{d}\"))\n"));
     }
-    p.push_str("    (require-not (regex #\"^/dev/fd/\"))\n    (require-not (regex #\"^/dev/ttys\"))))\n");
+    p.push_str(
+        "    (require-not (regex #\"^/dev/fd/\"))\n    (require-not (regex #\"^/dev/ttys\"))))\n",
+    );
     if !network {
         p.push_str(
-            "(deny network-outbound (remote ip))\n(deny network-inbound (local ip))\n(deny network-bind (local ip))\n",
+            "(deny network-outbound (remote ip \"*:*\"))\n(deny network-inbound (local ip \"*:*\"))\n(deny network-bind (local ip \"*:*\"))\n",
         );
     }
     p

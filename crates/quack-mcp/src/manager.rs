@@ -385,7 +385,10 @@ impl McpManager {
                 let sandbox = match (file.sandbox, &self.sandbox) {
                     (Some(true), Some(p)) => Some(p.clone()),
                     (Some(true), None) => {
-                        return Err("the file sets `sandbox = true`, but the sandbox is not available".into());
+                        return Err(
+                            "the file sets `sandbox = true`, but the sandbox is not available"
+                                .into(),
+                        );
                     }
                     _ => None,
                 };

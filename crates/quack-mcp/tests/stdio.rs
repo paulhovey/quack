@@ -149,7 +149,12 @@ async fn sandboxed_server() {
     m.start();
     ready(&m, "fx").await;
     let out = m
-        .call("fx", "echo", serde_json::json!({"text": "boxed"}), &CancellationToken::new())
+        .call(
+            "fx",
+            "echo",
+            serde_json::json!({"text": "boxed"}),
+            &CancellationToken::new(),
+        )
         .await;
     assert_eq!(out.text, "echo: boxed");
     m.shutdown().await;

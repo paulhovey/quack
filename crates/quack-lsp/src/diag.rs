@@ -233,7 +233,10 @@ mod tests {
                     },
                 ],
             ),
-            (other.clone(), vec![d(0, Severity::Error, "unresolved import")]),
+            (
+                other.clone(),
+                vec![d(0, Severity::Error, "unresolved import")],
+            ),
         ]
         .into();
         let limits = Limits {

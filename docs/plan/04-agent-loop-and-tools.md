@@ -85,6 +85,8 @@ Internal tools have stable internal names and schemas. Profiles map onto them ([
 | `web_fetch` | ReadOnly | **Disabled by default.** Unavailable when `offline = true` |
 | `task` | Mutating | Sub-agent with its own context. M3 ([roadmap](roadmap.md)) |
 
+As implemented (2026-10-18): `todo` replaces the whole checklist on each call (items with `pending` / `in_progress` / `done`; the shapes models commonly send are accepted). While anything is unfinished, the plan is appended to the last message of every request, not stored in the history, so it survives long tool output and compaction without touching the cached prefix. It needs no approval in any mode. This follows the component study in [arXiv 2609.20804](https://arxiv.org/abs/2609.20804) (persistent plan, re-shown each step: an accuracy aid for weaker models, a cost saver for stronger ones). The TUI shows it as a tool line; there is no todo pane yet.
+
 Each tool lives in `quack-tools/src/<tool>.rs` and implements:
 
 ```rust
@@ -110,6 +112,7 @@ These are the main source of failures with open models, so they get the most har
 - **Checkpoint before write**: store the pre-image ([07](07-sessions-memory-checkpoints.md)).
 - **Post-edit feedback**: return a compact diff summary. When an LSP server is running, also return new diagnostics for the edited file, if any arrive within the settle window ([10](10-lsp.md)).
 - **Hash-anchored edits (`edit.hashline`, M2)**: when a profile selects this format, `read` returns lines as `<line>:<hash>| <text>`, where the hash is a few characters derived from the line's content. Edits reference a range by its start and end hashes (`replace`, `insert_after`, `delete`). The model never has to reproduce old text exactly, which is where small models fail. A hash that no longer matches is rejected with a fresh tagged snippet of that region, so retries converge. Hashes survive line drift from earlier edits. One 2026 harness benchmark (by an implementer, so treat it with care) found it beat patch-style edits for 14 of 16 models; open-model evidence is thin and mixed, and `insert_after` is reported to invite duplicated lines. It ships as an option, and the eval decides which profiles default to it.
+- **Hashline as implemented (2026-10-18)**: `[tools] edit_format = "hashline"` turns it on for the session; `read` then shows `<line>:<tag>|<text>` (3 base-32 characters of FNV-1a over the line without trailing whitespace) and `edit_hashline` replaces `edit`. Edits are `replace` (start..end), `insert_after` (a tag, or 0 for the top) and `delete`, several per call against one read, applied bottom-up and refused if they overlap. A tag is matched at its line number, then at the nearest line with that hash within 50 lines; otherwise the edit is refused with a fresh tagged view. A bare hash works when it is unique. The result shows the changed area with fresh tags. Not chosen by default for any profile: the large gains reported elsewhere could not be traced to a primary benchmark.
 - **Format selection**: `config [tools].edit_format` overrides the model TOML, which overrides the profile default. `auto` uses the profile default.
 
 ## Shell tool

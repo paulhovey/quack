@@ -1,9 +1,9 @@
 //! `lsp`: definitions, references, hover, symbols and diagnostics from language servers.
 //! Offered only when a server in `lsp.d` is installed.
 
-use quack_protocol::ApprovalRequest;
 use futures::future::BoxFuture;
 use quack_lsp::ops::{self, Operation, Query};
+use quack_protocol::ApprovalRequest;
 use serde_json::{Value, json};
 
 use crate::paths;
@@ -90,7 +90,10 @@ impl Tool for Lsp {
             s.push_str(&format!(" {sym}"));
         }
         if let Some(p) = opt_str(args, PATH) {
-            s.push_str(&format!(" {}", paths::display(&ctx.root, &paths::resolve(&ctx.root, p))));
+            s.push_str(&format!(
+                " {}",
+                paths::display(&ctx.root, &paths::resolve(&ctx.root, p))
+            ));
             if let Some(l) = opt_u64(args, &["line"]) {
                 s.push_str(&format!(":{l}"));
             }

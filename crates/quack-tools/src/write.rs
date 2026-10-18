@@ -1,7 +1,7 @@
 //! `write`: create or overwrite a file.
 
-use quack_protocol::ApprovalRequest;
 use futures::future::BoxFuture;
+use quack_protocol::ApprovalRequest;
 use serde_json::{Value, json};
 
 use crate::paths;

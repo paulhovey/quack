@@ -38,6 +38,9 @@ pub(crate) struct Global {
     /// Permission mode for this run; shorthand for -c permissions.mode=MODE.
     #[arg(long, global = true, value_enum)]
     pub permission_mode: Option<PermissionModeArg>,
+    /// Shorthand for --permission-mode yolo: nothing asks, no sandbox.
+    #[arg(long, global = true, conflicts_with = "permission_mode")]
+    pub yolo: bool,
     /// Draw the first frame, write startup timings as JSON to FILE, and exit.
     #[arg(long, hide = true, value_name = "FILE")]
     pub trace_startup: Option<PathBuf>,
@@ -49,6 +52,10 @@ pub(crate) enum PermissionModeArg {
     Ask,
     AutoEdit,
     FullAuto,
+    /// No approvals and no sandbox; only the built-in deny list and deny rules apply.
+    Yolo,
+    /// Plan mode: look around and propose a plan; nothing changes until it is accepted.
+    Plan,
 }
 
 impl PermissionModeArg {
@@ -58,6 +65,8 @@ impl PermissionModeArg {
             Self::Ask => "ask",
             Self::AutoEdit => "auto-edit",
             Self::FullAuto => "full-auto",
+            Self::Yolo => "yolo",
+            Self::Plan => "plan",
         }
     }
 }

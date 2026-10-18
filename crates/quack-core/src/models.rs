@@ -4,9 +4,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use quack_config::{
-    ItemState, LayerKind, Loaded, ProviderFile, glob_match, load_providers,
-};
+use quack_config::{ItemState, LayerKind, Loaded, ProviderFile, glob_match, load_providers};
 use quack_protocol::{ModelInfo, ProviderModels};
 use quack_providers::Provider;
 use tokio::task::JoinSet;

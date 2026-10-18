@@ -424,10 +424,7 @@ mod tests {
         assert_eq!(code, exit::OK, "{out}");
         assert!(out.contains("  Hosted\n"), "{out}");
         assert!(out.contains("needs QUACK_TEST_UNSET_KEY"), "{out}");
-        assert!(
-            out.contains("export QUACK_TEST_UNSET_KEY="),
-            "{out}"
-        );
+        assert!(out.contains("export QUACK_TEST_UNSET_KEY="), "{out}");
         // Nothing is written for a key read from a variable.
         assert!(!tmp.path().join("user/providers.d").exists());
     }

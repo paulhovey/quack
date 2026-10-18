@@ -20,9 +20,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste, EventStream};
+use futures::StreamExt;
 use quack_config::Loaded;
 use quack_core::EngineHandle;
-use futures::StreamExt;
 use tokio::sync::broadcast::error::RecvError;
 
 pub use app::{App, AppInfo};

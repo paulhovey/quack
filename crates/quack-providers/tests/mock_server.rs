@@ -5,9 +5,7 @@ use std::ffi::OsString;
 use quack_config::ProviderFile;
 use quack_config::provider::ReasoningFormat;
 use quack_config::settings::NetworkSettings;
-use quack_providers::{
-    ChatRequest, ErrorKind, Message, Provider, ResponseBuilder, StreamEvent,
-};
+use quack_providers::{ChatRequest, ErrorKind, Message, Provider, ResponseBuilder, StreamEvent};
 use tokio_util::sync::CancellationToken;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};

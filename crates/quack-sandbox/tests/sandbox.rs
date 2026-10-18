@@ -35,10 +35,9 @@ async fn writes_stay_inside_and_network_is_blocked() {
         }
         return;
     }
-    let base = tempfile::tempdir_in(std::env::var_os("HOME").map_or_else(
-        std::env::temp_dir,
-        std::path::PathBuf::from,
-    ))
+    let base = tempfile::tempdir_in(
+        std::env::var_os("HOME").map_or_else(std::env::temp_dir, std::path::PathBuf::from),
+    )
     .expect("tempdir");
     let ws = base.path().join("ws");
     let outside = base.path().join("outside");
@@ -50,7 +49,12 @@ async fn writes_stay_inside_and_network_is_blocked() {
     };
     policy.writable.extend(Policy::temp_dirs());
 
-    let (ok, out) = sh(&policy, "echo hi > a.txt && mkdir -p d/e && echo x > d/e/f && rm a.txt && echo done > /dev/null", &ws).await;
+    let (ok, out) = sh(
+        &policy,
+        "echo hi > a.txt && mkdir -p d/e && echo x > d/e/f && rm a.txt && echo done > /dev/null",
+        &ws,
+    )
+    .await;
     assert!(ok, "{out}");
     assert!(ws.join("d/e/f").exists());
 
@@ -62,16 +66,28 @@ async fn writes_stay_inside_and_network_is_blocked() {
 
     // Reading outside still works.
     std::fs::write(outside.join("r.txt"), "readable").expect("write");
-    let (ok, out) = sh(&policy, &format!("cat '{}'", outside.join("r.txt").display()), &ws).await;
+    let (ok, out) = sh(
+        &policy,
+        &format!("cat '{}'", outside.join("r.txt").display()),
+        &ws,
+    )
+    .await;
     assert!(ok && out.contains("readable"), "{out}");
 
     // Temp is writable.
     let tmp = tempfile::tempdir().expect("tempdir");
-    let (ok, out) = sh(&policy, &format!("echo t > '{}'", tmp.path().join("t").display()), &ws).await;
+    let (ok, out) = sh(
+        &policy,
+        &format!("echo t > '{}'", tmp.path().join("t").display()),
+        &ws,
+    )
+    .await;
     assert!(ok, "{out}");
 
     // A local TCP listener can't be reached without the network, and can with it.
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
     let port = listener.local_addr().expect("addr").port();
     tokio::spawn(async move {
         loop {
@@ -109,9 +125,20 @@ async fn cargo_builds_in_the_sandbox() {
     let base = tempfile::tempdir_in(&home).expect("tempdir");
     let ws = base.path().join("p");
     std::fs::create_dir_all(ws.join("src")).expect("mkdir");
-    std::fs::write(ws.join("Cargo.toml"), "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n").expect("write");
-    std::fs::write(ws.join("src/main.rs"), "fn main() { println!(\"built\"); }\n").expect("write");
-    let mut policy = Policy { writable: vec![ws.clone()], network: false };
+    std::fs::write(
+        ws.join("Cargo.toml"),
+        "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("write");
+    std::fs::write(
+        ws.join("src/main.rs"),
+        "fn main() { println!(\"built\"); }\n",
+    )
+    .expect("write");
+    let mut policy = Policy {
+        writable: vec![ws.clone()],
+        network: false,
+    };
     policy.writable.extend(Policy::temp_dirs());
     let (ok, out) = sh(&policy, "cargo run --offline 2>&1", &ws).await;
     eprintln!("workspace + temp only: ok={ok}\n{out}");

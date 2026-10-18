@@ -165,10 +165,12 @@ Landed early (2026-10-18): the project trust flow (Trust modal, `/trust`, `quack
 - `shell.background` processes
 - Startup/perf budgets enforced in CI
 
+Landed early (2026-10-18): `quack-lsp` (lazy start, document sync, push and pull diagnostics, progress, the diagnostics delta after edits, the `lsp` tool, `/lsp`) and the default `lsp.d` files ([10](10-lsp.md#as-implemented-2026-10-18-ahead-of-m4)). Still to do: `lsp.rename`, `didChangeWatchedFiles`, a status-bar count.
+
 **Exit criteria**
-- [ ] Edits that introduce type errors get diagnostics in the same tool result (rust-analyzer, pyright, tsserver, gopls)
+- [ ] Edits that introduce type errors get diagnostics in the same tool result (rust-analyzer, pyright, tsserver, gopls) — verified with TypeScript 7 and the fixture server; rust-analyzer, pyright and gopls not yet run here
 - [ ] `quack exec` runs in GitHub Actions on all three OSes
-- [ ] LSP URIs are correct on Windows (drive letters, spaces)
+- [ ] LSP URIs are correct on Windows (drive letters, spaces) — unit test in `quack-lsp/src/pos.rs` runs in the Windows CI jobs
 
 ## M5 — Enterprise hardening: "a company can roll it out"
 
@@ -180,9 +182,11 @@ Landed early (2026-10-18): the project trust flow (Trust modal, `/trust`, `quack
 - Dynamic tree-sitter grammars (`libloading`)
 - MCP OAuth for remote servers
 
+Landed early (2026-10-18): the sandbox on Linux and macOS, `[sandbox]` settings, `sandbox: false` with approval, and `sandbox = true` for MCP and LSP servers ([11](11-security.md#as-implemented-2026-10-18-ahead-of-m5)). Windows is still to do.
+
 **Exit criteria**
 - [ ] Air-gapped VM: build from vendored sources, run against a local vLLM, zero external connections (verified with a network capture)
-- [ ] Sandboxed `full-auto` session can't write outside the workspace or reach the network, on all three OSes (or Windows limitation documented with mitigation)
+- [ ] Sandboxed `full-auto` session can't write outside the workspace or reach the network, on all three OSes (or Windows limitation documented with mitigation) — Linux done (`core/tests/sandbox.rs`), macOS written and tested in CI only, Windows unavailable with commands asking first ([11](11-security.md#as-implemented-2026-10-18-ahead-of-m5))
 - [ ] Policy-locked settings can't be overridden from user/project/env/CLI
 
 ## M6 — Editor integration & extras

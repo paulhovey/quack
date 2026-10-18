@@ -3,8 +3,8 @@
 //! Tried in order: exact → trailing whitespace ignored → indentation ignored (replacement
 //! re-indented) → blank lines ignored. A non-exact match is reported to the model.
 
-use quack_protocol::ApprovalRequest;
 use futures::future::BoxFuture;
+use quack_protocol::ApprovalRequest;
 use serde_json::{Value, json};
 
 use crate::paths;
@@ -266,6 +266,10 @@ impl Tool for StrReplace {
 
     fn kind(&self) -> ToolKind {
         ToolKind::Mutating
+    }
+
+    fn available(&self, ctx: &ToolCtx) -> bool {
+        !ctx.hashline
     }
 
     fn description(&self, _ctx: &ToolCtx) -> String {

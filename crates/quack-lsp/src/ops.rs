@@ -28,8 +28,13 @@ pub enum Operation {
 }
 
 impl Operation {
-    pub const NAMES: [&'static str; 5] =
-        ["definition", "references", "hover", "symbols", "diagnostics"];
+    pub const NAMES: [&'static str; 5] = [
+        "definition",
+        "references",
+        "hover",
+        "symbols",
+        "diagnostics",
+    ];
 
     pub fn parse(s: &str) -> Option<Self> {
         Some(match s.trim().to_ascii_lowercase().as_str() {
@@ -163,7 +168,9 @@ fn position(text: &str, q: &Query) -> Result<(usize, usize), String> {
                     return Ok((l, col));
                 }
             }
-            Err(format!("`{sym}` is not on line {line} or the lines next to it"))
+            Err(format!(
+                "`{sym}` is not on line {line} or the lines next to it"
+            ))
         }
         (Some(line), None) => {
             let l = (line.max(1) - 1) as usize;
@@ -255,7 +262,12 @@ fn locations(client: &Client, r: &Value, display: Display<'_>, none: &str) -> St
             .and_then(|(_, l)| l.get(line as usize).cloned())
             .unwrap_or_default();
         let ch = client.encoding().from_lsp(&text, col);
-        out.push(format!("  {}:{}: {}", line + 1, ch + 1, clip(text.trim(), 200)));
+        out.push(format!(
+            "  {}:{}: {}",
+            line + 1,
+            ch + 1,
+            clip(text.trim(), 200)
+        ));
     }
     if total > MAX_LOCATIONS {
         out.push(format!("… and {} more", total - MAX_LOCATIONS));
@@ -343,10 +355,16 @@ async fn symbols(mgr: &Arc<LspManager>, q: &Query, display: Display<'_>) -> Resu
             continue;
         }
         let r = c
-            .request("workspace/symbol", json!({ "query": query }), REQUEST_TIMEOUT)
+            .request(
+                "workspace/symbol",
+                json!({ "query": query }),
+                REQUEST_TIMEOUT,
+            )
             .await?;
         for s in r.as_array().into_iter().flatten() {
-            let Some(name) = s["name"].as_str() else { continue };
+            let Some(name) = s["name"].as_str() else {
+                continue;
+            };
             let place = location(&s["location"])
                 .map(|(p, l, _)| format!("{}:{}", display(&p), l + 1))
                 .unwrap_or_default();
@@ -367,14 +385,19 @@ async fn symbols(mgr: &Arc<LspManager>, q: &Query, display: Display<'_>) -> Resu
     let total = found.len();
     found.truncate(MAX_SYMBOLS);
     if total > MAX_SYMBOLS {
-        found.push(format!("… and {} more; use a more specific name", total - MAX_SYMBOLS));
+        found.push(format!(
+            "… and {} more; use a more specific name",
+            total - MAX_SYMBOLS
+        ));
     }
     Ok(found.join("\n"))
 }
 
 fn outline(v: &Value, depth: usize, out: &mut Vec<String>) {
     for s in v.as_array().into_iter().flatten() {
-        let Some(name) = s["name"].as_str() else { continue };
+        let Some(name) = s["name"].as_str() else {
+            continue;
+        };
         let line = s["selectionRange"]["start"]["line"]
             .as_u64()
             .or_else(|| s["range"]["start"]["line"].as_u64())
@@ -434,11 +457,15 @@ async fn diagnostics(
     if list.is_empty() {
         return Ok("No problems reported.".into());
     }
-    list.sort_by(|a, b| {
-        (a.1.severity, &a.0, a.1.line).cmp(&(b.1.severity, &b.0, b.1.line))
-    });
-    let errors = list.iter().filter(|d| d.1.severity == Severity::Error).count();
-    let warnings = list.iter().filter(|d| d.1.severity == Severity::Warning).count();
+    list.sort_by(|a, b| (a.1.severity, &a.0, a.1.line).cmp(&(b.1.severity, &b.0, b.1.line)));
+    let errors = list
+        .iter()
+        .filter(|d| d.1.severity == Severity::Error)
+        .count();
+    let warnings = list
+        .iter()
+        .filter(|d| d.1.severity == Severity::Warning)
+        .count();
     let total = list.len();
     let mut out: Vec<String> = list
         .iter()
@@ -502,7 +529,8 @@ mod tests {
 
     #[test]
     fn positions_from_symbols() {
-        let text = "fn main() {\n    let total = add(1, 2);\n}\nfn add(a: u32, b: u32) -> u32 { a + b }\n";
+        let text =
+            "fn main() {\n    let total = add(1, 2);\n}\nfn add(a: u32, b: u32) -> u32 { a + b }\n";
         let q = |line: Option<u32>, symbol: Option<&str>, column: Option<u32>| Query {
             path: None,
             line,
@@ -541,7 +569,10 @@ mod tests {
 
     #[test]
     fn operation_aliases() {
-        assert_eq!(Operation::parse("goto_definition"), Some(Operation::Definition));
+        assert_eq!(
+            Operation::parse("goto_definition"),
+            Some(Operation::Definition)
+        );
         assert_eq!(Operation::parse("Outline"), Some(Operation::Symbols));
         assert_eq!(Operation::parse("rename"), None);
     }

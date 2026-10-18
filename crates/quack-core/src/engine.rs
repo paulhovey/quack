@@ -440,7 +440,7 @@ impl Engine {
                 Ok(p) => Some(p),
                 Err(_) => {
                     return self.warn(format!(
-                        "unknown mode `{m}`; use read-only, ask, auto-edit, full-auto or plan"
+                        "unknown mode `{m}`; use read-only, ask, auto-edit, full-auto, yolo or plan"
                     ));
                 }
             },
@@ -946,6 +946,17 @@ impl Engine {
                     let _ = tx.send(Event::DoctorReport { checks });
                 });
             }
+            Op::InitInstructions => {
+                let prompt = init_prompt(&self.config);
+                return self.handle(
+                    Op::UserTurn {
+                        items: vec![InputItem::text(prompt)],
+                        overrides: Default::default(),
+                    },
+                    done,
+                    reload,
+                );
+            }
             Op::ListLsp => self.emit(Event::LspServers {
                 servers: crate::lsp::info(&self.lsp),
             }),
@@ -1343,6 +1354,44 @@ fn expand_skill(setup: &Setup, prompt: String) -> (String, Option<String>) {
     }
 }
 
+/// What `/init` asks the model to do: merge other agents' files into AGENTS.md, update
+/// an existing AGENTS.md, or write one from scratch.
+fn init_prompt(config: &Loaded) -> String {
+    let root = &config.dirs.workspace_root;
+    let others = crate::env::unmerged(config);
+    let has_agents = root.join("AGENTS.md").is_file();
+    let guide = "Keep it short and concrete: exact build, test and lint commands, the project \
+                 layout, conventions that are not obvious from the code, and pitfalls. Do not \
+                 invent anything you have not checked.";
+    if !others.is_empty() {
+        format!(
+            "Consolidate this project's agent instructions into AGENTS.md at the workspace \
+             root. Read {}{}. Write one AGENTS.md that keeps every instruction that still \
+             applies, drops duplicates, and is organized under short headings; if two files \
+             contradict each other, keep both points and tell me so I can decide. {guide} Do \
+             not change or delete the other files. When you are done, list them and suggest \
+             replacing each with a single line `@AGENTS.md`, so those tools keep reading the \
+             same instructions.",
+            others.join(", "),
+            if has_agents {
+                " and the existing AGENTS.md"
+            } else {
+                ""
+            },
+        )
+    } else if has_agents {
+        format!(
+            "Review AGENTS.md at the workspace root against the repository as it is now, and \
+             update it where it is wrong, missing something important, or out of date. {guide}"
+        )
+    } else {
+        format!(
+            "Create AGENTS.md at the workspace root: instructions for coding agents working in \
+             this repository. Explore the repository first. {guide}"
+        )
+    }
+}
+
 fn op_name(op: &Op) -> &'static str {
     match op {
         Op::UserTurn { .. } => "user_turn",
@@ -1361,6 +1410,7 @@ fn op_name(op: &Op) -> &'static str {
         Op::DetectServers => "detect_servers",
         Op::ListMcp => "list_mcp",
         Op::ListLsp => "list_lsp",
+        Op::InitInstructions => "init_instructions",
         Op::RestartMcp { .. } => "restart_mcp",
         Op::AddProvider { .. } => "add_provider",
         Op::SetPermissionMode { .. } => "set_permission_mode",

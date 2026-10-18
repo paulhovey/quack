@@ -5,6 +5,7 @@ use std::path::Path;
 
 use quack_config::Loaded;
 use quack_config::settings::MemoryScope;
+use quack_instructions::compat::Compat;
 use quack_instructions::{agents_md, skills};
 use quack_store::memory::MemoryStore;
 use quack_store::session::project_key;
@@ -83,17 +84,56 @@ pub(crate) fn folder_listing(root: &Path) -> String {
 /// the cwd (docs/plan/08-instructions-skills-commands.md#discovery).
 pub(crate) fn instructions(config: &Loaded) -> agents_md::Loaded {
     let d = &config.dirs;
-    let globals: Vec<(std::path::PathBuf, std::path::PathBuf)> = [&d.system, &d.user_config]
-        .into_iter()
-        .map(|dir| (dir.join("AGENTS.md"), dir.clone()))
-        .collect();
+    let mut globals: Vec<(std::path::PathBuf, std::path::PathBuf)> =
+        vec![(d.system.join("AGENTS.md"), d.system.clone())];
+    // The user's own AGENTS.md, or else another agent's global file (~/.claude/CLAUDE.md…).
+    let own = d.user_config.join("AGENTS.md");
+    let get = |k: &str| std::env::var_os(k);
+    let user = std::iter::once(own.clone())
+        .chain(
+            other_agents(config)
+                .user
+                .iter()
+                .map(|f| quack_config::expand_home(f, &get)),
+        )
+        .find(|p| p.is_file())
+        .unwrap_or(own);
+    let scope = user
+        .parent()
+        .map_or_else(|| d.user_config.clone(), Path::to_path_buf);
+    globals.push((user, scope));
     agents_md::load(&globals, &d.workspace_root, &d.cwd, &rules(config))
+}
+
+/// Other agents' instruction files (`compat.toml`), unless `[instructions] other_agents`
+/// is off.
+pub(crate) fn other_agents(config: &Loaded) -> Compat {
+    if !config.settings.instructions.other_agents {
+        return Compat::default();
+    }
+    let dirs: Vec<std::path::PathBuf> = config.item_layers().into_iter().map(|(_, d)| d).collect();
+    Compat::load(&dirs)
+}
+
+/// Other agents' files at the workspace root whose content is not in its AGENTS.md, for
+/// the offer to merge them (`/init`).
+pub(crate) fn unmerged(config: &Loaded) -> Vec<String> {
+    let root = &config.dirs.workspace_root;
+    let agents = config
+        .settings
+        .instructions
+        .files
+        .first()
+        .map_or_else(|| root.join("AGENTS.md"), |f| root.join(f));
+    other_agents(config).found(root, &agents)
 }
 
 pub(crate) fn rules(config: &Loaded) -> agents_md::Rules {
     let s = &config.settings.instructions;
+    let mut names = s.files.clone();
+    names.extend(other_agents(config).project);
     agents_md::Rules {
-        names: s.files.clone(),
+        names,
         max_bytes: usize::try_from(s.max_bytes).unwrap_or(usize::MAX),
     }
 }

@@ -139,6 +139,8 @@ impl Default for ToolSettings {
 pub enum EditFormat {
     Auto,
     StrReplace,
+    /// Hash-anchored edits: `read` tags each line, and edits name lines by tag.
+    Hashline,
     ApplyPatch,
     WholeFile,
 }
@@ -169,6 +171,8 @@ pub enum PermissionMode {
     Ask,
     AutoEdit,
     FullAuto,
+    /// No approvals and no sandbox. Only the built-in deny list and `deny` rules apply.
+    Yolo,
 }
 
 impl PermissionMode {
@@ -178,6 +182,7 @@ impl PermissionMode {
             Self::Ask => "ask",
             Self::AutoEdit => "auto-edit",
             Self::FullAuto => "full-auto",
+            Self::Yolo => "yolo",
         }
     }
 }
@@ -197,8 +202,11 @@ pub struct SandboxSettings {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum SandboxMode {
-    /// Commands run without a sandbox.
+    /// `workspace-write` where this OS supports it (Linux with Landlock, macOS);
+    /// elsewhere commands run without a sandbox, with a notice.
     #[default]
+    Auto,
+    /// Commands run without a sandbox.
     Off,
     /// Commands may write only in the workspace and temp folders, with no network.
     WorkspaceWrite,
@@ -211,6 +219,7 @@ pub enum SandboxMode {
 impl SandboxMode {
     pub fn label(self) -> &'static str {
         match self {
+            Self::Auto => "auto",
             Self::Off => "off",
             Self::WorkspaceWrite => "workspace-write",
             Self::WorkspaceWriteNet => "workspace-write-net",
@@ -286,10 +295,13 @@ pub struct NetworkSettings {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct InstructionSettings {
-    /// Instruction file names. Other harnesses' files are detected and offered, never loaded silently.
+    /// Instruction file names, in order of preference; the first one in a folder is read.
     #[serde(deserialize_with = "list::de")]
     #[schemars(with = "ListOrAppend")]
     pub files: Vec<String>,
+    /// Also read other agents' files listed in `compat.toml` (CLAUDE.md, GEMINI.md,
+    /// .cursorrules, …) where there is no file from `files`.
+    pub other_agents: bool,
     pub max_bytes: u64,
 }
 
@@ -297,6 +309,7 @@ impl Default for InstructionSettings {
     fn default() -> Self {
         Self {
             files: vec!["AGENTS.md".into()],
+            other_agents: true,
             max_bytes: 32 * 1024,
         }
     }

@@ -30,7 +30,13 @@ fn main() -> ExitCode {
         }
     };
     let mut overrides = cli.global.overrides.clone();
-    if let Some(mode) = cli.global.permission_mode {
+    let mode = match (cli.global.permission_mode, cli.global.yolo) {
+        (_, true) => Some(cli::PermissionModeArg::Yolo),
+        (m, false) => m,
+    };
+    // Plan mode is an overlay on the configured mode, set once the engine runs.
+    let plan = matches!(mode, Some(cli::PermissionModeArg::Plan));
+    if let Some(mode) = mode.filter(|_| !plan) {
         overrides.push(format!("permissions.mode=\"{}\"", mode.as_str()));
     }
     let opts = LoadOptions {
@@ -97,6 +103,9 @@ fn main() -> ExitCode {
         Cmd::Tui => block_on(async move {
             let config = Arc::new(loaded);
             let engine = Engine::spawn_with(config.clone(), resume);
+            if plan {
+                engine.submit(plan_op()).await;
+            }
             let trace = cli
                 .global
                 .trace_startup
@@ -123,9 +132,18 @@ fn main() -> ExitCode {
             };
             block_on(async move {
                 let engine = Engine::spawn_with(Arc::new(loaded), resume);
+                if plan {
+                    engine.submit(plan_op()).await;
+                }
                 quack_exec::run(engine, prompt, args.output_format.into()).await
             })
         }
+    }
+}
+
+fn plan_op() -> quack_core::protocol::Op {
+    quack_core::protocol::Op::SetPermissionMode {
+        mode: "plan".into(),
     }
 }
 

@@ -9,7 +9,9 @@ use std::time::Duration;
 
 use common::{bodies, sse_call, sse_text, turn};
 use quack_core::Engine;
-use quack_core::protocol::{ApprovalDecision, ApprovalRequest, Event, InputItem, Op, TurnOverrides};
+use quack_core::protocol::{
+    ApprovalDecision, ApprovalRequest, Event, InputItem, Op, TurnOverrides,
+};
 use wiremock::matchers::{body_string_contains, method};
 use wiremock::{Mock, MockServer};
 
@@ -20,7 +22,9 @@ async fn full_auto_stays_in_the_sandbox() {
     }
     // Not under the temp folder (writable in the sandbox) or a git repository (it would
     // become the workspace root).
-    let home = std::env::var_os("HOME").map(std::path::PathBuf::from).expect("HOME");
+    let home = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .expect("HOME");
     let tmp = tempfile::Builder::new()
         .prefix(".quack-sandbox-test")
         .tempdir_in(home)
@@ -96,7 +100,13 @@ async fn full_auto_stays_in_the_sandbox() {
         match e {
             Event::ApprovalRequest { call_id, request } => {
                 assert!(
-                    matches!(request, ApprovalRequest::Shell { outside_sandbox: true, .. }),
+                    matches!(
+                        request,
+                        ApprovalRequest::Shell {
+                            outside_sandbox: true,
+                            ..
+                        }
+                    ),
                     "{request:?}"
                 );
                 engine

@@ -119,9 +119,7 @@ mod tests {
         assert_eq!(f.language_id("go"), "go");
         assert_eq!(f.diagnostics.max_wait_ms, 5_000);
         assert!(toml::from_str::<LspServerFile>("command = \"x\"").is_err());
-        assert!(
-            toml::from_str::<LspServerFile>("comand = \"x\"\nextensions = []").is_err()
-        );
+        assert!(toml::from_str::<LspServerFile>("comand = \"x\"\nextensions = []").is_err());
     }
 
     #[test]

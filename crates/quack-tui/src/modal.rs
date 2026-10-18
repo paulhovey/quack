@@ -632,10 +632,7 @@ pub(crate) fn config(
 }
 
 /// The `/context` modal. `report` is `None` until the engine answers.
-pub(crate) fn context(
-    report: Option<&quack_protocol::ContextReport>,
-    theme: &Theme,
-) -> Modal {
+pub(crate) fn context(report: Option<&quack_protocol::ContextReport>, theme: &Theme) -> Modal {
     let tabs = |items| {
         Modal::new(
             "Context",
@@ -810,7 +807,13 @@ pub(crate) fn permissions(current: &str, rules: &[(String, String)], theme: &The
         ),
         (
             "full-auto",
-            "Everything runs without asking, except the built-in deny list and deny rules.",
+            "Everything runs without asking, inside the sandbox when it is on, except the \
+             built-in deny list and deny rules. Leaving the sandbox still asks.",
+        ),
+        (
+            "yolo",
+            "Nothing asks and the sandbox is off. Only the built-in deny list (rm -rf /, \
+             disk wipes, …) and your deny rules still apply.",
         ),
     ];
     let modes = MODES
@@ -886,10 +889,7 @@ pub(crate) fn permissions(current: &str, rules: &[(String, String)], theme: &The
 }
 
 /// The `/rewind` picker. `points` is `None` while the engine lists them.
-pub(crate) fn rewind(
-    points: Option<&[quack_protocol::RewindPoint]>,
-    theme: &Theme,
-) -> Modal {
+pub(crate) fn rewind(points: Option<&[quack_protocol::RewindPoint]>, theme: &Theme) -> Modal {
     let items = match points {
         None => vec![placeholder("listing messages…", "", theme)],
         Some([]) => vec![placeholder(
@@ -1040,10 +1040,7 @@ pub(crate) struct TrustPrompt {
 }
 
 /// The `/doctor` modal. `checks` is `None` while they run.
-pub(crate) fn doctor(
-    checks: Option<&[quack_protocol::DoctorCheck]>,
-    theme: &Theme,
-) -> Modal {
+pub(crate) fn doctor(checks: Option<&[quack_protocol::DoctorCheck]>, theme: &Theme) -> Modal {
     use quack_protocol::CheckStatus;
     let items = match checks {
         None => vec![placeholder(
@@ -1222,10 +1219,7 @@ pub(crate) fn skills(skills: &[quack_protocol::SkillInfo], theme: &Theme) -> Mod
 
 /// The `/mcp` modal: each server with its state, tools and recent stderr. `None` while
 /// asking the engine.
-pub(crate) fn mcp(
-    servers: Option<&[quack_protocol::McpServerInfo]>,
-    theme: &Theme,
-) -> Modal {
+pub(crate) fn mcp(servers: Option<&[quack_protocol::McpServerInfo]>, theme: &Theme) -> Modal {
     let items = match servers {
         None => vec![placeholder("checking servers…", "", theme)],
         Some([]) => vec![placeholder(
@@ -1333,11 +1327,19 @@ pub(crate) fn lsp(servers: Option<&[quack_protocol::LspServerInfo]>, theme: &The
                 let mut detail = vec![Line::styled(s.id.clone(), style), Line::raw("")];
                 detail.push(field(theme, "state", s.state.clone()));
                 if !s.detail.is_empty() {
-                    let st = if s.state == "failed" { theme.error } else { theme.dim };
+                    let st = if s.state == "failed" {
+                        theme.error
+                    } else {
+                        theme.dim
+                    };
                     detail.push(Line::styled(s.detail.clone(), st));
                 }
                 detail.push(field(theme, "command", s.command.clone()));
-                detail.push(field(theme, "files", format!(".{}", s.extensions.join(" ."))));
+                detail.push(field(
+                    theme,
+                    "files",
+                    format!(".{}", s.extensions.join(" .")),
+                ));
                 if !s.root.is_empty() {
                     detail.push(field(theme, "project", s.root.clone()));
                 }
@@ -1398,10 +1400,7 @@ pub(crate) fn lsp(servers: Option<&[quack_protocol::LspServerInfo]>, theme: &The
 
 /// The `/setup` modal: model servers found on this machine, one row per model. `None`
 /// while looking.
-pub(crate) fn setup(
-    servers: Option<&[quack_protocol::DetectedServer]>,
-    theme: &Theme,
-) -> Modal {
+pub(crate) fn setup(servers: Option<&[quack_protocol::DetectedServer]>, theme: &Theme) -> Modal {
     const ELSEWHERE: &str = "For a hosted service, or a server on another machine or port, \
          run `quack setup` in a terminal.";
     let items = match servers {

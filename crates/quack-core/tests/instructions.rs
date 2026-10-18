@@ -162,3 +162,49 @@ async fn skills_are_listed_loaded_by_the_tool_and_run_by_name() {
     assert!(last.contains("<skill name=\\\"release\\\"") && last.contains("now"));
     engine.shutdown().await;
 }
+
+/// Another agent's file is read where there is no AGENTS.md, the merge is offered, and
+/// `/init` asks the model to do it.
+#[tokio::test]
+async fn other_agents_files_are_read_and_merge_is_offered() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(sse_text("ok"))
+        .mount(&server)
+        .await;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let ws = tmp.path().join("ws");
+    std::fs::create_dir_all(ws.join(".git")).expect("git root");
+    std::fs::write(ws.join("CLAUDE.md"), "CLAUDE-RULES").expect("write");
+    std::fs::create_dir_all(tmp.path().join("user")).expect("mkdir");
+    std::fs::write(
+        tmp.path().join("user").join("compat.toml"),
+        "[instructions]\nproject = [\"CLAUDE.md\", \".cursor/rules/\"]\n",
+    )
+    .expect("compat");
+    let loaded = common::workspace(tmp.path(), &server.uri(), r#"["tiny"]"#, "");
+    let mut engine = Engine::spawn(Arc::new(loaded));
+    let mut offered = false;
+    loop {
+        let e = tokio::time::timeout(std::time::Duration::from_secs(10), engine.events.recv())
+            .await
+            .expect("event")
+            .expect("open");
+        match e {
+            quack_core::protocol::Event::Notice { message } => {
+                offered = message.contains("CLAUDE.md") && message.contains("/init");
+            }
+            quack_core::protocol::Event::StartupComplete => break,
+            _ => {}
+        }
+    }
+    assert!(offered, "no offer to merge");
+    engine
+        .submit(quack_core::protocol::Op::InitInstructions)
+        .await;
+    common::until_done(&mut engine).await;
+    let first = &bodies(&server).await[0];
+    assert!(first.contains("CLAUDE-RULES"), "{first}");
+    assert!(first.contains("Consolidate this project's agent instructions into AGENTS.md"));
+    engine.shutdown().await;
+}

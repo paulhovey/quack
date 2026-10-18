@@ -1,8 +1,11 @@
 #:schema schemas/compat.json
-# Other harnesses' files: detected and offered at startup, never loaded silently
-# (docs/plan/08-instructions-skills-commands.md#other-harnesses-files).
-# Delete entries, or this whole file, to stop detecting them.
+# Other coding agents' files (docs/plan/08-instructions-skills-commands.md#other-harnesses-files).
+# Delete entries, or this whole file, to stop using them.
 
+# Instruction files: read in a folder that has no AGENTS.md (the user ones when there is
+# no AGENTS.md in quack's config folder), and offered for merging into AGENTS.md with
+# /init. Folders (ending in /) are not read yet. `[instructions] other_agents = false` in
+# config.toml turns this off.
 [instructions]
 project = [
     "CLAUDE.md",
@@ -15,6 +18,7 @@ project = [
 ]
 user = ["~/.claude/CLAUDE.md", "~/.gemini/GEMINI.md"]
 
+# Detected only, not used yet:
 [skills]
 project = [".claude/skills/", ".codex/skills/", ".goose/skills/", ".maki/skills/"]
 user = ["~/.claude/skills/", "~/.codex/skills/", "~/.goose/skills/", "~/.maki/skills/"]

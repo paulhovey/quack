@@ -303,3 +303,7 @@ No Mistral profile was added. The generic profile already uses the same tool sha
 
 - Should we support `api = "openai-completions"` (raw prompt with our own chat template) for servers with broken templates? It would give full control but means maintaining Jinja templates. Proposed: later, behind a feature, using `minijinja` with each model's own template.
 - Should multiple base URLs per provider (load balancing/failover across GPU nodes) be supported? Proposed: `base_urls = [...]` with round-robin plus health checks, in M5.
+
+### Reasoning in history (2026-10-18)
+
+Earlier assistant reasoning is sent back by default: `reasoning_content` on OpenAI-compatible servers, `thinking` on Ollama, `thinking` parts on Mistral. DeepSeek's thinking mode returns HTTP 400 for a request with `tools` that omits it ([docs](https://api-docs.deepseek.com/guides/thinking_mode)); MiniMax-M2, Kimi K2 thinking and GLM document it as needed across tool calls. Local chat templates drop the reasoning they don't render. `[reasoning] preserve_in_history = false` on a model turns it off, and `effort = "none"` sends none. Checked live on 2026-10-18 that an OpenAI-compatible router accepts the field.

@@ -96,7 +96,10 @@ impl std::fmt::Debug for Client {
 
 impl Client {
     /// Start the server and complete `initialize`.
-    pub async fn start(launch: Launch, manager_changed: Arc<watch::Sender<u64>>) -> Result<Arc<Self>, String> {
+    pub async fn start(
+        launch: Launch,
+        manager_changed: Arc<watch::Sender<u64>>,
+    ) -> Result<Arc<Self>, String> {
         let Launch {
             id,
             mut command,
@@ -180,13 +183,20 @@ impl Client {
             "initializationOptions": initialization_options,
             "capabilities": capabilities(),
         });
-        let result = match client.request("initialize", params, INITIALIZE_TIMEOUT).await {
+        let result = match client
+            .request("initialize", params, INITIALIZE_TIMEOUT)
+            .await
+        {
             Ok(r) => r,
             Err(e) => {
                 // The server's own words are usually the useful part (e.g. a rustup proxy
                 // with no rust-analyzer component behind it).
                 tokio::time::sleep(Duration::from_millis(100)).await;
-                let said = client.log().into_iter().rev().find(|l| !l.trim().is_empty());
+                let said = client
+                    .log()
+                    .into_iter()
+                    .rev()
+                    .find(|l| !l.trim().is_empty());
                 return Err(match said {
                     Some(line) => format!("initialize: {e}: {}", line.trim()),
                     None => format!("initialize: {e}"),
@@ -218,7 +228,10 @@ impl Client {
     }
 
     pub fn log(&self) -> Vec<String> {
-        self.log.lock().map(|l| l.iter().cloned().collect()).unwrap_or_default()
+        self.log
+            .lock()
+            .map(|l| l.iter().cloned().collect())
+            .unwrap_or_default()
     }
 
     /// Titles of work the server reports as running (indexing, `cargo check`, …).
@@ -230,7 +243,10 @@ impl Client {
     }
 
     pub fn snapshot(&self) -> Snapshot {
-        self.state.lock().map(|s| s.diagnostics.clone()).unwrap_or_default()
+        self.state
+            .lock()
+            .map(|s| s.diagnostics.clone())
+            .unwrap_or_default()
     }
 
     pub fn diagnostics(&self, path: &Path) -> Vec<Diagnostic> {
@@ -245,7 +261,12 @@ impl Client {
         self.state.lock().map(|s| s.seq).unwrap_or_default()
     }
 
-    pub async fn request(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, String> {
+    pub async fn request(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, String> {
         if !self.alive() {
             return Err(format!("{} is not running", self.id));
         }
@@ -265,7 +286,11 @@ impl Client {
             Err(_) => {
                 self.forget(id);
                 let _ = self.notify("$/cancelRequest", json!({ "id": id })).await;
-                Err(format!("{} did not answer {method} in {}s", self.id, timeout.as_secs()))
+                Err(format!(
+                    "{} did not answer {method} in {}s",
+                    self.id,
+                    timeout.as_secs()
+                ))
             }
         }
     }
@@ -297,31 +322,41 @@ impl Client {
                 .map(|b| String::from_utf8_lossy(&b).into_owned())
         };
         let Some(text) = text else {
-            let open = self.state.lock().is_ok_and(|mut s| s.docs.remove(&key).is_some());
+            let open = self
+                .state
+                .lock()
+                .is_ok_and(|mut s| s.docs.remove(&key).is_some());
             if open {
-                self.notify("textDocument/didClose", json!({ "textDocument": { "uri": uri } }))
-                    .await?;
+                self.notify(
+                    "textDocument/didClose",
+                    json!({ "textDocument": { "uri": uri } }),
+                )
+                .await?;
             }
             return Err(format!("cannot read {}", path.display()));
         };
-        let action = self.state.lock().ok().and_then(|mut s| match s.docs.get_mut(&key) {
-            None => {
-                s.docs.insert(
-                    key.clone(),
-                    Doc {
-                        version: 1,
-                        text: text.clone(),
-                    },
-                );
-                Some(SyncStep::Open)
-            }
-            Some(d) if d.text != text => {
-                d.version += 1;
-                d.text.clone_from(&text);
-                Some(SyncStep::Change(d.version))
-            }
-            Some(_) => None,
-        });
+        let action = self
+            .state
+            .lock()
+            .ok()
+            .and_then(|mut s| match s.docs.get_mut(&key) {
+                None => {
+                    s.docs.insert(
+                        key.clone(),
+                        Doc {
+                            version: 1,
+                            text: text.clone(),
+                        },
+                    );
+                    Some(SyncStep::Open)
+                }
+                Some(d) if d.text != text => {
+                    d.version += 1;
+                    d.text.clone_from(&text);
+                    Some(SyncStep::Change(d.version))
+                }
+                Some(_) => None,
+            });
         match action {
             Some(SyncStep::Open) => {
                 let ext = path
@@ -364,7 +399,10 @@ impl Client {
         }
         let uri = pos::path_to_uri(path);
         let _ = self
-            .notify("textDocument/didSave", json!({ "textDocument": { "uri": uri } }))
+            .notify(
+                "textDocument/didSave",
+                json!({ "textDocument": { "uri": uri } }),
+            )
             .await;
         if self.supports("diagnosticProvider") {
             self.pull_after_change(path, max_wait).await;
@@ -510,7 +548,10 @@ impl Reader {
                 Ok(Some(m)) => m,
                 Ok(None) => break,
                 Err(e) => {
-                    push(&self.log, format!("[quack] bad message from the server: {e}"));
+                    push(
+                        &self.log,
+                        format!("[quack] bad message from the server: {e}"),
+                    );
                     break;
                 }
             };
@@ -568,7 +609,9 @@ impl Reader {
                     })
                     .unwrap_or_default(),
             )),
-            "workspace/workspaceFolders" => Ok(json!([{ "uri": self.root_uri, "name": "workspace" }])),
+            "workspace/workspaceFolders" => {
+                Ok(json!([{ "uri": self.root_uri, "name": "workspace" }]))
+            }
             "window/workDoneProgress/create"
             | "client/registerCapability"
             | "client/unregisterCapability"
@@ -578,7 +621,9 @@ impl Reader {
             | "workspace/inlayHint/refresh"
             | "workspace/codeLens/refresh" => Ok(Value::Null),
             // Edits only happen through quack's own tools, with approval.
-            "workspace/applyEdit" => Ok(json!({ "applied": false, "failureReason": "not supported" })),
+            "workspace/applyEdit" => {
+                Ok(json!({ "applied": false, "failureReason": "not supported" }))
+            }
             other => Err(format!("{other} is not supported")),
         }
     }
@@ -681,7 +726,10 @@ mod tests {
             section(&s, Some("python.analysis")),
             json!({ "typeCheckingMode": "strict" })
         );
-        assert_eq!(section(&s, Some("rust-analyzer.cargo.features")), json!("all"));
+        assert_eq!(
+            section(&s, Some("rust-analyzer.cargo.features")),
+            json!("all")
+        );
         assert_eq!(section(&s, Some("missing")), Value::Null);
         assert_eq!(section(&s, None), s);
     }

@@ -2,8 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
-use quack_protocol::ApprovalRequest;
 use futures::future::BoxFuture;
+use quack_protocol::ApprovalRequest;
 use serde_json::{Value, json};
 
 use crate::paths;

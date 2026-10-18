@@ -51,10 +51,19 @@ pub(crate) fn build_body(req: &ChatRequest) -> Value {
             Message::User { content } => json!({ "role": "user", "content": content }),
             Message::Assistant {
                 content,
+                reasoning,
                 tool_calls,
-                ..
             } => {
                 let mut v = json!({ "role": "assistant", "content": content });
+                // Thinking models keep their reasoning across tool calls; the model's
+                // template drops what it doesn't use.
+                if let Some(r) = reasoning.as_deref().filter(|r| {
+                    !r.is_empty()
+                        && req.preserve_reasoning != Some(false)
+                        && req.reasoning_effort.as_deref() != Some("none")
+                }) {
+                    v["thinking"] = json!(r);
+                }
                 if !tool_calls.is_empty() {
                     v["tool_calls"] = tool_calls
                         .iter()
@@ -358,6 +367,25 @@ mod tests {
         );
         assert_eq!(b["messages"][2]["tool_name"], "read");
         assert_eq!(b["tools"][0]["function"]["name"], "read");
+    }
+
+    #[test]
+    fn earlier_thinking_goes_back_unless_turned_off() {
+        let mut req = ChatRequest {
+            model: "qwen3:8b".into(),
+            messages: vec![Message::Assistant {
+                content: String::new(),
+                reasoning: Some("read a.rs first".into()),
+                tool_calls: Vec::new(),
+            }],
+            ..ChatRequest::default()
+        };
+        assert_eq!(
+            build_body(&req)["messages"][0]["thinking"],
+            "read a.rs first"
+        );
+        req.preserve_reasoning = Some(false);
+        assert!(build_body(&req)["messages"][0].get("thinking").is_none());
     }
 
     #[test]

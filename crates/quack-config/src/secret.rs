@@ -127,9 +127,7 @@ fn keyring_get(name: &str) -> Result<String, SecretError> {
     crate::keyring::get(service, user)
         .map_err(keyring_error(name))?
         .ok_or_else(|| {
-            keyring_error(name)(format!(
-                "nothing stored; run `quack keyring set {name}`"
-            ))
+            keyring_error(name)(format!("nothing stored; run `quack keyring set {name}`"))
         })
 }
 

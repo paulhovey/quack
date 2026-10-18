@@ -25,7 +25,11 @@ fn fixture_server() -> PathBuf {
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
         .expect("cargo build");
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     String::from_utf8_lossy(&out.stdout)
         .lines()
         .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
@@ -86,10 +90,7 @@ async fn edit_reports_diagnostics(sandbox: bool) {
         .await;
     turn(&mut engine, "break it").await;
     let last = bodies(&server).await.pop().expect("request");
-    assert!(
-        last.contains("a.fx:1:13 error[F1]: found ERROR"),
-        "{last}"
-    );
+    assert!(last.contains("a.fx:1:13 error[F1]: found ERROR"), "{last}");
     // The tool is offered, since a server is installed.
     assert!(last.contains("\"name\":\"lsp\""), "{last}");
     engine.shutdown().await;

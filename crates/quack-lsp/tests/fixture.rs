@@ -49,8 +49,14 @@ async fn diagnostics_after_edits_and_queries() {
     .expect("write");
     let report = mgr.after_edit(&a, &before, &show).await.expect("report");
     // The file was not open before, so its old warning counts as new this once.
-    assert!(report.contains("a.fx:4:9 error[F1]: found ERROR"), "{report}");
-    assert!(report.contains("other.fx:1:1 error: other is broken"), "{report}");
+    assert!(
+        report.contains("a.fx:4:9 error[F1]: found ERROR"),
+        "{report}"
+    );
+    assert!(
+        report.contains("other.fx:1:1 error: other is broken"),
+        "{report}"
+    );
     assert_eq!(mgr.status()[0].state, "ready");
     assert_eq!(mgr.status()[0].errors, 2);
 
@@ -81,7 +87,10 @@ async fn diagnostics_after_edits_and_queries() {
     let outline = ops::run(&mgr, Operation::Symbols, q(None, ""), &show)
         .await
         .expect("outline");
-    assert_eq!(outline, "a.fx:\n  function add  (line 1)\n  function main  (line 2)");
+    assert_eq!(
+        outline,
+        "a.fx:\n  function add  (line 1)\n  function main  (line 2)"
+    );
     let found = ops::run(
         &mgr,
         Operation::Symbols,
@@ -136,7 +145,11 @@ async fn real_rust_analyzer() {
     .expect("write");
     std::fs::create_dir(root.join("src")).expect("mkdir");
     let main = root.join("src/main.rs");
-    std::fs::write(&main, "fn add(a: u32) -> u32 { a }\nfn main() { add(1); }\n").expect("write");
+    std::fs::write(
+        &main,
+        "fn add(a: u32) -> u32 { a }\nfn main() { add(1); }\n",
+    )
+    .expect("write");
     let file: LspServerFile = toml::from_str(
         "command = \"rust-analyzer\"\nextensions = [\"rs\"]\nroot_markers = [\"Cargo.toml\"]\n[diagnostics]\nmax_wait_ms = 60000\n",
     )
@@ -198,12 +211,19 @@ async fn real_rust_analyzer() {
 async fn real_typescript() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().canonicalize().expect("canonical");
-    std::fs::write(root.join("tsconfig.json"), "{\"compilerOptions\":{\"strict\":true}}")
-        .expect("write");
+    std::fs::write(
+        root.join("tsconfig.json"),
+        "{\"compilerOptions\":{\"strict\":true}}",
+    )
+    .expect("write");
     let a = root.join("a.ts");
     let b = root.join("b.ts");
     std::fs::write(&a, "export function add(a: number): number { return a; }\n").expect("write");
-    std::fs::write(&b, "import { add } from \"./a\";\nconst n: number = add(1);\n").expect("write");
+    std::fs::write(
+        &b,
+        "import { add } from \"./a\";\nconst n: number = add(1);\n",
+    )
+    .expect("write");
     let text = std::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../defaults/lsp.d/typescript.toml"),
     )
@@ -217,8 +237,11 @@ async fn real_typescript() {
     let show = display(&root);
     mgr.touch(&b);
     let before = mgr.before_edit(&a).await.expect("covered");
-    std::fs::write(&a, "export function add(a: number): number { return \"x\"; }\n")
-        .expect("write");
+    std::fs::write(
+        &a,
+        "export function add(a: number): number { return \"x\"; }\n",
+    )
+    .expect("write");
     let started = std::time::Instant::now();
     let report = mgr.after_edit(&a, &before, &show).await.expect("report");
     eprintln!("after {:?}:\n{report}", started.elapsed());

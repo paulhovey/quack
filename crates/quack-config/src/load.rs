@@ -579,10 +579,7 @@ mod tests {
     #[test]
     fn untrusted_project_is_skipped_until_trusted() {
         let f = Fixture::new();
-        f.write(
-            "repo/.quack/config.toml",
-            "[model]\ndefault = \"proj/m\"",
-        );
+        f.write("repo/.quack/config.toml", "[model]\ndefault = \"proj/m\"");
         let l = f.load(|_| {});
         assert_eq!(l.project, ProjectStatus::Untrusted);
         assert_eq!(l.settings.model.default, "");

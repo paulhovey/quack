@@ -2,9 +2,9 @@
 
 use std::time::Duration;
 
+use futures::future::BoxFuture;
 use quack_protocol::ApprovalRequest;
 use quack_shell::{RunOptions, run};
-use futures::future::BoxFuture;
 use serde_json::{Value, json};
 
 use crate::paths;

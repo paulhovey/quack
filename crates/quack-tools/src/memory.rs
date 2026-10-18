@@ -1,8 +1,8 @@
 //! `memory`: markdown notes kept across sessions (docs/plan/07-sessions-memory-checkpoints.md#memory).
 
+use futures::future::BoxFuture;
 use quack_protocol::ApprovalRequest;
 use quack_store::memory::{KINDS, MemoryStore, Scope};
-use futures::future::BoxFuture;
 use serde_json::{Value, json};
 
 use crate::registry::{Subject, Tool, ToolCtx, ToolKind, ToolOutput, opt_str};
@@ -246,6 +246,8 @@ mod tests {
             skills: Default::default(),
             lsp: None,
             sandbox: Default::default(),
+            plan: Default::default(),
+            hashline: false,
         }
     }
 

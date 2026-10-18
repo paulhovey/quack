@@ -321,6 +321,9 @@ fn draw_status(f: &mut Frame<'_>, app: &App, area: Rect) {
         left.push_str(&format!(" · {tps:.0} t/s"));
     }
     let mut right: Vec<Span<'_>> = Vec::new();
+    if app.info.permission_mode == "yolo" {
+        right.push(Span::styled("YOLO ", t.error));
+    }
     if app.approval.is_some() {
         right.push(Span::styled("waiting for approval", t.warn));
     } else if app.turn_running {

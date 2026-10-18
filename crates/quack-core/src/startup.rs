@@ -9,9 +9,7 @@ use quack_config::{
     Item, ItemState, LayerKind, Loaded, ProjectStatus, ProviderFile, glob_match, load_providers,
 };
 use quack_instructions::skills;
-use quack_profiles::{
-    InternalTool, Profile, PromptVars, ToolSurface, load_profiles, select,
-};
+use quack_profiles::{InternalTool, Profile, PromptVars, ToolSurface, load_profiles, select};
 use quack_protocol::{Event, LoadState, SkillInfo, Subsystem};
 use quack_providers::{DiscoveredModel, Provider};
 use quack_shell::ShellKind;
@@ -155,7 +153,12 @@ pub(crate) async fn run(
         detail: "reading AGENTS.md".into(),
     });
     let cfg_for_instr = config.clone();
-    let instructions = tokio::task::spawn_blocking(move || env::instructions(&cfg_for_instr));
+    let instructions = tokio::task::spawn_blocking(move || {
+        (
+            env::instructions(&cfg_for_instr),
+            env::unmerged(&cfg_for_instr),
+        )
+    });
     let cfg_for_skills = config.clone();
     let skills = tokio::task::spawn_blocking(move || env::skills(&cfg_for_skills));
 
@@ -176,7 +179,19 @@ pub(crate) async fn run(
     let elapsed = started.elapsed().as_millis();
     report_config(&cfg, &config, &providers, elapsed, &tx);
 
-    let instructions = instructions.await.unwrap_or_default();
+    let (instructions, unmerged) = instructions.await.unwrap_or_default();
+    if !unmerged.is_empty() {
+        let _ = tx.send(Event::Notice {
+            message: format!(
+                "{} {} written for other coding agents; quack reads {} where there is no \
+                 AGENTS.md. /init merges {} into AGENTS.md, so every agent shares one file.",
+                unmerged.join(", "),
+                if unmerged.len() == 1 { "is" } else { "are" },
+                if unmerged.len() == 1 { "it" } else { "them" },
+                if unmerged.len() == 1 { "it" } else { "them" },
+            ),
+        });
+    }
     instr.send(if instructions.sources.is_empty() {
         LoadState::Disabled {
             reason: "no AGENTS.md found".into(),
@@ -406,7 +421,9 @@ async fn resolve_model(
         .filter_map(|i| i.loaded().map(|f| (i, f)))
         .collect();
     if candidates.is_empty() {
-        let msg = "no providers configured · /setup (or `quack setup`) finds servers on this machine".to_owned();
+        let msg =
+            "no providers configured · /setup (or `quack setup`) finds servers on this machine"
+                .to_owned();
         return Err((
             LoadState::NeedsAttention {
                 detail: msg.clone(),
@@ -420,8 +437,7 @@ async fn resolve_model(
     for (item, file) in candidates {
         // The bundle's hosted services are offers: one is used once the user picks a
         // model, never on its own, since it may cost money.
-        let offer =
-            item.layer == LayerKind::Defaults && !quack_config::is_loopback(&file.base_url);
+        let offer = item.layer == LayerKind::Defaults && !quack_config::is_loopback(&file.base_url);
         if let Some(missing) = missing_env_key(file) {
             if !offer {
                 reasons.push(format!("{}: {missing} not set", item.id));
@@ -619,6 +635,8 @@ async fn build_setup(
         skills: Arc::new(found.skills),
         lsp: Some(lsp),
         sandbox: crate::sandbox::state(config),
+        plan: Default::default(),
+        hashline: config.settings.tools.edit_format == quack_config::settings::EditFormat::Hashline,
     };
     let registry = Arc::new(Registry::builtin());
     let internal: Vec<InternalTool> = registry

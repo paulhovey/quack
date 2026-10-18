@@ -68,6 +68,9 @@ pub enum Op {
     },
     /// Ask for the language servers' state; answered with `Event::LspServers`.
     ListLsp,
+    /// `/init`: a turn that writes AGENTS.md, merging other agents' instruction files
+    /// into it when there are any.
+    InitInstructions,
     /// Look for model servers on this machine (loopback ports only); answered with
     /// `Event::ServersDetected`.
     DetectServers,
@@ -285,6 +288,10 @@ pub enum Event {
         replaced: u32,
     },
     // diagnostics
+    /// Something worth knowing that is not a problem, e.g. an offer.
+    Notice {
+        message: String,
+    },
     Warning {
         message: String,
     },
@@ -344,8 +351,14 @@ pub enum ApprovalRequest {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         outside_sandbox: bool,
     },
-    Edit { path: String, diff: String },
-    Tool { name: String, arguments: String },
+    Edit {
+        path: String,
+        diff: String,
+    },
+    Tool {
+        name: String,
+        arguments: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

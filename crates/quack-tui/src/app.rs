@@ -161,6 +161,8 @@ pub struct App {
     resuming: bool,
     /// The mode to go back to when plan mode ends.
     mode_before_plan: String,
+    /// The mode `/yolo` turns back to.
+    mode_before_yolo: String,
     /// Text for the terminal's clipboard (OSC 52), written by the event loop.
     clipboard: Option<String>,
     /// Installed skills, runnable as `/<name>`.
@@ -202,6 +204,7 @@ impl App {
             panel_collapsed: false,
             resuming: false,
             mode_before_plan: String::new(),
+            mode_before_yolo: String::new(),
             clipboard: None,
             skills: Vec::new(),
             detected: Vec::new(),
@@ -566,6 +569,11 @@ impl App {
                 if mode == "plan" && self.info.permission_mode != "plan" {
                     self.note("plan mode: the model looks around and proposes a plan; nothing is changed (/plan off leaves)".into());
                 }
+                if mode == "yolo" && self.info.permission_mode != "yolo" {
+                    self.note("yolo: nothing asks and the sandbox is off; only the built-in deny list and your deny rules still apply · /yolo turns it off".into());
+                } else if mode != "yolo" && self.info.permission_mode == "yolo" {
+                    self.note(format!("yolo off · {mode} mode"));
+                }
                 self.info.permission_mode = mode;
             }
             Event::TurnAborted { reason, .. } => {
@@ -573,6 +581,7 @@ impl App {
                 self.approval = None;
                 self.note(reason);
             }
+            Event::Notice { message } => self.transcript.push(Entry::System(message)),
             Event::Warning { message } => self.transcript.push(Entry::Warning(message)),
             Event::Error { error } => self.transcript.push(Entry::Error(error.message)),
             _ => self.dirty = false,
@@ -784,6 +793,27 @@ impl App {
         });
     }
 
+    /// `/yolo`: switch to yolo, or back to the mode it was turned on from.
+    fn toggle_yolo(&mut self, args: &str) {
+        let on = match args.trim() {
+            "on" => true,
+            "off" => false,
+            _ => self.info.permission_mode != "yolo",
+        };
+        if on {
+            if self.info.permission_mode != "yolo" {
+                self.mode_before_yolo = self.info.permission_mode.clone();
+            }
+            self.set_mode("yolo");
+        } else {
+            let back = match self.mode_before_yolo.as_str() {
+                "" | "yolo" => "ask".to_owned(),
+                m => m.to_owned(),
+            };
+            self.set_mode(&back);
+        }
+    }
+
     /// Leave plan mode for the mode it was entered from.
     fn end_plan(&mut self) {
         let back = match self.mode_before_plan.as_str() {
@@ -921,6 +951,10 @@ impl App {
                 self.modal = Some(modal::lsp(None, &self.theme));
                 self.ops.push(Op::ListLsp);
             }
+            "init" => {
+                self.note("asking the model to write AGENTS.md…".into());
+                self.ops.push(Op::InitInstructions);
+            }
             "setup" if args.starts_with("use ") => {
                 let mut parts = args["use ".len()..].splitn(2, ' ');
                 let server = parts
@@ -979,6 +1013,7 @@ impl App {
                 ));
             }
             "permissions" => self.set_mode(args),
+            "yolo" => self.toggle_yolo(args),
             "plan" => match args {
                 "" => self.set_mode("plan"),
                 "accept" | "go" => {
@@ -1228,6 +1263,27 @@ mod tests {
         assert!(
             matches!(&ops[1], Op::UserTurn { items, .. } if items == &[InputItem::text("Carry out the plan above.")])
         );
+    }
+
+    #[test]
+    fn yolo_toggles_back_to_the_previous_mode() {
+        let mut app = App::new(info());
+        let mode = |m: &str| Op::SetPermissionMode { mode: m.into() };
+        app.on_engine(Event::PermissionMode {
+            mode: "auto-edit".into(),
+        });
+        type_str(&mut app, "/yolo");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.take_ops(), vec![mode("yolo")]);
+        app.on_engine(Event::PermissionMode {
+            mode: "yolo".into(),
+        });
+        type_str(&mut app, "/yolo");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.take_ops(), vec![mode("auto-edit")]);
+        type_str(&mut app, "/yolo off");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.take_ops(), vec![mode("auto-edit")]);
     }
 
     #[test]

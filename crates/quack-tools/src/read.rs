@@ -1,7 +1,7 @@
 //! `read`: a file or a line range, line-numbered.
 
-use quack_protocol::ApprovalRequest;
 use futures::future::BoxFuture;
+use quack_protocol::ApprovalRequest;
 use serde_json::{Value, json};
 
 use crate::paths;
@@ -24,9 +24,14 @@ impl Tool for Read {
         ToolKind::ReadOnly
     }
 
-    fn description(&self, _ctx: &ToolCtx) -> String {
+    fn description(&self, ctx: &ToolCtx) -> String {
+        let prefix = if ctx.hashline {
+            "`<line>:<tag>|`, the tags edit_hashline uses"
+        } else {
+            "their line numbers"
+        };
         format!(
-            "Read a text file. Returns lines prefixed with their line numbers. \
+            "Read a text file. Returns lines prefixed with {prefix}. \
              Reads up to {DEFAULT_LIMIT} lines by default; use `offset` (1-based line) and `limit` \
              for large files. Read a file before editing it."
         )
@@ -109,6 +114,11 @@ fn read(args: &Value, ctx: &ToolCtx) -> Result<ToolOutput, String> {
     let mut out = String::new();
     for (i, line) in lines[offset - 1..end].iter().enumerate() {
         let n = offset + i;
+        if ctx.hashline {
+            // Long lines stay whole: an edit may need to name them.
+            out.push_str(&format!("{n}:{}|{line}\n", crate::hashline::tag(line)));
+            continue;
+        }
         if line.chars().count() > MAX_LINE_CHARS {
             let cut: String = line.chars().take(MAX_LINE_CHARS).collect();
             out.push_str(&format!("{n:>width$}\t{cut}… [line truncated]\n"));

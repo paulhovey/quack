@@ -1,8 +1,8 @@
 //! `skill`: load a skill's instructions (docs/plan/08-instructions-skills-commands.md#progressive-disclosure).
 
+use futures::future::BoxFuture;
 use quack_instructions::skills::Skill;
 use quack_protocol::ApprovalRequest;
-use futures::future::BoxFuture;
 use serde_json::{Value, json};
 
 use crate::registry::{Subject, Tool, ToolCtx, ToolKind, ToolOutput, arg_str};

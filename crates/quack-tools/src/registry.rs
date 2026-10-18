@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
+use futures::future::BoxFuture;
 use quack_protocol::ApprovalRequest;
 use quack_shell::ShellKind;
-use futures::future::BoxFuture;
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -36,6 +36,8 @@ pub enum Subject {
     Skill,
     /// Turning on deferred MCP tools; changes nothing.
     ToolSearch,
+    /// Updating the model's own plan (`todo`); changes nothing.
+    Plan,
     /// A tool on an MCP server.
     Mcp {
         server: String,
@@ -134,6 +136,10 @@ pub struct ToolCtx {
     /// Language servers; `None` (or none installed) hides the `lsp` tool.
     pub lsp: Option<Arc<quack_lsp::LspManager>>,
     pub sandbox: SandboxState,
+    /// The model's plan (`todo`), shown to it with every step.
+    pub plan: Arc<crate::todo::Plan>,
+    /// Hash-anchored edits: `read` tags lines and `edit_hashline` replaces `edit`.
+    pub hashline: bool,
 }
 
 /// Whether shell commands run in the OS sandbox.
@@ -186,10 +192,12 @@ impl Registry {
             Arc::new(crate::search::Grep),
             Arc::new(crate::write::Write),
             Arc::new(crate::edit::StrReplace),
+            Arc::new(crate::hashline::Hashline),
             Arc::new(crate::shell::Shell),
             Arc::new(crate::memory::Memory),
             Arc::new(crate::skill::LoadSkill),
             Arc::new(crate::lsp::Lsp),
+            Arc::new(crate::todo::Todo),
         ];
         Self { tools }
     }

@@ -2138,6 +2138,7 @@ dependencies = [
  "quack-config",
  "quack-protocol",
  "tempfile",
+ "toml",
 ]
 
 [[package]]

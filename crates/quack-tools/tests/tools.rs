@@ -21,6 +21,8 @@ fn ctx(root: &std::path::Path) -> ToolCtx {
         skills: Default::default(),
         lsp: None,
         sandbox: Default::default(),
+        plan: Default::default(),
+        hashline: false,
     }
 }
 

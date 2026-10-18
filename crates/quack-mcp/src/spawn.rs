@@ -65,9 +65,7 @@ pub(crate) fn prepare(file: &McpServerFile, root: &Path) -> Result<Prepared, Str
             .iter()
             .map(|a| {
                 if a.starts_with("~/") || a.starts_with("~\\") {
-                    quack_config::expand_home(a, &get)
-                        .display()
-                        .to_string()
+                    quack_config::expand_home(a, &get).display().to_string()
                 } else {
                     a.clone()
                 }

@@ -4,10 +4,8 @@
 use std::path::{Path, PathBuf};
 
 pub fn path_to_uri(path: &Path) -> String {
-    url::Url::from_file_path(path).map_or_else(
-        |()| format!("file://{}", path.display()),
-        |u| u.to_string(),
-    )
+    url::Url::from_file_path(path)
+        .map_or_else(|()| format!("file://{}", path.display()), |u| u.to_string())
 }
 
 /// The path of a `file:` URI. Handles `file:///c%3A/x` (a percent-encoded drive colon)

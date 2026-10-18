@@ -323,6 +323,14 @@ async fn stream_step(
         });
     }
     messages.extend_from_slice(history);
+    // The plan rides on the last message of this request only, so the history (and the
+    // cached prefix before it) stays the same.
+    if let Some(plan) = s.tool_ctx.plan.reminder()
+        && let Some(Message::Tool { content, .. } | Message::User { content }) = messages.last_mut()
+    {
+        content.push_str("\n\n");
+        content.push_str(&plan);
+    }
     let req = request(s, messages, true);
     let mut rx = s
         .provider
@@ -560,6 +568,14 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
 
     let mut tctx = s.tool_ctx.clone();
     tctx.cancel = ctx.cancel.child_token();
+    // Yolo runs commands outside the sandbox too.
+    if ctx
+        .perms
+        .lock()
+        .is_ok_and(|p| p.mode == quack_config::settings::PermissionMode::Yolo && !p.plan)
+    {
+        tctx.sandbox = quack_tools::SandboxState::Off;
+    }
     let summary = tool.summary(&args, &tctx);
     begin(ctx, call, &summary);
     let done = |out: ToolOutput| finish(ctx, call, &summary, out);

@@ -8,11 +8,11 @@
 
 use std::sync::{Arc, Mutex};
 
+use futures::future::BoxFuture;
 use quack_config::{ItemState, Loaded, load_mcp};
 use quack_mcp::{McpManager, ServerSpec, ServerState, ToolInfo, model_tool_name};
 use quack_protocol::{ApprovalRequest, Event, LoadState, McpServerInfo, Subsystem};
 use quack_tools::{Subject, Tool, ToolCtx, ToolKind, ToolOutput};
-use futures::future::BoxFuture;
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
 

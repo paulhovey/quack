@@ -14,7 +14,7 @@ fn policy(config: &Loaded, mode: SandboxMode) -> Policy {
     let root = &config.dirs.workspace_root;
     let writable = match mode {
         SandboxMode::Off | SandboxMode::ReadOnly => Vec::new(),
-        SandboxMode::WorkspaceWrite | SandboxMode::WorkspaceWriteNet => {
+        SandboxMode::Auto | SandboxMode::WorkspaceWrite | SandboxMode::WorkspaceWriteNet => {
             let get = |k: &str| std::env::var_os(k);
             std::iter::once(root.clone())
                 .chain(Policy::temp_dirs())
@@ -37,14 +37,21 @@ pub(crate) fn state(config: &Loaded) -> SandboxState {
     if mode == SandboxMode::Off {
         return SandboxState::Off;
     }
-    match quack_sandbox::available() {
-        Ok(_) => SandboxState::On(Arc::new(policy(config, mode))),
-        Err(why) => SandboxState::Unavailable(why),
+    match (quack_sandbox::available(), mode) {
+        (Ok(_), _) => SandboxState::On(Arc::new(policy(config, mode))),
+        // The default never makes every command ask; a mode chosen on purpose does.
+        (Err(_), SandboxMode::Auto) => SandboxState::Off,
+        (Err(why), _) => SandboxState::Unavailable(why),
     }
 }
 
-/// A warning for the startup panel when the sandbox is configured but can't be used.
+/// A warning for the startup panel when the sandbox can't be used.
 pub(crate) fn warning(config: &Loaded) -> Option<String> {
+    if config.settings.sandbox.mode == SandboxMode::Auto {
+        return quack_sandbox::available()
+            .err()
+            .map(|why| format!("commands run without a sandbox: {why}"));
+    }
     match state(config) {
         SandboxState::Unavailable(why) => Some(format!(
             "[sandbox] mode = \"{}\", but {why}; every shell command will ask first",
@@ -59,7 +66,7 @@ pub(crate) fn warning(config: &Loaded) -> Option<String> {
 pub(crate) fn server_policy(config: &Loaded) -> Option<Arc<Policy>> {
     quack_sandbox::available().ok()?;
     let mode = match config.settings.sandbox.mode {
-        SandboxMode::Off => SandboxMode::WorkspaceWrite,
+        SandboxMode::Off | SandboxMode::Auto => SandboxMode::WorkspaceWrite,
         m => m,
     };
     Some(Arc::new(policy(config, mode)))

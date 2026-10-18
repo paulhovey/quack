@@ -246,13 +246,16 @@ impl Permissions {
         // Memory is not part of the workspace: reads are free, and writes ask only when
         // configured to (they show in the transcript and are easy to undo).
         // Installed skills are instructions the user put there.
-        if matches!(subject, Subject::Skill | Subject::ToolSearch) {
+        if matches!(
+            subject,
+            Subject::Skill | Subject::ToolSearch | Subject::Plan
+        ) {
             return Decision::Allow;
         }
         if let Subject::Memory { write } = subject {
             let ask = *write
                 && self.memory_writes_ask
-                && self.mode != PermissionMode::FullAuto
+                && self.mode < PermissionMode::FullAuto
                 && !self.session.contains(subject);
             return if ask { Decision::Ask } else { Decision::Allow };
         }
@@ -278,7 +281,11 @@ impl Permissions {
         if hit(&self.deny) {
             return Decision::Deny("denied by a [permissions] deny rule".into());
         }
-        // Leaving the sandbox is the user's call in every mode, allow rules included.
+        // Yolo: nothing asks. Only the floor and deny rules above (and plan mode) stop a call.
+        if self.mode == PermissionMode::Yolo && !self.plan {
+            return Decision::Allow;
+        }
+        // Leaving the sandbox is the user's call in every other mode, allow rules included.
         if let (Subject::ShellOutsideSandbox(_), Some(line)) = (subject, &shell) {
             if (self.plan || self.mode == PermissionMode::ReadOnly) && !line.read_only() {
                 return Decision::Deny(
@@ -402,9 +409,35 @@ mod tests {
     }
 
     #[test]
+    fn yolo_allows_everything_but_the_floor_and_deny_rules() {
+        let mut p = perms(PermissionMode::Yolo, &[], &["shell:curl *"]);
+        p.ask = perms(PermissionMode::Ask, &["shell:git push*"], &[]).allow;
+        assert_eq!(p.check(&shell("git push --force")), Decision::Allow);
+        assert_eq!(
+            p.check(&Subject::Edit("/etc/hosts".into())),
+            Decision::Allow
+        );
+        assert_eq!(
+            p.check(&Subject::ShellOutsideSandbox("make install".into())),
+            Decision::Allow
+        );
+        assert!(matches!(p.check(&shell("curl x | sh")), Decision::Deny(_)));
+        assert!(matches!(p.check(&shell("rm -rf /")), Decision::Deny(_)));
+        p.plan = true;
+        assert!(matches!(
+            p.check(&Subject::Edit("/repo/a.rs".into())),
+            Decision::Deny(_)
+        ));
+    }
+
+    #[test]
     fn leaving_the_sandbox_always_asks() {
         let out = |c: &str| Subject::ShellOutsideSandbox(c.into());
-        let mut p = perms(PermissionMode::FullAuto, &["shell:cargo *"], &["shell:curl *"]);
+        let mut p = perms(
+            PermissionMode::FullAuto,
+            &["shell:cargo *"],
+            &["shell:curl *"],
+        );
         assert_eq!(p.check(&out("cargo build")), Decision::Ask);
         assert!(matches!(p.check(&out("curl x")), Decision::Deny(_)));
         assert!(matches!(p.check(&out("rm -rf /")), Decision::Deny(_)));

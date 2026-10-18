@@ -181,7 +181,8 @@ impl LspManager {
         if inside {
             self.root.clone()
         } else {
-            path.parent().map_or_else(|| self.root.clone(), Path::to_path_buf)
+            path.parent()
+                .map_or_else(|| self.root.clone(), Path::to_path_buf)
         }
     }
 
@@ -395,7 +396,12 @@ impl LspManager {
             let mine: Vec<_> = slots.iter().filter(|s| s.0 == idx).collect();
             if mine.is_empty() {
                 out.push(Status {
-                    state: if spec.installed() { "idle" } else { "not installed" }.into(),
+                    state: if spec.installed() {
+                        "idle"
+                    } else {
+                        "not installed"
+                    }
+                    .into(),
                     detail: match &spec.program {
                         Ok(p) => p.display().to_string(),
                         Err(e) => e.clone(),
@@ -473,9 +479,9 @@ fn has_marker(dir: &Path, markers: &[String]) -> bool {
     markers.iter().any(|m| {
         if m.contains('*') {
             std::fs::read_dir(dir).is_ok_and(|entries| {
-                entries.filter_map(Result::ok).any(|e| {
-                    quack_config::glob_match(m, &e.file_name().to_string_lossy())
-                })
+                entries
+                    .filter_map(Result::ok)
+                    .any(|e| quack_config::glob_match(m, &e.file_name().to_string_lossy()))
             })
         } else {
             dir.join(m).exists()

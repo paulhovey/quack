@@ -123,6 +123,11 @@ pub async fn run(mut engine: EngineHandle, prompt: String, format: OutputFormat)
                     let _ = writeln!(stderr, "warning: {message}");
                 }
             }
+            Event::Notice { message } => {
+                if text_mode {
+                    let _ = writeln!(stderr, "note: {message}");
+                }
+            }
             Event::TurnComplete { usage, .. } => {
                 finish(
                     &mut stdout,

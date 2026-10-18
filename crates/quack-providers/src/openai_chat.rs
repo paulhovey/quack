@@ -46,14 +46,17 @@ struct Shape<'a> {
     mistral: bool,
     /// Tool-call ids as Mistral's tokenizer takes them: exactly 9 letters or digits.
     short_ids: bool,
-    /// Send reasoning back as a `thinking` part.
+    /// Send earlier reasoning back: as `reasoning_content`, or a `thinking` part for
+    /// Mistral.
     echo_reasoning: bool,
     /// Tool names by call id, for tool results.
     names: HashMap<&'a str, &'a str>,
 }
 
-/// Serialize a request. Reasoning from earlier turns is sent back only where the server
-/// expects it (Mistral).
+/// Serialize a request. Earlier reasoning is sent back, since thinking models expect
+/// it across tool calls (DeepSeek rejects a tool request without it; MiniMax, Kimi and GLM
+/// lose the thread). Chat templates on local servers drop what they don't use.
+/// `preserve_in_history = false` turns it off.
 pub(crate) fn build_body(req: &ChatRequest, dialect: Dialect) -> Value {
     let mistral = dialect == Dialect::Mistral;
     let effort = req
@@ -63,7 +66,7 @@ pub(crate) fn build_body(req: &ChatRequest, dialect: Dialect) -> Value {
     let shape = Shape {
         mistral,
         short_ids: mistral || is_mistral_large(&req.model),
-        echo_reasoning: mistral && effort != Some("none") && req.preserve_reasoning != Some(false),
+        echo_reasoning: effort != Some("none") && req.preserve_reasoning != Some(false),
         names: req
             .messages
             .iter()
@@ -200,10 +203,13 @@ fn message_json(m: &Message, shape: &Shape<'_>) -> Value {
             tool_calls,
         } => {
             let mut v = json!({ "role": "assistant", "content": content });
-            if let Some(r) = reasoning
+            let echo = reasoning
                 .as_deref()
-                .filter(|r| shape.echo_reasoning && !r.is_empty())
-            {
+                .filter(|r| shape.echo_reasoning && !r.is_empty());
+            if let Some(r) = echo.filter(|_| !shape.mistral) {
+                v["reasoning_content"] = json!(r);
+            }
+            if let Some(r) = echo.filter(|_| shape.mistral) {
                 let mut parts = vec![json!({
                     "type": "thinking",
                     "thinking": [{ "type": "text", "text": r }],
@@ -532,7 +538,7 @@ mod tests {
             b["messages"][1]["tool_calls"][0]["function"]["name"],
             "read"
         );
-        assert!(b["messages"][1].get("reasoning").is_none());
+        assert_eq!(b["messages"][1]["reasoning_content"], "hidden");
         assert_eq!(b["messages"][2]["tool_call_id"], "c1");
         assert_eq!(b["tools"][0]["function"]["name"], "read");
         assert_eq!(b["max_tokens"], 64);

@@ -261,26 +261,46 @@ fn lsp_check(config: &Loaded) -> DoctorCheck {
     check(
         "lsp",
         CheckStatus::Ok,
-        format!("{} of {} installed: {}", installed.len(), specs.len(), installed.join(", ")),
+        format!(
+            "{} of {} installed: {}",
+            installed.len(),
+            specs.len(),
+            installed.join(", ")
+        ),
     )
 }
 
 fn sandbox_check(config: &Loaded) -> DoctorCheck {
     let mode = config.settings.sandbox.mode;
     match (mode, quack_sandbox::available()) {
+        (SandboxMode::Auto, Ok(how)) => check(
+            "sandbox",
+            CheckStatus::Ok,
+            format!("auto: workspace-write · {how}"),
+        ),
+        (SandboxMode::Auto, Err(why)) => check(
+            "sandbox",
+            CheckStatus::Warn,
+            format!("auto: unavailable here, commands run without one · {why}"),
+        ),
         (SandboxMode::Off, Ok(how)) => check(
             "sandbox",
             CheckStatus::Info,
-            format!("off ({how} available: set [sandbox] mode = \"workspace-write\")"),
+            format!("off ({how} available: remove [sandbox] mode to use it)"),
         ),
-        (SandboxMode::Off, Err(why)) => {
-            check("sandbox", CheckStatus::Info, format!("off · unavailable: {why}"))
-        }
+        (SandboxMode::Off, Err(why)) => check(
+            "sandbox",
+            CheckStatus::Info,
+            format!("off · unavailable: {why}"),
+        ),
         (m, Ok(how)) => check("sandbox", CheckStatus::Ok, format!("{} · {how}", m.label())),
         (m, Err(why)) => check(
             "sandbox",
             CheckStatus::Warn,
-            format!("{} configured, but {why}; every shell command asks first", m.label()),
+            format!(
+                "{} configured, but {why}; every shell command asks first",
+                m.label()
+            ),
         ),
     }
 }

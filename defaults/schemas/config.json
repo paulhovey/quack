@@ -57,13 +57,22 @@
       "type": "object"
     },
     "EditFormat": {
-      "enum": [
-        "auto",
-        "str_replace",
-        "apply_patch",
-        "whole_file"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "auto",
+            "str_replace",
+            "apply_patch",
+            "whole_file"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "hashline",
+          "description": "Hash-anchored edits: `read` tags each line, and edits name lines by tag.",
+          "type": "string"
+        }
+      ]
     },
     "InstructionSettings": {
       "additionalProperties": false,
@@ -73,13 +82,18 @@
           "default": [
             "AGENTS.md"
           ],
-          "description": "Instruction file names. Other harnesses' files are detected and offered, never loaded silently."
+          "description": "Instruction file names, in order of preference; the first one in a folder is read."
         },
         "max_bytes": {
           "default": 32768,
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "other_agents": {
+          "default": true,
+          "description": "Also read other agents' files listed in `compat.toml` (CLAUDE.md, GEMINI.md,\n.cursorrules, …) where there is no file from `files`.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -220,13 +234,22 @@
     },
     "PermissionMode": {
       "description": "Ordered from least to most permissive, so policy can cap with `min`.",
-      "enum": [
-        "read-only",
-        "ask",
-        "auto-edit",
-        "full-auto"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "read-only",
+            "ask",
+            "auto-edit",
+            "full-auto"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "yolo",
+          "description": "No approvals and no sandbox. Only the built-in deny list and `deny` rules apply.",
+          "type": "string"
+        }
+      ]
     },
     "PermissionSettings": {
       "additionalProperties": false,
@@ -301,6 +324,11 @@
     "SandboxMode": {
       "oneOf": [
         {
+          "const": "auto",
+          "description": "`workspace-write` where this OS supports it (Linux with Landlock, macOS);\nelsewhere commands run without a sandbox, with a notice.",
+          "type": "string"
+        },
+        {
           "const": "off",
           "description": "Commands run without a sandbox.",
           "type": "string"
@@ -328,7 +356,7 @@
       "properties": {
         "mode": {
           "$ref": "#/$defs/SandboxMode",
-          "default": "off"
+          "default": "auto"
         },
         "writable": {
           "$ref": "#/$defs/ListOrAppend",
@@ -493,7 +521,8 @@
         "files": [
           "AGENTS.md"
         ],
-        "max_bytes": 32768
+        "max_bytes": 32768,
+        "other_agents": true
       }
     },
     "keys": {
@@ -577,7 +606,7 @@
     "sandbox": {
       "$ref": "#/$defs/SandboxSettings",
       "default": {
-        "mode": "off",
+        "mode": "auto",
         "writable": []
       }
     },
