@@ -4,22 +4,24 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
+use quack_config::hooks::HookEvent;
 use quack_protocol::{
-    ApprovalDecision, CallId, EngineError, EngineErrorKind, Event, ToolCallInfo, ToolResultSummary,
-    TurnId, Usage,
+    ApprovalDecision, CallId, EngineError, EngineErrorKind, Event, Question, ToolCallInfo,
+    ToolResultSummary, TurnId, Usage,
 };
 use quack_providers::{
     ChatRequest, ErrorKind, Message, ResponseBuilder, StreamEvent, ToolCall, ToolSpec, tokens,
     toolparse,
 };
 use quack_store::checkpoint::Checkpoints;
-use quack_tools::{Decision, Permissions, Subject, ToolOutput};
-use serde_json::Value;
+use quack_tools::{Answers, Decision, Permissions, Subject, ToolOutput};
+use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use quack_context::compact;
 
+use crate::hooks::{self, Hooks, Sink, Target, Verdict};
 use crate::session::{self, SharedLog};
 use crate::startup::Setup;
 use crate::stats::Stats;
@@ -30,6 +32,8 @@ const MAX_STEPS: usize = 100;
 const REPEAT_LIMIT: usize = 3;
 
 pub(crate) type Approvals = Arc<Mutex<HashMap<String, oneshot::Sender<ApprovalDecision>>>>;
+/// `ask_user` calls waiting for the user's answers, by call id.
+pub(crate) type Questions = Arc<Mutex<HashMap<String, oneshot::Sender<Answers>>>>;
 
 pub(crate) struct TurnCtx {
     pub turn: TurnId,
@@ -37,6 +41,7 @@ pub(crate) struct TurnCtx {
     pub perms: Arc<Mutex<Permissions>>,
     pub nested: Arc<quack_instructions::agents_md::Nested>,
     pub approvals: Approvals,
+    pub questions: Questions,
     pub tx: broadcast::Sender<Event>,
     pub cancel: CancellationToken,
     pub log: Option<SharedLog>,
@@ -44,6 +49,17 @@ pub(crate) struct TurnCtx {
     pub checkpoints: Option<Arc<Checkpoints>>,
     /// The session's usage, fed by `emit`.
     pub stats: Arc<Mutex<Stats>>,
+    pub hooks: Arc<Hooks>,
+    /// The session id, for hooks.
+    pub session: String,
+}
+
+/// What the user sent, ready for the model, and what they typed (which hooks see).
+pub(crate) struct Prompt {
+    pub text: String,
+    pub typed: String,
+    /// Context from `session_start` hooks, for the session's first prompt.
+    pub start: Option<tokio::task::JoinHandle<Vec<String>>>,
 }
 
 impl TurnCtx {
@@ -70,6 +86,50 @@ impl TurnCtx {
         });
     }
 
+    /// Run the hooks for `event` that match `target`, reporting through this turn.
+    pub(crate) async fn hooks(
+        &self,
+        event: HookEvent,
+        fields: Value,
+        target: Target<'_>,
+    ) -> hooks::Outcome {
+        if !self.hooks.any(event) {
+            return hooks::Outcome::default();
+        }
+        let emit = |e: Event| self.emit(e);
+        let sink = Sink {
+            emit: &emit,
+            log: self.log.as_ref(),
+            session: &self.session,
+        };
+        self.hooks
+            .run(event, fields, target, &sink, &self.cancel)
+            .await
+    }
+
+    /// `turn_end` hooks, in the background: nothing waits for them.
+    fn turn_end(&self, fields: Value) {
+        if !self.hooks.any(HookEvent::TurnEnd) {
+            return;
+        }
+        let (hooks, tx, log) = (self.hooks.clone(), self.tx.clone(), self.log.clone());
+        let session = self.session.clone();
+        tokio::spawn(async move {
+            let emit = move |e: Event| {
+                let _ = tx.send(e);
+            };
+            let sink = Sink {
+                emit: &emit,
+                log: log.as_ref(),
+                session: &session,
+            };
+            let cancel = CancellationToken::new();
+            hooks
+                .run(HookEvent::TurnEnd, fields, Target::None, &sink, &cancel)
+                .await;
+        });
+    }
+
     fn error(&self, kind: EngineErrorKind, message: impl Into<String>) {
         self.emit(Event::Error {
             error: EngineError {
@@ -92,9 +152,44 @@ enum StepEnd {
 }
 
 /// Run the turn; returns the updated history.
-pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: String) -> Vec<Message> {
+pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: Prompt) -> Vec<Message> {
     ctx.emit(Event::TurnStarted { turn: ctx.turn });
-    ctx.push(&mut history, Message::User { content: prompt });
+    let mut extra = match prompt.start {
+        Some(start) => start.await.unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let hooked = ctx
+        .hooks(
+            HookEvent::UserPrompt,
+            json!({ "prompt": prompt.typed }),
+            Target::Prompt(&prompt.typed),
+        )
+        .await;
+    if let Some((id, reason)) = hooked.denied() {
+        let reason = if reason.is_empty() {
+            String::new()
+        } else {
+            format!(": {reason}")
+        };
+        ctx.emit(Event::Warning {
+            message: format!("hook `{id}` blocked this prompt{reason}; nothing was sent"),
+        });
+        ctx.emit(Event::TurnAborted {
+            turn: ctx.turn,
+            reason: format!("blocked by hook `{id}`"),
+        });
+        ctx.turn_end(json!({ "turn": ctx.turn.0, "outcome": "blocked" }));
+        return history;
+    }
+    extra.extend(hooked.context);
+    // Hook context rides on the user message, after the cached prefix, and is kept with
+    // it, so a resumed session sends the same request.
+    let content = if extra.is_empty() {
+        prompt.text
+    } else {
+        format!("{}\n\n{}", prompt.text, extra.join("\n\n"))
+    };
+    ctx.push(&mut history, Message::User { content });
     let mut total = Usage::default();
     let mut recent: Vec<(String, String)> = Vec::new();
     let mut nudged = false;
@@ -228,14 +323,20 @@ pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: String)
     };
 
     match end {
-        StepEnd::Done => ctx.emit(Event::TurnComplete {
-            turn: ctx.turn,
-            usage: total,
-        }),
-        StepEnd::Aborted(reason) | StepEnd::Overflow(reason) => ctx.emit(Event::TurnAborted {
-            turn: ctx.turn,
-            reason,
-        }),
+        StepEnd::Done => {
+            ctx.emit(Event::TurnComplete {
+                turn: ctx.turn,
+                usage: total,
+            });
+            ctx.turn_end(json!({ "turn": ctx.turn.0, "outcome": "complete", "usage": total }));
+        }
+        StepEnd::Aborted(reason) | StepEnd::Overflow(reason) => {
+            ctx.turn_end(json!({ "turn": ctx.turn.0, "outcome": "aborted", "reason": reason }));
+            ctx.emit(Event::TurnAborted {
+                turn: ctx.turn,
+                reason,
+            });
+        }
     }
     history
 }
@@ -258,9 +359,8 @@ fn raw_estimate(s: &Setup, history: &[Message]) -> u32 {
         .saturating_add(u32::try_from(tools * 2 / 7).unwrap_or(u32::MAX))
 }
 
-/// A request to the session's model with its sampling and extra parameters; with the
-/// session's tools when `tools` is set.
-pub(crate) fn request(s: &Setup, messages: Vec<Message>, tools: bool) -> ChatRequest {
+/// The model entry's sampling settings over the profile's defaults.
+pub(crate) fn sampling(s: &Setup) -> quack_config::provider::Sampling {
     let mut sampling = s.profile.file.defaults.sampling.clone();
     let m = &s.model.sampling;
     sampling.temperature = m.temperature.or(sampling.temperature);
@@ -268,13 +368,19 @@ pub(crate) fn request(s: &Setup, messages: Vec<Message>, tools: bool) -> ChatReq
     sampling.top_k = m.top_k.or(sampling.top_k);
     sampling.min_p = m.min_p.or(sampling.min_p);
     sampling.repetition_penalty = m.repetition_penalty.or(sampling.repetition_penalty);
+    sampling
+}
+
+/// A request to the session's model with its sampling and extra parameters; with the
+/// session's tools when `tools` is set.
+pub(crate) fn request(s: &Setup, messages: Vec<Message>, tools: bool) -> ChatRequest {
     ChatRequest {
         model: s.model.id.clone(),
         messages,
         tools: if tools { tool_specs(s) } else { Vec::new() },
         context_window: s.model.context_window,
         max_tokens: s.model.max_output,
-        sampling,
+        sampling: sampling(s),
         reasoning_effort: Some(s.model.reasoning.effort.clone()).filter(|e| !e.is_empty()),
         preserve_reasoning: s.model.reasoning.preserve_in_history,
         extra_body: serde_json::to_value(&s.model.extra_body)
@@ -556,6 +662,41 @@ fn reject(ctx: &TurnCtx, call: &ToolCall, message: String) -> ToolOutput {
     finish(ctx, call, &call.name, ToolOutput::error(message))
 }
 
+/// Show the user an `ask_user` call's questions and wait for the answers; `None` when
+/// the turn is interrupted.
+async fn ask(ctx: &TurnCtx, call_id: &CallId, questions: Vec<Question>) -> Option<Answers> {
+    let (otx, orx) = oneshot::channel();
+    if let Ok(mut pending) = ctx.questions.lock() {
+        pending.insert(call_id.0.clone(), otx);
+    }
+    ctx.emit(Event::Questions {
+        call_id: call_id.clone(),
+        questions: questions.clone(),
+    });
+    let asked = std::time::Instant::now();
+    let answer = tokio::select! {
+        () = ctx.cancel.cancelled() => None,
+        a = orx => a.ok(),
+    };
+    if let Ok(mut st) = ctx.stats.lock() {
+        st.waited(asked.elapsed());
+    }
+    if let Ok(mut pending) = ctx.questions.lock() {
+        pending.remove(&call_id.0);
+    }
+    session::record(
+        ctx.log.as_ref(),
+        "questions",
+        json!({
+            "call_id": call_id.0,
+            "questions": questions,
+            "answers": answer.as_ref().map(|a| &a.answers),
+            "stop_asking": answer.as_ref().is_some_and(|a| a.stop_asking),
+        }),
+    );
+    answer
+}
+
 /// Run one tool call through mapping, permissions and approval.
 async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
     let s = &ctx.setup;
@@ -564,7 +705,7 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
         Ok(a) => a,
         Err(e) => return reject(ctx, call, e),
     };
-    let (tool, args) = match s.surface.map_call(&call.name, args.clone()) {
+    let (tool, mut args) = match s.surface.map_call(&call.name, args.clone()) {
         Some((internal, args)) => match s.registry.get(&internal) {
             Some(tool) => (tool, args),
             None => return reject(ctx, call, format!("tool `{internal}` is not available")),
@@ -599,15 +740,59 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
     begin(ctx, call, &summary);
     let done = |out: ToolOutput| finish(ctx, call, &summary, out);
 
-    let subject = match tool.subject(&args, &tctx) {
+    let mut subject = match tool.subject(&args, &tctx) {
         Ok(sub) => sub,
         Err(e) => return done(ToolOutput::error(e)),
     };
+    let root = &s.tool_ctx.root;
+    let mut hooked = None;
+    if ctx.hooks.any(HookEvent::PreTool) {
+        let target = hooks::call_target(&subject, &args, root);
+        let h = ctx
+            .hooks(
+                HookEvent::PreTool,
+                json!({ "tool": tool.name(), "args": args, "target": target }),
+                Target::Call {
+                    tool: tool.name(),
+                    target: &target,
+                },
+            )
+            .await;
+        if let Some((id, reason)) = h.denied() {
+            let reason = if reason.is_empty() {
+                "no reason given"
+            } else {
+                reason
+            };
+            return done(ToolOutput::error(format!(
+                "blocked by hook `{id}`: {reason}"
+            )));
+        }
+        if let Some(updated) = h.updated_args.clone() {
+            args = updated;
+            subject = match tool.subject(&args, &tctx) {
+                Ok(sub) => sub,
+                Err(e) => return done(ToolOutput::error(e)),
+            };
+        }
+        hooked = h.verdict.map(|(v, _)| v);
+    }
     let decision = ctx
         .perms
         .lock()
         .map(|p| p.check(&subject))
         .unwrap_or(Decision::Ask);
+    // A deny rule beats a hook's allow, and a command outside the sandbox always asks.
+    let decision = match (hooked, decision) {
+        (_, deny @ Decision::Deny(_)) => deny,
+        (Some(Verdict::Ask), _) => Decision::Ask,
+        (Some(Verdict::Allow), Decision::Ask)
+            if !matches!(subject, Subject::ShellOutsideSandbox(_)) =>
+        {
+            Decision::Allow
+        }
+        (_, d) => d,
+    };
     match decision {
         Decision::Allow => {}
         Decision::Deny(reason) => {
@@ -698,7 +883,25 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
         (Subject::Edit(p), Some(m)) => m.before_edit(p).await,
         _ => None,
     };
-    let mut out = tool.run(args, &tctx).await;
+    let post_args = ctx.hooks.any(HookEvent::PostTool).then(|| args.clone());
+    let (atx, mut arx) = mpsc::unbounded_channel();
+    tctx.ask = Some(atx);
+    // The call runs until done; questions it asks on the way go to the user.
+    let mut out = {
+        let run = tool.run(args, &tctx);
+        tokio::pin!(run);
+        loop {
+            tokio::select! {
+                o = &mut run => break o,
+                Some((questions, reply)) = arx.recv() => {
+                    // Dropping `reply` when interrupted lets the call see the cancellation.
+                    if let Some(a) = ask(ctx, &call_id, questions).await {
+                        let _ = reply.send(a);
+                    }
+                }
+            }
+        }
+    };
     drop(tctx);
     let _ = forward.await;
     for (cp, seq, p) in checkpoints {
@@ -743,6 +946,31 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
     {
         out.model.push_str("\n\n");
         out.model.push_str(&extra);
+    }
+    if let Some(args) = post_args
+        && !ctx.cancel.is_cancelled()
+    {
+        let target = hooks::call_target(&subject, &args, root);
+        let h = ctx
+            .hooks(
+                HookEvent::PostTool,
+                json!({
+                    "tool": tool.name(),
+                    "args": args,
+                    "target": target,
+                    "ok": out.ok,
+                    "output": out.model,
+                }),
+                Target::Call {
+                    tool: tool.name(),
+                    target: &target,
+                },
+            )
+            .await;
+        if let Some(text) = h.context_text() {
+            out.model.push_str("\n\n");
+            out.model.push_str(&text);
+        }
     }
     done(out)
 }

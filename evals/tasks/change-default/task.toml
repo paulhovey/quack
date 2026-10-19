@@ -1,0 +1,8 @@
+category = "single-edit"
+prompt = "Change the default timeout of `connect` in src/conn.py from 30 to 60 seconds."
+[[check]]
+file = "src/conn.py"
+contains = "def connect(host, port, timeout=60):"
+[[check]]
+file = "src/conn.py"
+contains = "def reconnect(host, port, timeout=30):"

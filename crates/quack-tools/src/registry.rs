@@ -142,6 +142,8 @@ pub struct ToolCtx {
     pub cancel: CancellationToken,
     /// Live output for the UI (shell).
     pub on_output: Option<mpsc::UnboundedSender<String>>,
+    /// Questions for the user (`ask_user`); `None` when no one can answer.
+    pub ask: Option<crate::ask::Asker>,
     pub reads: Arc<ReadTracker>,
     /// Memory notes; `None` hides the `memory` tool.
     pub memory: Option<Arc<quack_store::memory::MemoryStore>>,
@@ -225,6 +227,7 @@ impl Registry {
             Arc::new(crate::skill::LoadSkill),
             Arc::new(crate::lsp::Lsp),
             Arc::new(crate::todo::Todo),
+            Arc::new(crate::ask::AskUser),
         ];
         Self { tools }
     }

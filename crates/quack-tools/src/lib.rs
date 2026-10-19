@@ -1,6 +1,7 @@
 //! Internal tools, the tool registry and the permission engine.
 //! See docs/plan/04-agent-loop-and-tools.md and 11-security.md.
 
+mod ask;
 mod blocks;
 mod edit;
 mod hashline;
@@ -21,6 +22,7 @@ mod text;
 mod todo;
 mod write;
 
+pub use ask::{Answers, AskRequest, Asker};
 pub use permissions::{Decision, Permissions};
 pub use registry::{
     ReadTracker, Registry, SandboxState, Subject, Tool, ToolCtx, ToolKind, ToolOutput,

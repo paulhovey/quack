@@ -16,6 +16,7 @@ fn ctx(root: &std::path::Path) -> ToolCtx {
         max_timeout: Duration::from_secs(30),
         cancel: CancellationToken::new(),
         on_output: None,
+        ask: None,
         reads: Arc::new(ReadTracker::default()),
         memory: None,
         skills: Default::default(),

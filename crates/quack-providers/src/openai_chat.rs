@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use quack_config::provider::ReasoningFormat;
+use quack_config::provider::{Cost, ReasoningFormat};
 use quack_protocol::Usage;
 use serde_json::{Map, Value, json};
 
@@ -473,9 +473,42 @@ pub(crate) fn parse_models(body: &Value) -> Vec<DiscoveredModel> {
                         "/top_provider/max_completion_tokens",
                     ],
                 ),
+                cost: m.get("pricing").and_then(pricing),
             })
         })
         .collect()
+}
+
+/// Prices from a model's `pricing`, in dollars per million tokens. Two shapes are common:
+/// numbers per million (`input`, `output`, `cache_hit`), and OpenRouter's strings per
+/// token (`prompt`, `completion`, `input_cache_read`). All zero means not priced.
+fn pricing(p: &Value) -> Option<Cost> {
+    let per_million = |keys: &[&str]| keys.iter().find_map(|k| p.get(*k)?.as_f64());
+    let per_token = |key: &str| {
+        let v = p.get(key)?;
+        let n = v
+            .as_str()
+            .map_or_else(|| v.as_f64(), |s| s.trim().parse().ok())?;
+        Some(n * 1_000_000.0)
+    };
+    let cost = match (per_million(&["input"]), per_million(&["output"])) {
+        (Some(input), Some(output)) => Cost {
+            input,
+            output,
+            cached_input: per_million(&["cache_hit", "cached_input", "cache_read"]),
+        },
+        _ => Cost {
+            input: per_token("prompt")?,
+            output: per_token("completion")?,
+            cached_input: per_token("input_cache_read"),
+        },
+    };
+    let valid = |n: f64| n.is_finite() && n >= 0.0;
+    (valid(cost.input)
+        && valid(cost.output)
+        && cost.cached_input.is_none_or(valid)
+        && cost.input + cost.output > 0.0)
+        .then_some(cost)
 }
 
 #[cfg(test)]
@@ -494,6 +527,28 @@ mod tests {
         assert!(!is_llama_cpp(
             &serde_json::json!({"data":[{"id":"m","owned_by":"vllm"}]})
         ));
+    }
+
+    #[test]
+    fn prices_come_from_either_pricing_shape() {
+        let models = json!({"data":[
+            {"id":"hyper","pricing":{"input":0.33,"output":1.31,"cache_create":0,"cache_hit":0.03}},
+            {"id":"router","pricing":{"prompt":"0.0000003","completion":"0.0000012","input_cache_read":"0.00000003"}},
+            {"id":"no-cache","pricing":{"input":1,"output":2}},
+            {"id":"free","pricing":{"prompt":"0","completion":"0"}},
+            {"id":"none"},
+        ]});
+        let cost: Vec<_> = parse_models(&models).into_iter().map(|m| m.cost).collect();
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        let hyper = cost[0].as_ref().expect("hyper priced");
+        assert!(near(hyper.input, 0.33) && near(hyper.output, 1.31));
+        assert!(near(hyper.cached_input.expect("cache hit"), 0.03));
+        let router = cost[1].as_ref().expect("openrouter priced");
+        assert!(near(router.input, 0.3) && near(router.output, 1.2));
+        assert!(near(router.cached_input.expect("cache read"), 0.03));
+        assert_eq!(cost[2].as_ref().and_then(|c| c.cached_input), None);
+        assert_eq!(cost[3], None, "all zero is not a price");
+        assert_eq!(cost[4], None);
     }
 
     #[test]

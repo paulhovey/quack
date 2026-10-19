@@ -1,0 +1,4 @@
+category = "navigate"
+prompt = "Which file calls the function `send_invoice`? Reply with the file's path."
+[[check]]
+answer_contains = "jobs.py"

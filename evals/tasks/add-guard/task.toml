@@ -1,0 +1,5 @@
+category = "single-edit"
+prompt = "Make `divide` in calc.py raise ValueError(\"division by zero\") when b is 0, instead of letting Python raise ZeroDivisionError."
+requires = ["python"]
+[[check]]
+command = "{python} check.py"

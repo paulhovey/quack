@@ -7,8 +7,8 @@ use crossterm::event::{
 use quack_config::settings::{ShowReasoning, StartupPanel, UiSettings};
 use quack_config::{LayerStatus, Loaded, SettingRow};
 use quack_protocol::{
-    ApprovalDecision, ApprovalRequest, CallId, Event, InputItem, LoadState, ModelId, Op,
-    ProviderId, ReplayItem, SessionId, Subsystem, TurnOverrides, WriteScope,
+    Answer, ApprovalDecision, ApprovalRequest, CallId, Event, InputItem, LoadState, ModelId, Op,
+    ProviderId, Question, ReplayItem, SessionId, Subsystem, TurnOverrides, WriteScope,
 };
 
 use crate::commands::{self, COMMANDS, Command};
@@ -205,6 +205,48 @@ pub(crate) fn parse_plan(text: &str) -> Vec<(PlanState, String)> {
         .collect()
 }
 
+/// An `ask_user` call's questions, answered one at a time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Asking {
+    pub call_id: CallId,
+    pub questions: Vec<Question>,
+    pub current: usize,
+    /// The highlighted row; the options' count is the "own answer" row.
+    pub selected: usize,
+    pub answers: Vec<Answer>,
+}
+
+impl Asking {
+    fn new(call_id: CallId, questions: Vec<Question>) -> Self {
+        let mut a = Self {
+            call_id,
+            answers: vec![Answer::Skipped; questions.len()],
+            questions,
+            current: 0,
+            selected: 0,
+        };
+        a.select_default();
+        a
+    }
+
+    pub(crate) fn question(&self) -> &Question {
+        &self.questions[self.current]
+    }
+
+    /// The recommended option, else the first (or the own-answer row when there are none).
+    fn select_default(&mut self) {
+        self.selected = self.question().recommended.unwrap_or(0);
+    }
+}
+
+/// What the plan review bar offers once a plan-mode turn ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReviewChoice {
+    Accept,
+    AcceptAutoEdit,
+    KeepPlanning,
+}
+
 /// A tool call waiting for the user's decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Approval {
@@ -234,6 +276,10 @@ pub struct App {
     pub(crate) turn_running: bool,
     pub(crate) queued: bool,
     pub(crate) approval: Option<Approval>,
+    /// Questions from the model waiting for answers.
+    pub(crate) asking: Option<Asking>,
+    /// The plan review bar, with its highlighted choice.
+    pub(crate) review: Option<usize>,
     /// `(used, budget)` tokens from the last response.
     pub(crate) context: Option<(u32, u32)>,
     /// Where compaction starts, in tokens.
@@ -296,6 +342,8 @@ impl App {
             turn_running: false,
             queued: false,
             approval: None,
+            asking: None,
+            review: None,
             context: None,
             compact_at: None,
             growth: Vec::new(),
@@ -726,6 +774,9 @@ impl App {
             Event::ApprovalRequest { call_id, request } => {
                 self.approval = Some(Approval { call_id, request });
             }
+            Event::Questions { call_id, questions } if !questions.is_empty() => {
+                self.asking = Some(Asking::new(call_id, questions));
+            }
             Event::ContextUpdate {
                 used,
                 budget,
@@ -779,20 +830,22 @@ impl App {
                     }
                     self.transcript.push(Entry::TurnSummary(parts.join(" · ")));
                 }
+                self.asking = None;
                 if self.info.permission_mode == "plan" {
-                    self.note(
-                        "plan mode · /plan accept carries out the plan; reply to revise it".into(),
-                    );
+                    self.review = Some(0);
                 }
             }
             Event::PermissionMode { mode } => {
                 if mode == "plan" && self.info.permission_mode != "plan" {
-                    self.note("plan mode: the model looks around and proposes a plan; nothing is changed (/plan off leaves)".into());
+                    self.note("plan mode: the model looks around, asks about big decisions and proposes a plan; nothing changes until you accept it (/plan off leaves)".into());
                 }
                 if mode == "yolo" && self.info.permission_mode != "yolo" {
                     self.note("yolo: nothing asks and the sandbox is off; only the built-in deny list and your deny rules still apply · /yolo turns it off".into());
                 } else if mode != "yolo" && self.info.permission_mode == "yolo" {
                     self.note(format!("yolo off · {mode} mode"));
+                }
+                if mode != "plan" {
+                    self.review = None;
                 }
                 self.info.permission_mode = mode;
             }
@@ -800,7 +853,35 @@ impl App {
                 self.turn_running = false;
                 self.turn_started = None;
                 self.approval = None;
+                self.asking = None;
                 self.note(reason);
+            }
+            Event::HookRan {
+                id,
+                on,
+                outcome,
+                ms,
+                message,
+                context_tokens,
+            } => {
+                // Quiet unless the hook changed something; failures arrive as warnings.
+                let did = match outcome.as_str() {
+                    "context" => format!(
+                        "added ~{} tokens of context",
+                        crate::theme::tokens(context_tokens)
+                    ),
+                    "denied" => "denied".to_owned(),
+                    "asked" => "asked for approval".to_owned(),
+                    "allowed" => "allowed".to_owned(),
+                    "updated" => "changed the arguments".to_owned(),
+                    _ if message.is_some() => "said".to_owned(),
+                    _ => {
+                        self.dirty = false;
+                        return;
+                    }
+                };
+                let said = message.map(|m| format!(": {m}")).unwrap_or_default();
+                self.note(format!("hook {id} ({on}) {did}{said} · {ms} ms"));
             }
             Event::Notice { message } => self.transcript.push(Entry::System(message)),
             Event::Warning { message } => self.transcript.push(Entry::Warning(message)),
@@ -839,6 +920,9 @@ impl App {
         if self.approval.is_some() {
             return self.on_approval_key(key);
         }
+        if self.asking.is_some() {
+            return self.on_asking_key(key);
+        }
         if let Some(modal) = &mut self.modal {
             match modal.on_key(key) {
                 ModalOutcome::None => {}
@@ -853,6 +937,9 @@ impl App {
                     self.execute(&text);
                 }
             }
+            return;
+        }
+        if self.on_review_key(key) {
             return;
         }
         let popup = self.popup_matches();
@@ -1008,6 +1095,151 @@ impl App {
         }
     }
 
+    /// Keys while the model's questions are showing. The input stays live for an answer in
+    /// the user's own words.
+    fn on_asking_key(&mut self, key: KeyEvent) {
+        if self.scroll_key(key) {
+            return;
+        }
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let typing = !self.input.is_empty();
+        let Some(a) = &mut self.asking else { return };
+        let options = a.question().options.len();
+        match key.code {
+            KeyCode::Char('s') if ctrl => {
+                self.input.clear();
+                self.finish_asking(true);
+            }
+            KeyCode::Up => a.selected = a.selected.saturating_sub(1),
+            KeyCode::Down => a.selected = (a.selected + 1).min(options),
+            KeyCode::Char(c @ '1'..='9') if !typing && !ctrl => {
+                let i = usize::from(c as u8 - b'1');
+                if i < options {
+                    self.answer(Answer::Picked { index: i });
+                }
+            }
+            KeyCode::Enter if typing => {
+                let text = self.input.submit();
+                self.answer(Answer::Text {
+                    text: text.trim().to_owned(),
+                });
+            }
+            KeyCode::Enter if a.selected < options => {
+                let index = a.selected;
+                self.answer(Answer::Picked { index });
+            }
+            KeyCode::Esc => {
+                self.input.clear();
+                self.answer(Answer::Skipped);
+            }
+            KeyCode::Left if !typing && a.current > 0 => {
+                a.current -= 1;
+                a.select_default();
+            }
+            KeyCode::Char(c) if !ctrl => {
+                // Typing picks the own-answer row.
+                a.selected = options;
+                self.input.insert(c);
+            }
+            KeyCode::Backspace => self.input.backspace(),
+            KeyCode::Delete => self.input.delete(),
+            KeyCode::Left => self.input.left(),
+            KeyCode::Right => self.input.right(),
+            KeyCode::Home => self.input.home(),
+            KeyCode::End => self.input.end(),
+            _ => {}
+        }
+    }
+
+    /// Answer the current question and go on to the next, or send them all.
+    fn answer(&mut self, answer: Answer) {
+        let Some(a) = &mut self.asking else { return };
+        a.answers[a.current] = answer;
+        a.current += 1;
+        if a.current < a.questions.len() {
+            a.select_default();
+        } else {
+            self.finish_asking(false);
+        }
+    }
+
+    fn finish_asking(&mut self, stop_asking: bool) {
+        if let Some(a) = self.asking.take() {
+            self.ops.push(Op::AnswerQuestions {
+                call_id: a.call_id,
+                answers: a.answers,
+                stop_asking,
+            });
+        }
+    }
+
+    /// The choices the plan review bar offers. Auto-edit is offered only when it would
+    /// allow more than the mode plan mode started from.
+    pub(crate) fn review_choices(&self) -> Vec<(ReviewChoice, String)> {
+        let back = match self.mode_before_plan.as_str() {
+            "" | "plan" => "ask",
+            m => m,
+        };
+        let mut out = vec![(
+            ReviewChoice::Accept,
+            format!("Yes, carry it out ({back} mode)"),
+        )];
+        if matches!(back, "ask" | "read-only") {
+            out.push((
+                ReviewChoice::AcceptAutoEdit,
+                "Yes, and allow edits without asking (auto-edit)".into(),
+            ));
+        }
+        out.push((ReviewChoice::KeepPlanning, "Not yet, keep planning".into()));
+        out
+    }
+
+    /// Keys for the plan review bar. Returns whether it used the key; typing goes on to
+    /// the input, and Enter with text sends it as the revision.
+    fn on_review_key(&mut self, key: KeyEvent) -> bool {
+        let Some(selected) = self.review else {
+            return false;
+        };
+        let choices = self.review_choices();
+        let typing = !self.input.is_empty();
+        let pick = match key.code {
+            KeyCode::Up if key.modifiers.is_empty() => {
+                self.review = Some(selected.saturating_sub(1));
+                return true;
+            }
+            KeyCode::Down if key.modifiers.is_empty() => {
+                self.review = Some((selected + 1).min(choices.len() - 1));
+                return true;
+            }
+            KeyCode::Char(c @ '1'..='9') if !typing && key.modifiers.is_empty() => {
+                let i = usize::from(c as u8 - b'1');
+                if i >= choices.len() {
+                    return false;
+                }
+                i
+            }
+            KeyCode::Enter if !typing => selected,
+            KeyCode::Esc if !typing => choices.len() - 1,
+            _ => return false,
+        };
+        self.review = None;
+        match choices[pick].0 {
+            ReviewChoice::Accept => {
+                self.end_plan();
+                self.send("Carry out the plan above.".into());
+            }
+            ReviewChoice::AcceptAutoEdit => {
+                self.mode_before_plan.clear();
+                self.set_mode("auto-edit");
+                self.send("Carry out the plan above.".into());
+            }
+            ReviewChoice::KeepPlanning => {
+                self.note("still planning · say what to change, or /plan off to leave".into());
+            }
+        }
+        true
+    }
+
     fn edited(&mut self, f: fn(&mut Input)) {
         f(&mut self.input);
         self.popup_dismissed = false;
@@ -1018,9 +1250,13 @@ impl App {
         if self.modal.take().is_some() {
             return;
         }
-        if self.approval.is_some() {
+        if self.approval.is_some() || self.asking.is_some() {
             self.approval = None;
+            self.asking = None;
             self.ops.push(Op::Interrupt);
+            return;
+        }
+        if self.review.take().is_some() {
             return;
         }
         if !self.input.is_empty() {
@@ -1066,6 +1302,7 @@ impl App {
     }
 
     fn send(&mut self, text: String) {
+        self.review = None;
         self.panel_collapsed = true;
         self.transcript.push(Entry::User(text.clone()));
         self.ops.push(Op::UserTurn {
@@ -1645,6 +1882,149 @@ mod tests {
         assert!(
             matches!(&ops[1], Op::UserTurn { items, .. } if items == &[InputItem::text("Carry out the plan above.")])
         );
+    }
+
+    fn plan_turn_ends(app: &mut App) {
+        use quack_protocol::{TurnId, Usage};
+        app.on_engine(Event::TurnComplete {
+            turn: TurnId(1),
+            usage: Usage {
+                prompt_tokens: 1,
+                completion_tokens: 1,
+                cached_prompt_tokens: None,
+            },
+        });
+    }
+
+    #[test]
+    fn plan_review_bar_accepts_or_takes_a_revision() {
+        let mut app = App::new(info());
+        let mode = |m: &str| Op::SetPermissionMode { mode: m.into() };
+        let carry_out = |op: &Op| matches!(op, Op::UserTurn { items, .. } if items == &[InputItem::text("Carry out the plan above.")]);
+        let enter_plan = |app: &mut App| {
+            type_str(app, "/plan");
+            press(app, KeyCode::Enter);
+            app.on_engine(Event::PermissionMode {
+                mode: "plan".into(),
+            });
+            app.take_ops();
+            plan_turn_ends(app);
+            assert_eq!(app.review, Some(0), "the bar shows when a plan turn ends");
+        };
+
+        // The second choice: carry it out in auto-edit.
+        enter_plan(&mut app);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
+        let ops = app.take_ops();
+        assert_eq!(ops[0], mode("auto-edit"));
+        assert!(carry_out(&ops[1]), "{ops:?}");
+        assert_eq!(app.review, None);
+        app.on_engine(Event::PermissionMode { mode: "ask".into() });
+
+        // Typing is the revision; it is sent as a plan-mode turn.
+        enter_plan(&mut app);
+        type_str(&mut app, "use sqlite instead");
+        assert_eq!(app.review, Some(0), "the bar stays while typing");
+        press(&mut app, KeyCode::Enter);
+        let ops = app.take_ops();
+        assert_eq!(ops.len(), 1, "{ops:?}");
+        assert!(
+            matches!(&ops[0], Op::UserTurn { items, .. } if items == &[InputItem::text("use sqlite instead")])
+        );
+        assert_eq!(app.review, None);
+
+        // Esc keeps planning; `1` accepts in the mode plan mode started from.
+        plan_turn_ends(&mut app);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.review, None);
+        assert!(app.take_ops().is_empty());
+        plan_turn_ends(&mut app);
+        press(&mut app, KeyCode::Char('1'));
+        let ops = app.take_ops();
+        assert_eq!(ops[0], mode("ask"));
+        assert!(carry_out(&ops[1]), "{ops:?}");
+    }
+
+    #[test]
+    fn questions_are_picked_typed_or_skipped() {
+        use quack_protocol::QuestionOption;
+        let mut app = App::new(info());
+        let questions = vec![
+            Question {
+                header: "Storage".into(),
+                question: "Where should tokens live?".into(),
+                options: vec![
+                    QuestionOption {
+                        label: "OS keyring".into(),
+                        description: None,
+                    },
+                    QuestionOption {
+                        label: "A dotfile".into(),
+                        description: None,
+                    },
+                ],
+                recommended: Some(1),
+            },
+            Question {
+                header: String::new(),
+                question: "Which database?".into(),
+                options: Vec::new(),
+                recommended: None,
+            },
+        ];
+        let ask = |app: &mut App| {
+            app.on_engine(Event::Questions {
+                call_id: CallId("q1".into()),
+                questions: questions.clone(),
+            });
+        };
+
+        ask(&mut app);
+        assert_eq!(
+            app.asking.as_ref().map(|a| a.selected),
+            Some(1),
+            "the recommendation"
+        );
+        press(&mut app, KeyCode::Char('1'));
+        type_str(&mut app, "sqlite");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(
+            app.take_ops(),
+            vec![Op::AnswerQuestions {
+                call_id: CallId("q1".into()),
+                answers: vec![
+                    Answer::Picked { index: 0 },
+                    Answer::Text {
+                        text: "sqlite".into()
+                    }
+                ],
+                stop_asking: false,
+            }]
+        );
+        assert!(app.asking.is_none());
+        assert!(app.input.is_empty());
+
+        // Enter takes the recommendation; Ctrl-S skips the rest and stops the asking.
+        ask(&mut app);
+        press(&mut app, KeyCode::Enter);
+        app.on_terminal(TermEvent::Key(KeyEvent::new(
+            KeyCode::Char('s'),
+            KeyModifiers::CONTROL,
+        )));
+        assert_eq!(
+            app.take_ops(),
+            vec![Op::AnswerQuestions {
+                call_id: CallId("q1".into()),
+                answers: vec![Answer::Picked { index: 1 }, Answer::Skipped],
+                stop_asking: true,
+            }]
+        );
+
+        // Esc skips one question.
+        ask(&mut app);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.asking.as_ref().map(|a| a.current), Some(1));
     }
 
     #[test]

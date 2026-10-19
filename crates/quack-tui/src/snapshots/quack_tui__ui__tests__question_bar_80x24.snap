@@ -1,0 +1,28 @@
+---
+source: crates/quack-tui/src/ui.rs
+expression: s
+---
+" quack 0.1.0 · ~/src/project                                             ⎇ main "
+"                                                                                "
+"      __        quack  a coding agent for open-weight models                    "
+"    <(o )___                                                                    "
+"     ( ._> /    no model yet · /setup adds a provider                           "
+"      `---'     / commands  shift+tab modes  /plan plan first                   "
+"   ~~~~~~~~~~   /help everything  esc esc rewind  /yolo no prompts              "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"╭ Storage · 1/2 ───────────────────────────────────────────────────────────────╮"
+"│ Where should the login tokens live?                                          │"
+"│▌1. OS keyring (recommended) · safest; needs secret-tool on Linux             │"
+"│ 2. A dotfile                                                                 │"
+"│ 3. Type your own answer below                                                │"
+"│ ↑↓ choose  enter confirm  esc skip  ctrl-s stop asking  ctrl-c interrupts    │"
+"╰──────────────────────────────────────────────────────────────────────────────╯"
+"╭──────────────────────────────────────────────────────────────────────────────╮"
+"│›                                                                             │"
+"╰──────────────────────────────────────────────────────────────────────────────╯"
+"  ask  no model                                               ⠋ starting  /help "

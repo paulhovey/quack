@@ -1,0 +1,5 @@
+category = "multi-file"
+prompt = "Add an `email` field (a string, default empty) to the `Contact` dataclass in models.py, and include it in the dictionary returned by `to_dict` in export.py under the key \"email\"."
+requires = ["python"]
+[[check]]
+command = "{python} check.py"

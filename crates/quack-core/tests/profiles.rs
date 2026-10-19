@@ -215,9 +215,15 @@ async fn codex_shell_takes_an_argument_list() {
     names.sort_unstable();
     // Exclusive: only its own tools (memory and skill are offered when available).
     assert!(
-        names
-            .iter()
-            .all(|n| ["apply_patch", "memory", "shell", "skill", "update_plan"].contains(n)),
+        names.iter().all(|n| [
+            "apply_patch",
+            "ask_user",
+            "memory",
+            "shell",
+            "skill",
+            "update_plan"
+        ]
+        .contains(n)),
         "{names:?}"
     );
     assert_eq!(

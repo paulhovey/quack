@@ -218,6 +218,7 @@ impl Stats {
             pruned: self.pruned,
             resumed: self.resumed,
             history: self.history.iter().cloned().collect(),
+            sampling: Vec::new(),
         }
     }
 }

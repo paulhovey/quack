@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "skills": {
+    "frontierharness-eval": {
+      "source": "frontier-harness-eval/eval",
+      "sourceType": "github",
+      "skillPath": "skills/frontierharness-eval/SKILL.md",
+      "computedHash": "59511f99eee80c414357832ab7adec28b32763f92f863b61bb2f248e32d09e58"
+    },
+    "runta-cli": {
+      "source": "runta.com",
+      "sourceUrl": "https://runta.com/docs",
+      "sourceType": "well-known",
+      "computedHash": "6d7d96228d1baee6640e95a739b760d3bb7d81028f4ef2ab2be656765c9ae184",
+      "wellKnownDigest": "sha256:34aaf2162a6ca69275d04620837cd67bc68aa9ef988595ccee85406fbee53cef"
+    },
+    "runta-installer": {
+      "source": "runta.com",
+      "sourceUrl": "https://runta.com/docs",
+      "sourceType": "well-known",
+      "computedHash": "36cbac6e389ba08d089e21d65285b2f58aefdb99629f4e38c78fda53376ef689",
+      "wellKnownDigest": "sha256:6e7f8966a5015a80eef9bd7e36f3b52fe853967b72114883cdffba836f7e1418"
+    }
+  }
+}

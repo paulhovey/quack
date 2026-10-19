@@ -241,6 +241,7 @@ mod tests {
             max_timeout: std::time::Duration::from_secs(5),
             cancel: Default::default(),
             on_output: None,
+            ask: None,
             reads: Default::default(),
             memory: Some(Arc::new(MemoryStore::new(dir.join("g"), dir.join("p")))),
             skills: Default::default(),

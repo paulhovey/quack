@@ -1,0 +1,8 @@
+category = "single-edit"
+prompt = "The README misspells 'configuration' twice. Fix both spellings and change nothing else."
+[[check]]
+file = "README.md"
+not_contains = "configuraton"
+[[check]]
+file = "README.md"
+contains = "## Configuration\n\nAll configuration lives in `app.toml`."

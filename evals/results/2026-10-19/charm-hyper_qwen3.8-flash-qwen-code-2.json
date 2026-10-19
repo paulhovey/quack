@@ -1,0 +1,69 @@
+{
+  "harness": "quack 0.1.0",
+  "date": "2026-10-19",
+  "model": "charm-hyper/qwen3.8-flash",
+  "profile": "qwen-code",
+  "sampling": {},
+  "results": [
+    {
+      "task": "find-constant",
+      "category": "navigate",
+      "passed": true,
+      "steps": 3,
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "parse_failures": 0,
+      "edit_failures": 0,
+      "prompt_tokens": 10631,
+      "cached_tokens": 7936,
+      "completion_tokens": 215,
+      "compactions": 0,
+      "seconds": 5.653253175
+    },
+    {
+      "task": "find-constant",
+      "category": "navigate",
+      "passed": true,
+      "steps": 3,
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "parse_failures": 0,
+      "edit_failures": 0,
+      "prompt_tokens": 10588,
+      "cached_tokens": 8192,
+      "completion_tokens": 137,
+      "compactions": 0,
+      "seconds": 4.417136648
+    },
+    {
+      "task": "fix-off-by-one",
+      "category": "fix-test",
+      "passed": true,
+      "steps": 4,
+      "tool_calls": 4,
+      "tool_errors": 0,
+      "parse_failures": 0,
+      "edit_failures": 0,
+      "prompt_tokens": 15735,
+      "cached_tokens": 12800,
+      "completion_tokens": 669,
+      "compactions": 0,
+      "seconds": 10.696114349
+    },
+    {
+      "task": "fix-off-by-one",
+      "category": "fix-test",
+      "passed": true,
+      "steps": 5,
+      "tool_calls": 5,
+      "tool_errors": 0,
+      "parse_failures": 0,
+      "edit_failures": 0,
+      "prompt_tokens": 19830,
+      "cached_tokens": 16384,
+      "completion_tokens": 680,
+      "compactions": 0,
+      "seconds": 11.932303936
+    }
+  ]
+}

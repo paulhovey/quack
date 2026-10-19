@@ -1,0 +1,6 @@
+category = "shell"
+prompt = "How many data rows (not counting the header) does data/orders.csv have? Count them with a command rather than by reading the file."
+[[check]]
+tool_called = "shell"
+[[check]]
+answer_contains = "137"

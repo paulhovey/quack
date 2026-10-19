@@ -7,6 +7,7 @@ mod context;
 pub mod doctor;
 mod engine;
 mod env;
+mod hooks;
 mod lsp;
 mod mcp;
 mod models;

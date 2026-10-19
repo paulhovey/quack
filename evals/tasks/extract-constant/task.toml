@@ -1,0 +1,14 @@
+category = "multi-file"
+prompt = "Both shop/cart.py and shop/checkout.py hard-code the tax rate 0.2. Move it into a constant `TAX_RATE` in a new file shop/config.py and use that constant in both files."
+requires = ["python"]
+[[check]]
+file = "shop/config.py"
+contains = "TAX_RATE"
+[[check]]
+file = "shop/cart.py"
+not_contains = "0.2"
+[[check]]
+file = "shop/checkout.py"
+not_contains = "0.2"
+[[check]]
+command = "{python} check.py"

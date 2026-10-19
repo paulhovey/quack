@@ -1,0 +1,14 @@
+category = "multi-file"
+prompt = "Rename the function `get_usr` to `get_user` everywhere in this project, including its callers."
+requires = ["python"]
+[[check]]
+file = "users/store.py"
+not_contains = "get_usr"
+[[check]]
+file = "api/handlers.py"
+not_contains = "get_usr"
+[[check]]
+file = "cli.py"
+not_contains = "get_usr"
+[[check]]
+command = "{python} cli.py 2"

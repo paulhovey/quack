@@ -12,8 +12,9 @@ model = []
 
 [defaults]
 edit_format = "str_replace"
-# Qwen's recommended sampling for its coder models.
-sampling = { temperature = 0.7, top_p = 0.8, top_k = 20, repetition_penalty = 1.05 }
+# No sampling here: with Qwen's coder-model values (temperature 0.7, top_k 20, ...) a
+# qwen3.8-flash eval took more steps and failed edits it otherwise made cleanly. Set
+# sampling per model in its provider entry instead.
 
 [[tools]]
 name = "read_file"

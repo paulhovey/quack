@@ -605,6 +605,9 @@ async fn try_provider(
         .unwrap_or_else(|| ModelEntry::new(mid.clone()));
     if let Some(d) = discovered.iter().find(|d| d.id == model.id) {
         model.context_window = model.context_window.or(d.context_window);
+        if model.cost.is_none() {
+            model.cost = d.cost.clone();
+        }
     } else if !discovered.is_empty() && provider.file.model(&mid).is_none() {
         warn(
             tx,
@@ -666,6 +669,7 @@ async fn build_setup(
         max_timeout: timeout.max(Duration::from_secs(600)),
         cancel: CancellationToken::new(),
         on_output: None,
+        ask: None,
         reads: Arc::new(ReadTracker::default()),
         memory: Some(Arc::new(env::memory_store(config))),
         skills: Arc::new(found.skills),

@@ -1,0 +1,50 @@
+"""Module 35."""
+
+def f35_0(x):
+    # compute 0
+    return x * 35
+
+def f35_1(x):
+    # compute 1
+    return x * 36
+
+def f35_2(x):
+    # compute 2
+    return x * 37
+
+def f35_3(x):
+    # TODO: tidy up f35_3
+    return x * 38
+
+def f35_4(x):
+    # compute 4
+    return x * 39
+
+def f35_5(x):
+    # compute 5
+    return x * 40
+
+def f35_6(x):
+    # compute 6
+    return x * 41
+
+def f35_7(x):
+    # compute 7
+    return x * 42
+
+def f35_8(x):
+    # compute 8
+    return x * 43
+
+def f35_9(x):
+    # compute 9
+    return x * 44
+
+def f35_10(x):
+    # compute 10
+    return x * 45
+
+def f35_11(x):
+    # compute 11
+    return x * 46
+

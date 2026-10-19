@@ -100,6 +100,9 @@ compat_paths = []                 # more skill folders, e.g. ".claude/skills" on
 disabled = []                     # skill names to skip
 index_max_tokens = 1500           # cap on the skill list in the system prompt
 
+[hooks]
+disabled = []                     # hook ids to skip; the system layer's hooks cannot be skipped
+
 [sessions]
 path = ""                         # default: <user data>/sessions
 retention_days = 0                # 0 = keep forever

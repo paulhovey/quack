@@ -1,0 +1,4 @@
+category = "navigate"
+prompt = "What is the value of MAX_RETRIES in this project? Reply with just the number."
+[[check]]
+answer_contains = "7"

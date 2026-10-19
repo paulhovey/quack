@@ -1,0 +1,7 @@
+category = "shell"
+prompt = "Run scripts/code.py with Python and tell me the code it prints."
+requires = ["python"]
+[[check]]
+tool_called = "shell"
+[[check]]
+answer_contains = "QX-4471"

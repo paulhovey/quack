@@ -12,8 +12,6 @@ model = []
 
 [defaults]
 edit_format = "str_replace"
-# Moonshot's recommended temperature for Kimi K2.
-sampling = { temperature = 0.6 }
 
 [[tools]]
 name = "ReadFile"

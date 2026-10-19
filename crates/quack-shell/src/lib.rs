@@ -6,12 +6,14 @@
 
 mod detect;
 mod env;
+mod exec;
 #[cfg(windows)]
 mod job;
 mod run;
 
 pub use detect::ShellKind;
 pub use env::inherited_env;
+pub use exec::{ExecOptions, ExecResult, exec};
 pub use run::{RunOptions, RunResult, Tree, run};
 
 /// Find a program on `PATH` (`search`), the way a shell would: on Windows `npx` finds

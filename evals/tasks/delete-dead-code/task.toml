@@ -1,0 +1,10 @@
+category = "multi-file"
+prompt = "The module legacy/old_export.py is no longer used anywhere except for one import in app.py that is never called. Delete the module and remove that import."
+requires = ["python"]
+[[check]]
+missing = "legacy/old_export.py"
+[[check]]
+file = "app.py"
+not_contains = "old_export"
+[[check]]
+command = "{python} app.py"

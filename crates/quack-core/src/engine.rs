@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use quack_config::hooks::HookEvent;
 use quack_config::settings::PermissionMode;
 use quack_config::{LayerKind, Loaded};
 use quack_lsp::LspManager;
@@ -17,9 +18,10 @@ use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use crate::hooks::{Hooks, Sink, Target};
 use crate::session::{self, Resume, SharedLog};
 use crate::startup::{self, Setup, StartupOutcome};
-use crate::turn::{self, Approvals, TurnCtx};
+use crate::turn::{self, Approvals, Questions, TurnCtx};
 use quack_instructions::agents_md::Nested;
 use quack_protocol::MemoryNote;
 use quack_store::checkpoint::Checkpoints;
@@ -29,7 +31,11 @@ const EVENT_CAPACITY: usize = 4096;
 
 /// Appended to user messages in plan mode when the profile has no `plan.md`.
 const PLAN_PROMPT: &str = "[Plan mode] Do not change anything yet. Explore with read-only \
-tools, then reply with a short numbered plan: which files to change, what to change in each, \
+tools first. If a decision would change the plan in a big way (scope, approach, a trade-off, \
+an unclear requirement), ask the user with ask_user: put the questions in one call, give \
+options with your recommendation first, and don't ask what the code or docs can answer. Ask \
+only a few, and none when the task is clear. Then record the plan with the todo tool (concrete \
+steps, all pending) and reply with a short summary: the decisions made, which files change, \
 and how to check the result. The user will accept the plan or ask for changes.";
 const OP_CAPACITY: usize = 64;
 
@@ -119,6 +125,7 @@ pub struct Engine {
     queued: VecDeque<Queued>,
     running: Option<(TurnId, CancellationToken)>,
     approvals: Approvals,
+    questions: Questions,
     resume: Resume,
     /// Created at the first turn (no empty sessions) or reopened on resume.
     log: Option<SharedLog>,
@@ -135,6 +142,10 @@ pub struct Engine {
     lsp: Arc<LspManager>,
     /// This session's usage, for `/stats`.
     stats: Arc<Mutex<crate::stats::Stats>>,
+    /// `hooks.d`, read at startup and on `/reload`.
+    hooks: Arc<Hooks>,
+    /// The `session_start` hooks running, for the session's first prompt.
+    start_context: Option<JoinHandle<Vec<String>>>,
 }
 
 impl Engine {
@@ -168,6 +179,7 @@ impl Engine {
             queued: VecDeque::new(),
             running: None,
             approvals: Approvals::default(),
+            questions: Questions::default(),
             resume,
             log: None,
             turns: 0,
@@ -176,6 +188,8 @@ impl Engine {
             pending_mode: None,
             notes: Vec::new(),
             stats: Arc::default(),
+            hooks: Arc::default(),
+            start_context: None,
             mcp: crate::mcp::Mcp::new(McpManager::new(
                 Vec::new(),
                 PathBuf::new(),
@@ -204,6 +218,7 @@ impl Engine {
         });
         self.start_mcp().await;
         self.start_lsp().await;
+        self.load_hooks().await;
         let mut startup = tokio::spawn(startup::run(
             self.config.clone(),
             self.tx.clone(),
@@ -258,12 +273,53 @@ impl Engine {
             cancel.cancel();
         }
         startup.abort();
+        if let Some(end) = self.session_hooks(HookEvent::SessionEnd, "quit") {
+            let _ = end.await;
+        }
         let _ = tokio::time::timeout(
             Duration::from_secs(3),
             futures::future::join(self.mcp.manager.shutdown(), self.lsp.shutdown()),
         )
         .await;
         self.emit(Event::ShutdownComplete);
+    }
+
+    /// Read `hooks.d`.
+    async fn load_hooks(&mut self) {
+        let config = self.config.clone();
+        let (hooks, warnings) = tokio::task::spawn_blocking(move || crate::hooks::load(&config))
+            .await
+            .unwrap_or_default();
+        for w in warnings {
+            self.warn(w);
+        }
+        self.hooks = Arc::new(hooks);
+    }
+
+    /// Start the `session_start` or `session_end` hooks in the background. `source` says
+    /// why: `startup`, `resume`, `new`, `quit` or `switch`.
+    fn session_hooks(&self, event: HookEvent, source: &str) -> Option<JoinHandle<Vec<String>>> {
+        if !self.hooks.any(event) {
+            return None;
+        }
+        let (hooks, tx) = (self.hooks.clone(), self.tx.clone());
+        let session = self.session.id.0.clone();
+        let fields = serde_json::json!({ "source": source });
+        Some(tokio::spawn(async move {
+            let emit = move |e: Event| {
+                let _ = tx.send(e);
+            };
+            let sink = Sink {
+                emit: &emit,
+                log: None,
+                session: &session,
+            };
+            let cancel = CancellationToken::new();
+            hooks
+                .run(event, fields, Target::None, &sink, &cancel)
+                .await
+                .context
+        }))
     }
 
     /// Read `lsp.d` and find the servers' programs; they start when a file is opened.
@@ -310,6 +366,7 @@ impl Engine {
         self.session.model = Some(setup.model_ref.clone());
         self.session.profile = setup.profile.id.clone();
         let resume = std::mem::take(&mut self.resume);
+        let resumed = resume != Resume::New;
         let history = self
             .open_saved(&resume, &setup.model_ref)
             .unwrap_or_else(|| {
@@ -331,6 +388,12 @@ impl Engine {
             Some(mode) => self.set_mode(&mode),
             None => self.emit_mode(),
         }
+        let source = if resumed && self.log.is_some() {
+            "resume"
+        } else {
+            "startup"
+        };
+        self.start_context = self.session_hooks(HookEvent::SessionStart, source);
     }
 
     /// Load the requested session, if any, and reopen its log for appending. `None` when
@@ -387,6 +450,10 @@ impl Engine {
         if target.as_ref() == Some(&self.session.id) {
             return self.warn("already in this session".into());
         }
+        let source = if target.is_some() { "resume" } else { "new" };
+        if let Some(end) = self.session_hooks(HookEvent::SessionEnd, "switch") {
+            drop(end); // runs on; nothing waits for it
+        }
         let history = match target {
             Some(id) => {
                 self.sync_log();
@@ -415,6 +482,7 @@ impl Engine {
         self.emit(Event::SessionConfigured {
             session: self.session.clone(),
         });
+        self.start_context = self.session_hooks(HookEvent::SessionStart, source);
     }
 
     fn list_sessions(&self) {
@@ -955,6 +1023,28 @@ impl Engine {
                 }
                 self.queued.clear();
             }
+            Op::AnswerQuestions {
+                call_id,
+                answers,
+                stop_asking,
+            } => {
+                let waiting = self
+                    .questions
+                    .lock()
+                    .ok()
+                    .and_then(|mut p| p.remove(&call_id.0));
+                match waiting {
+                    Some(tx) => {
+                        let _ = tx.send(quack_tools::Answers {
+                            answers,
+                            stop_asking,
+                        });
+                    }
+                    None => self.emit(Event::Warning {
+                        message: format!("no pending question for call {}", call_id.0),
+                    }),
+                }
+            }
             Op::ApprovalResponse { call_id, decision } => {
                 let waiting = self
                     .approvals
@@ -1119,11 +1209,24 @@ impl Engine {
                     .map(|c| c.setup.model_ref.clone())
                     .or_else(|| self.session.model.clone())
                     .unwrap_or_default();
-                let report = self
+                let mut report = self
                     .stats
                     .lock()
                     .map(|s| s.report(&model, self.turns))
                     .unwrap_or_default();
+                if let Some(c) = &self.convo {
+                    let s = turn::sampling(&c.setup);
+                    report.sampling = [
+                        ("temperature", s.temperature),
+                        ("top_p", s.top_p),
+                        ("top_k", s.top_k.map(f64::from)),
+                        ("min_p", s.min_p),
+                        ("repetition_penalty", s.repetition_penalty),
+                    ]
+                    .into_iter()
+                    .filter_map(|(k, v)| Some((k.to_owned(), v?)))
+                    .collect();
+                }
                 self.emit(Event::Stats { report });
             }
             Op::SetTitle { title } => {
@@ -1237,6 +1340,7 @@ impl Engine {
         .await;
         self.start_mcp().await;
         self.start_lsp().await;
+        self.load_hooks().await;
         self.emit(Event::ConfigReloaded);
         let keep = self
             .convo
@@ -1319,11 +1423,14 @@ impl Engine {
             perms: convo.perms.clone(),
             nested: convo.nested.clone(),
             approvals: self.approvals.clone(),
+            questions: self.questions.clone(),
             tx: self.tx.clone(),
             cancel,
             log: self.log.clone(),
             checkpoints: None,
             stats: self.stats.clone(),
+            hooks: self.hooks.clone(),
+            session: self.session.id.0.clone(),
         };
         tokio::spawn(async move {
             ctx.emit(Event::TurnStarted { turn });
@@ -1414,11 +1521,19 @@ impl Engine {
             perms,
             nested,
             approvals: self.approvals.clone(),
+            questions: self.questions.clone(),
             tx: self.tx.clone(),
             cancel,
             log: self.log.clone(),
             checkpoints: self.checkpoints(),
             stats: self.stats.clone(),
+            hooks: self.hooks.clone(),
+            session: self.session.id.0.clone(),
+        };
+        let prompt = turn::Prompt {
+            text: prompt,
+            typed,
+            start: self.start_context.take(),
         };
         tokio::spawn(async move {
             let history = turn::run(ctx, history, prompt).await;
@@ -1523,6 +1638,7 @@ fn op_name(op: &Op) -> &'static str {
         Op::UserTurn { .. } => "user_turn",
         Op::Interrupt => "interrupt",
         Op::ApprovalResponse { .. } => "approval_response",
+        Op::AnswerQuestions { .. } => "answer_questions",
         Op::SetModel { .. } => "set_model",
         Op::ListProfiles => "list_profiles",
         Op::ListInstructions => "list_instructions",

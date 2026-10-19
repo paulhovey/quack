@@ -120,11 +120,16 @@ pub struct RunResult {
     pub completion_tokens: u64,
     pub compactions: u32,
     pub seconds: f64,
+    /// US dollars, when the model has a price (configured or listed by the provider).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<f64>,
     /// The model and profile the run used, as the engine reported them.
     #[serde(skip)]
     pub model: String,
     #[serde(skip)]
     pub profile: String,
+    #[serde(skip)]
+    pub sampling: Vec<(String, f64)>,
 }
 
 /// The whole run: what was measured, and each task's result.
@@ -134,10 +139,29 @@ pub struct Report {
     pub date: String,
     pub model: String,
     pub profile: String,
+    /// The sampling settings sent (`temperature`, ...); empty: the server's defaults.
+    #[serde(default)]
+    pub sampling: serde_json::Map<String, serde_json::Value>,
     pub results: Vec<RunResult>,
 }
 
 impl Report {
+    /// `sampling` from a run's settings: whole numbers (`top_k`) as integers.
+    pub fn sampling_of(pairs: &[(String, f64)]) -> serde_json::Map<String, serde_json::Value> {
+        pairs
+            .iter()
+            .map(|(k, v)| {
+                #[allow(clippy::cast_possible_truncation)]
+                let n = if v.fract() == 0.0 && v.abs() < 1e15 {
+                    serde_json::Value::from(*v as i64)
+                } else {
+                    serde_json::Value::from(*v)
+                };
+                (k.clone(), n)
+            })
+            .collect()
+    }
+
     /// `(passed, ran)`; skipped runs are not counted.
     pub fn score(&self) -> (usize, usize) {
         let ran: Vec<&RunResult> = self
@@ -146,6 +170,14 @@ impl Report {
             .filter(|r| r.skipped.is_none())
             .collect();
         (ran.iter().filter(|r| r.passed).count(), ran.len())
+    }
+
+    /// What the priced runs cost in all, in US dollars. `None` when none was priced.
+    pub fn cost(&self) -> Option<f64> {
+        self.results
+            .iter()
+            .filter_map(|r| r.cost)
+            .reduce(|a, b| a + b)
     }
 }
 
@@ -341,6 +373,7 @@ fn internal_tool(summary: &str) -> String {
         "$" => "shell".into(),
         "patch" => "apply_patch".into(),
         "list" => "list_dir".into(),
+        "ask" => "ask_user".into(),
         other => other.to_owned(),
     }
 }
@@ -463,6 +496,14 @@ pub async fn run_task(task: &Task, opts: &EvalOptions, run: u32) -> RunResult {
                     .submit(Op::ApprovalResponse { call_id, decision })
                     .await;
             }
+            Event::Questions { call_id, .. } => {
+                let answer = Op::AnswerQuestions {
+                    call_id,
+                    answers: Vec::new(),
+                    stop_asking: true,
+                };
+                engine.submit(answer).await;
+            }
             Event::Error { error } if result.error.is_none() => {
                 result.error = Some(error.message);
             }
@@ -477,6 +518,8 @@ pub async fn run_task(task: &Task, opts: &EvalOptions, run: u32) -> RunResult {
         result.cached_tokens = stats.cached_tokens;
         result.completion_tokens = stats.completion_tokens;
         result.compactions = stats.compactions;
+        result.cost = stats.cost;
+        result.sampling = stats.sampling;
     }
     engine.shutdown().await;
     result.seconds = started.elapsed().as_secs_f64();
@@ -502,6 +545,26 @@ async fn stats(engine: &mut quack_core::EngineHandle) -> Option<StatsReport> {
     }
 }
 
+/// `path`, or `name-2.json`, `name-3.json`, ... beside it when it already exists, so a
+/// rerun never overwrites an earlier result.
+pub fn unused_path(path: &Path) -> PathBuf {
+    if !path.exists() {
+        return path.to_path_buf();
+    }
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let ext = path
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+    (2..)
+        .map(|n| path.with_file_name(format!("{stem}-{n}{ext}")))
+        .find(|p| !p.exists())
+        .expect("some numbered name is free")
+}
+
 /// Today as `YYYY-MM-DD` (UTC).
 pub fn today() -> String {
     let days = std::time::SystemTime::now()
@@ -524,8 +587,8 @@ pub fn today() -> String {
 /// A Markdown table of the results, for the terminal and for `docs/compat.md`.
 pub fn table(report: &Report) -> String {
     let mut out = String::from(
-        "| task | category | result | steps | tool errors | parse | edit | tokens (cached) | time |\n\
-         |---|---|---|---|---|---|---|---|---|\n",
+        "| task | category | result | steps | tool errors | parse | edit | tokens (cached) | cost | time |\n\
+         |---|---|---|---|---|---|---|---|---|---|\n",
     );
     for r in &report.results {
         let outcome = match (&r.skipped, r.passed) {
@@ -534,7 +597,7 @@ pub fn table(report: &Report) -> String {
             (None, false) => "FAIL".into(),
         };
         out.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {} | {} | {} ({}) | {:.0}s |\n",
+            "| {} | {} | {} | {} | {} | {} | {} | {} ({}) | {} | {:.0}s |\n",
             r.task,
             r.category,
             outcome,
@@ -544,12 +607,28 @@ pub fn table(report: &Report) -> String {
             r.edit_failures,
             r.prompt_tokens + r.completion_tokens,
             r.cached_tokens,
+            r.cost
+                .map_or_else(|| "-".to_owned(), |c| format!("${c:.4}")),
             r.seconds
         ));
     }
     let (passed, ran) = report.score();
+    let sampling = if report.sampling.is_empty() {
+        "server defaults".to_owned()
+    } else {
+        let parts: Vec<String> = report
+            .sampling
+            .iter()
+            .map(|(k, v)| format!("{k} {v}"))
+            .collect();
+        parts.join(", ")
+    };
+    let cost = report
+        .cost()
+        .map(|c| format!(" · ${c:.4}"))
+        .unwrap_or_default();
     out.push_str(&format!(
-        "\n{} · profile {} · {passed}/{ran} passed\n",
+        "\n{} · profile {} · sampling: {sampling} · {passed}/{ran} passed{cost}\n",
         report.model, report.profile
     ));
     out
@@ -597,5 +676,27 @@ mod tests {
         let failed = check(&checks, &tmp, "no", &[], &none);
         assert_eq!(failed.len(), 2, "{failed:?}");
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn results_are_never_overwritten() {
+        let tmp = std::env::temp_dir().join(format!("quack-eval-out-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).expect("mkdir");
+        let out = tmp.join("m-generic.json");
+        assert_eq!(unused_path(&out), out);
+        std::fs::write(&out, "{}").expect("write");
+        assert_eq!(unused_path(&out), tmp.join("m-generic-2.json"));
+        std::fs::write(tmp.join("m-generic-2.json"), "{}").expect("write");
+        assert_eq!(unused_path(&out), tmp.join("m-generic-3.json"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn sampling_keeps_whole_numbers_whole() {
+        let m = Report::sampling_of(&[("temperature".into(), 0.7), ("top_k".into(), 20.0)]);
+        assert_eq!(
+            serde_json::Value::Object(m).to_string(),
+            r#"{"temperature":0.7,"top_k":20}"#
+        );
     }
 }

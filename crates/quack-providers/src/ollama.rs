@@ -317,6 +317,7 @@ pub(crate) fn discovered(id: String, trained: Option<u32>) -> DiscoveredModel {
             trained.map_or(DISCOVERED_WINDOW_CAP, |t| t.min(DISCOVERED_WINDOW_CAP)),
         ),
         max_output: None,
+        cost: None,
     }
 }
 

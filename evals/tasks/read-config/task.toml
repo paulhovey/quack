@@ -1,0 +1,4 @@
+category = "navigate"
+prompt = "Which port does the staging environment's database use? Reply with the number."
+[[check]]
+answer_contains = "6543"

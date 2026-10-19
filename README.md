@@ -87,7 +87,7 @@ Everything below works today. Planned work is listed separately at the end.
 
 - `read`, `write`, `glob`, `grep`, `list_dir`, `shell`, `lsp` and `index`.
 - `index` outlines a file (functions, types, methods with their line ranges, nested) or a
-  whole folder, for Rust, Python, JavaScript, TypeScript and Go (tree-sitter). `read` of a
+  whole folder, for Rust, Python, JavaScript, TypeScript, Go, C and C++ (tree-sitter). `read` of a
   large source file without a range returns that outline instead of the whole file, and
   `read` with `symbol = "Type::method"` reads one definition. `[tools] read_outline_tokens`
   sets the size (2,000 tokens; 0 turns it off).
@@ -144,8 +144,13 @@ Everything below works today. Planned work is listed separately at the end.
 - Project trust: a cloned repo's `.quack/` folder runs nothing until you trust it. The prompt
   shows what it would add, and you are asked again when those files change. Also
   `quack trust` and `/trust`.
-- Plan mode (`/plan`, Shift-Tab, or `--permission-mode plan`): the agent can look around
-  but changes nothing until you accept the plan.
+- Plan mode (`/plan`, Shift-Tab, or `--permission-mode plan`): the agent looks around, asks
+  you about the few big decisions (with options and its recommendation; pick one, type your
+  own answer, or skip), and proposes the plan as a checklist. A bar then offers to carry it
+  out, carry it out with edits allowed, or keep planning; just type to ask for changes.
+  Nothing changes until you accept.
+- `ask_user`: the agent can ask you questions in any mode, the same way. Headless runs skip
+  them and the agent says what it assumed.
 - OS sandbox for shell commands, on by default: commands write only in the workspace and
   temp folders and have no network. `[sandbox] mode` can also be `workspace-write-net`,
   `read-only` or `off`. Reading works everywhere and local sockets keep working. Extra
@@ -175,8 +180,9 @@ Everything below works today. Planned work is listed separately at the end.
 - `/stats` adds up the session: tokens sent and received, cache hits, cost, where the time
   went (the model, tools, waiting for your approval), latency and speed, and each tool's
   calls and failures, drawn as charts: headline figures, bars, sparklines of every
-  request and the cost climbing over the session. Totals survive `/resume`. For cost, give a model its price per
-  million tokens in its provider file: `cost = { input = 0.3, output = 1.2 }`.
+  request and the cost climbing over the session. Totals survive `/resume`. Cost comes from the price the provider's
+  models endpoint lists (Charm Hyper, OpenRouter and others do), or from the model's price per
+  million tokens in its provider file, which wins: `cost = { input = 0.3, output = 1.2 }`.
 
 ### Sessions and undo
 
@@ -214,6 +220,33 @@ Everything below works today. Planned work is listed separately at the end.
 - Large tool sets are deferred and found with a `tool_search` tool, so they do not fill the
   context.
 - `/mcp` shows each server's state. Servers restart when they crash.
+
+### Hooks
+
+- Programs you write, in any language (Python works everywhere), that run on agent
+  events: `session_start`, `user_prompt`, `pre_tool`, `post_tool`, `turn_end`,
+  `session_end` and `pre_compact`. One TOML file each in `hooks.d/`.
+- A hook gets the event as JSON on stdin. It can add context for the model (print text, or
+  `{"additional_context": "..."}`), block a prompt or a tool call (`"decision": "deny"`, or
+  exit 2 with the reason on stderr), skip or force the approval prompt, or rewrite a call's
+  arguments.
+- `match` picks what starts it: a regular expression on the prompt, or a tool name and a
+  glob on the command or path. Secrets for the hook (tokens) come from the environment,
+  the OS keyring, a file or a command, as for providers.
+- `on_error` decides what a crash or a timeout means: carry on with a warning (the
+  default), carry on quietly, or deny.
+- Hooks in the system config folder are enforced: users cannot replace or turn them off. A
+  project's `.quack/hooks.d` runs nothing until you trust the project.
+- Example: `defaults/hooks.d/jira.toml` adds every Jira issue a prompt links to, fetched
+  with your personal access token and given to the model as XML.
+
+```toml
+# hooks.d/jira.toml
+event = "user_prompt"
+match = { prompt = 'https?://\S+/browse/[A-Z][A-Z0-9_]+-\d+' }
+command = ["{python}", "{dir}/jira/jira.py"]
+env = { JIRA_URL = "https://jira.example.com", JIRA_TOKEN = { keyring = "jira" } }
+```
 
 ### Configuration
 
@@ -260,7 +293,7 @@ Not available yet:
 - Editor integration (ACP).
 - Sandboxing on Windows.
 - Renaming symbols through the language server.
-- Sub-agents and hooks.
+- Sub-agents.
 - `/fork` and `/export`.
 - Automatic reload when config files change.
 - MCP prompts, resources and OAuth.

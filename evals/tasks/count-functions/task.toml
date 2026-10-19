@@ -1,0 +1,4 @@
+category = "navigate"
+prompt = "How many top-level functions does src/textutil.py define? Reply with the number."
+[[check]]
+answer_contains = "5"

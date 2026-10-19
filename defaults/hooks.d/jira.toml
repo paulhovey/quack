@@ -1,0 +1,30 @@
+#:schema ../schemas/hook.json
+# Adds the Jira issues a prompt links to (https://jira.example.com/browse/PAY-1234) to
+# that prompt, so the model sees them before it answers. jira/jira.py fetches each issue
+# over Jira's REST API (Server, Data Center or Cloud) and returns it as XML. It needs
+# Python 3 and nothing else.
+#
+# To use it, copy this file and the jira/ folder to hooks.d in your config folder
+# (`quack config paths` shows where; an administrator can use the system folder, where
+# users cannot turn it off). Then delete the `enabled = false` line and set JIRA_URL.
+# `/doctor` checks the hook without running it.
+enabled = false
+description = "Jira issues linked in the prompt"
+event = "user_prompt"
+# Any Jira-style issue link. The script fetches only links to JIRA_URL.
+match = { prompt = 'https?://\S+/browse/[A-Z][A-Z0-9_]+-\d+' }
+command = ["{python}", "{dir}/jira/jira.py"]
+timeout_secs = 20
+on_error = "warn"
+
+[env]
+JIRA_URL = "https://jira.example.com"
+# A personal access token. From the environment, or from the OS keyring after
+# `quack keyring set jira`: JIRA_TOKEN = { keyring = "jira" }
+JIRA_TOKEN = { env = "JIRA_TOKEN" }
+# Jira Cloud: your account email here, and an API token as JIRA_TOKEN.
+# JIRA_USER = "you@example.com"
+# JIRA_MAX_ISSUES = "5"
+# JIRA_MAX_COMMENTS = "5"
+# JIRA_MAX_CHARS = "4000"
+# JIRA_CA_BUNDLE = "~/corp-ca.pem"

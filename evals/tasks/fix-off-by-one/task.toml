@@ -1,0 +1,8 @@
+category = "fix-test"
+prompt = "The tests in test_window.py fail. Find the bug in window.py and fix it; do not change the tests."
+requires = ["python"]
+[[check]]
+command = "{python} -m unittest -q test_window"
+[[check]]
+file = "test_window.py"
+contains = "self.assertEqual(last_n([1, 2, 3, 4], 2), [3, 4])"

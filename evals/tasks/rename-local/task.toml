@@ -1,0 +1,11 @@
+category = "single-edit"
+prompt = "In src/stats.py, rename the local variable `tmp` in `mean` to `total`."
+[[check]]
+file = "src/stats.py"
+not_contains = "tmp"
+[[check]]
+file = "src/stats.py"
+contains = "total = 0"
+[[check]]
+file = "src/stats.py"
+contains = "return total / len(values)"

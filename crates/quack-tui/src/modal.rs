@@ -1113,6 +1113,13 @@ pub(crate) fn stats(
     if let Some(tps) = r.tokens_per_sec {
         timing.line(field(theme, "speed", format!("{tps:.0} tokens/s typical")));
     }
+    let sampling = if r.sampling.is_empty() {
+        "the server's defaults".to_owned()
+    } else {
+        let parts: Vec<String> = r.sampling.iter().map(|(k, v)| format!("{k} {v}")).collect();
+        parts.join(" · ")
+    };
+    timing.line(field(theme, "sampling", sampling));
 
     // Tools: the busiest as bars in their transcript colours.
     let mut tools = Detail::default();

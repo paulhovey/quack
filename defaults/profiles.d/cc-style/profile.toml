@@ -56,3 +56,7 @@ name = "TodoWrite"
 maps_to = "todo"
 [tools.params]
 todos = { to = "items" }
+
+[[tools]]
+name = "AskUserQuestion"
+maps_to = "ask_user"

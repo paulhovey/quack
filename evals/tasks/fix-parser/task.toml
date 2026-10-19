@@ -1,0 +1,8 @@
+category = "fix-test"
+prompt = "`parse_duration` in durations.py gets some inputs wrong; the tests in test_durations.py show which. Fix the function so all tests pass, without editing the tests."
+requires = ["python"]
+[[check]]
+command = "{python} -m unittest -q test_durations"
+[[check]]
+file = "test_durations.py"
+contains = "self.assertEqual(parse_duration(\"1h30m\"), 5400)"

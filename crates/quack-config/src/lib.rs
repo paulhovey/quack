@@ -7,6 +7,7 @@
 
 mod diagnostic;
 mod edit;
+pub mod hooks;
 mod items;
 #[cfg(feature = "keyring")]
 mod keyring;
@@ -27,6 +28,7 @@ mod trust;
 
 pub use diagnostic::FileDiagnostic;
 pub use edit::{SettingRow, set_in_file};
+pub use hooks::HookFile;
 pub use items::{Item, ItemState, glob_match, is_loopback, load_dir_items, load_items, url_host};
 pub use load::{
     ConfigError, LayerReport, LayerStatus, LoadOptions, Loaded, Origin, ProjectStatus, load,
@@ -58,6 +60,32 @@ pub fn load_mcp(loaded: &Loaded) -> Vec<Item<McpServerFile>> {
         &loaded.settings.policy.mcp,
         |f| (!f.url.is_empty()).then_some(f.url.as_str()),
     );
+    items
+}
+
+/// Load `hooks.d/*.toml` from every active layer, merged by id. A project's files load
+/// only when the project is trusted. The system layer's hooks are enforced: a higher
+/// layer cannot replace or disable them, by file or with `[hooks] disabled`.
+pub fn load_hooks(loaded: &Loaded) -> Vec<Item<HookFile>> {
+    let layers = loaded.item_layers();
+    let mut items = load_items::<HookFile>(&layers, "hooks.d");
+    let system: Vec<_> = layers
+        .iter()
+        .filter(|(k, _)| *k == LayerKind::System)
+        .cloned()
+        .collect();
+    for enforced in load_items::<HookFile>(&system, "hooks.d") {
+        if let Some(slot) = items.iter_mut().find(|i| i.id == enforced.id) {
+            *slot = enforced;
+        }
+    }
+    for item in &mut items {
+        let listed = loaded.settings.hooks.disabled.contains(&item.id);
+        if listed && item.layer != LayerKind::System && !matches!(item.state, ItemState::Failed(_))
+        {
+            item.state = ItemState::Disabled("listed in `disabled`".into());
+        }
+    }
     items
 }
 

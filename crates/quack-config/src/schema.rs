@@ -3,6 +3,7 @@
 
 use serde_json::{Value, json};
 
+use crate::hooks::HookFile;
 use crate::lsp::LspServerFile;
 use crate::mcp::McpServerFile;
 use crate::profile::ProfileFile;
@@ -19,7 +20,7 @@ pub fn all() -> Vec<(&'static str, Value)> {
         ("profile.json", gen_(schemars::schema_for!(ProfileFile))),
         ("mcp.json", gen_(schemars::schema_for!(McpServerFile))),
         ("lsp.json", gen_(schemars::schema_for!(LspServerFile))),
-        ("hook.json", stub("Hook (hooks.d/<id>.toml)", "M3")),
+        ("hook.json", gen_(schemars::schema_for!(HookFile))),
         (
             "compat.json",
             stub("Other-harness detection list (compat.toml)", "M2"),

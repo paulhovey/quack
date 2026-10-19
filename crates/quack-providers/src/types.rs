@@ -1,6 +1,6 @@
 //! Provider-neutral request and stream types. Adapters translate these to and from the wire.
 
-use quack_config::provider::Sampling;
+use quack_config::provider::{Cost, Sampling};
 use quack_protocol::Usage;
 use serde::{Deserialize, Serialize};
 
@@ -150,9 +150,11 @@ impl ResponseBuilder {
 }
 
 /// A model reported by the provider's models endpoint.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DiscoveredModel {
     pub id: String,
     pub context_window: Option<u32>,
     pub max_output: Option<u32>,
+    /// Prices, when the endpoint lists them.
+    pub cost: Option<Cost>,
 }

@@ -132,10 +132,63 @@ on_error = "deny"                  # deny | allow | warn
 - `user_prompt` hooks can add context (`{"additional_context": "..."}`).
 - Hooks from the project layer require trust. System-layer hooks can't be disabled by users (enterprise enforcement).
 
+### As implemented (2026-10-19, ahead of M3)
+
+- **Files.** `quack-config/src/hooks.rs` (`HookFile`, schema `hook.json`), loaded by
+  `load_hooks` with the usual item rules: one file per hook, merged by id, a project's
+  files only when it is trusted. The system layer's hooks are enforced: a higher layer's
+  file with the same id is ignored, and `[hooks] disabled` skips only lower-layer hooks.
+- **`match`.** `tool` (glob on the tool name) and `pattern` (glob on the target: the
+  command for `shell`, the path relative to the workspace for file tools, otherwise the
+  arguments as JSON) for `pre_tool`/`post_tool`. `prompt` (a regular expression) for
+  `user_prompt`; its matches are sent as `matches`. A matcher on the wrong event, an
+  empty command or a bad regex makes the file fail to load, with a warning.
+- **`command`** is argv, run without a shell (`quack-shell::exec`) with the minimal
+  environment plus `env` (values are `Secret`s, resolved once, off the runtime) and the
+  process tree killed on timeout. `{dir}` is the hook file's folder, `{python}` the first
+  of `python3`/`python` (`py`/`python`/`python3` on Windows) on `PATH`, `~/` the home folder.
+  `cwd` defaults to the workspace root.
+- **Input.** `{"event", "hook", "session_id", "cwd", …}` plus the event's fields:
+  `user_prompt` `prompt` (what was typed) and `matches`; `pre_tool` `tool`, `args`,
+  `target`; `post_tool` the same plus `ok` and `output` (what the model will see);
+  `turn_end` `turn`, `outcome` (`complete`, `aborted`, `blocked`) and `usage` or `reason`;
+  `session_start`/`session_end` `source` (`startup`, `resume`, `new`, `quit`, `switch`);
+  `pre_compact` `reason` and `focus`.
+- **Output.** Exit 0 with nothing: carry on. Exit 0 with plain text: context. Exit 0 with
+  JSON: `decision` (`allow` | `deny` | `ask`), `message` (shown to the user, and the reason
+  for a denial), `additional_context`, `updated_args` (`pre_tool`). Exit 2: deny, stderr
+  is the reason. Any other exit, a timeout or JSON that does not parse is a failure,
+  handled by `on_error` (default `warn`).
+- **What each event can do.**
+  - `user_prompt`: add context (appended to the user message, after the cached prefix, and
+    saved with it, so `/resume` sends the same request), or deny (nothing is sent; the turn
+    ends with the reason).
+  - `pre_tool`: deny (the model gets "blocked by hook `<id>`: <reason>"), `ask` (always
+    ask, whatever the mode), `allow` (skip the approval prompt; deny rules still win and a
+    command outside the sandbox still asks), rewrite the arguments.
+  - `post_tool`: add context to the result the model sees.
+  - `session_start`: context for the session's first prompt.
+  - `pre_compact`: context appended to the summary instructions.
+  - `turn_end`, `session_end`: notification only; `turn_end` runs in the background.
+- **Order.** The hooks for one event run in id order, one after another; a later
+  `pre_tool` hook sees the arguments an earlier one changed, and a denial stops the rest.
+  A hook's context is capped at about 8,000 tokens.
+- **Reporting.** `Event::HookRan` (id, event, outcome, time, message, context tokens); the
+  TUI shows a line when a hook added context, decided or said something. Each run is a
+  `hook` record in the session log. `/doctor` has a hooks row: each file loads and its
+  program and `{dir}` files exist (nothing runs, no secrets are resolved).
+- **Tests.** `crates/quack-core/tests/hooks.rs`, with Python hooks against the mock model,
+  including the shipped `defaults/hooks.d/jira.toml` against a mock Jira.
+
 ## Audit log (enterprise)
 
 `[audit] path = "/var/log/quack/audit.jsonl"` (system layer) appends one line per tool execution: timestamp, user, session id, tool, subject, decision, decided by (rule/user/hook), exit status. File contents and model text are excluded by default (`audit.include_content = false`). It is local only, and shipping it elsewhere is the enterprise's job.
 
 ## Open questions
+
+- Should hooks for one event run in parallel? They run in order now, so `pre_tool`
+  rewrites compose; several slow `user_prompt` hooks add up.
+- A `/hooks` view (each hook, its last run and its log) once there is more than a doctor
+  row to show.
 
 - Is Windows AppContainer workable for arbitrary dev toolchains? AppContainer breaks many tools. This needs a spike, possibly settling for "restricted token + no-network firewall rule".

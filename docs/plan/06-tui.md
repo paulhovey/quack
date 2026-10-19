@@ -45,7 +45,9 @@ The panel is drawn at the top of the transcript area during startup. It collapse
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-Speed in the status bar: local and on-prem users care more about speed than dollars. The status bar shows the last response's generation speed (tokens per second, from server timings when reported, otherwise measured), and a details line in `/context` shows prompt processing time, time to first token and cache hits. Cost is shown only when a provider file declares prices.
+Choice bars (2026-10-19) sit between the transcript and the input, taking rows from the transcript (the startup panel hides while one shows): the model's `ask_user` questions, and the plan review after a plan-mode turn. Both number their choices, preselect one, and keep the input live so the user can type an answer or a revision instead ([04](04-agent-loop-and-tools.md#plan-mode)).
+
+Speed in the status bar: local and on-prem users care more about speed than dollars. The status bar shows the last response's generation speed (tokens per second, from server timings when reported, otherwise measured), and a details line in `/context` shows prompt processing time, time to first token and cache hits. Cost is shown only when the model is priced: by its provider file, or by the `pricing` its provider's models endpoint lists.
 
 ## Slash commands & modals
 
@@ -95,7 +97,7 @@ All configuration UIs share one modal widget, so they look and behave the same:
 | `/rewind` | (Esc Esc) | Pick an earlier user message. Choose conversation / files / both |
 | `/undo` | | Revert the last mutating tool call's file changes |
 | `/fork` | | Branch the session from here. `--worktree` runs the branch in its own git worktree ([07](07-sessions-memory-checkpoints.md#parallel-sessions-in-worktrees)) |
-| `/plan` | | Enter plan mode: read-only exploration ending in a plan to accept or revise ([04](04-agent-loop-and-tools.md#plan-mode)) |
+| `/plan` | | Enter plan mode: read-only exploration and a few questions, ending in a todo plan with a review bar to accept or revise ([04](04-agent-loop-and-tools.md#plan-mode)) |
 | `/bundles` | | Installed bundles with their contents; turn each on or off ([08](08-instructions-skills-commands.md#bundles)) |
 | `/title <text>` | | Rename the session |
 | `/export [md\|json]` | | Write transcript to a file |

@@ -114,6 +114,20 @@ pub async fn run(mut engine: EngineHandle, prompt: String, format: OutputFormat)
                     let _ = writeln!(stderr, "  ✗ denied: needs approval (see --permission-mode)");
                 }
             }
+            Event::Questions { call_id, .. } => {
+                // Nobody to answer: the model decides and says what it assumed.
+                let _ = engine
+                    .ops
+                    .send(Op::AnswerQuestions {
+                        call_id,
+                        answers: Vec::new(),
+                        stop_asking: true,
+                    })
+                    .await;
+                if text_mode {
+                    let _ = writeln!(stderr, "  › questions skipped (headless)");
+                }
+            }
             Event::Compacting { reason } => {
                 if text_mode {
                     let _ = writeln!(stderr, "› summarizing earlier conversation ({reason})");

@@ -332,7 +332,9 @@ pub(crate) async fn eval(
             results.push(r);
         }
     }
-    if !opts.keep {
+    if opts.keep {
+        eprintln!("kept the workspaces: {}", opts.scratch.display());
+    } else {
         let _ = std::fs::remove_dir_all(&opts.scratch);
     }
     let first = |f: fn(&eval::RunResult) -> &str| {
@@ -348,6 +350,11 @@ pub(crate) async fn eval(
         date: eval::today(),
         model: first(|r| r.model.as_str()),
         profile: first(|r| r.profile.as_str()),
+        sampling: results
+            .iter()
+            .find(|r| r.skipped.is_none() && !r.model.is_empty())
+            .map(|r| eval::Report::sampling_of(&r.sampling))
+            .unwrap_or_default(),
         results,
     };
     println!("{}", eval::table(&report));
@@ -361,6 +368,7 @@ pub(crate) async fn eval(
             .join(&report.date)
             .join(name)
     });
+    let out = eval::unused_path(&out);
     let written = out
         .parent()
         .map_or(Ok(()), std::fs::create_dir_all)

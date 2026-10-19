@@ -1,0 +1,38 @@
+{
+  "harness": "quack 0.1.0",
+  "date": "2026-10-19",
+  "model": "charm-hyper/qwen3.8-flash",
+  "profile": "generic",
+  "results": [
+    {
+      "task": "find-constant",
+      "category": "navigate",
+      "passed": true,
+      "steps": 2,
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "parse_failures": 0,
+      "edit_failures": 0,
+      "prompt_tokens": 6781,
+      "cached_tokens": 3072,
+      "completion_tokens": 63,
+      "compactions": 0,
+      "seconds": 3.283075842
+    },
+    {
+      "task": "fix-off-by-one",
+      "category": "fix-test",
+      "passed": true,
+      "steps": 4,
+      "tool_calls": 4,
+      "tool_errors": 0,
+      "parse_failures": 0,
+      "edit_failures": 0,
+      "prompt_tokens": 15102,
+      "cached_tokens": 11776,
+      "completion_tokens": 616,
+      "compactions": 0,
+      "seconds": 18.229170261
+    }
+  ]
+}

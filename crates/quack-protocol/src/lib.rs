@@ -26,6 +26,14 @@ pub enum Op {
         call_id: CallId,
         decision: ApprovalDecision,
     },
+    /// Answers to an `Event::Questions`, one per question in order. `stop_asking`: the
+    /// user wants no more questions this turn.
+    AnswerQuestions {
+        call_id: CallId,
+        answers: Vec<Answer>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        stop_asking: bool,
+    },
     SetModel {
         provider: ProviderId,
         model: ModelId,
@@ -235,6 +243,11 @@ pub enum Event {
         call_id: CallId,
         request: ApprovalRequest,
     },
+    /// The model asks the user (`ask_user`); answered with `Op::AnswerQuestions`.
+    Questions {
+        call_id: CallId,
+        questions: Vec<Question>,
+    },
     TurnComplete {
         turn: TurnId,
         usage: Usage,
@@ -324,6 +337,22 @@ pub enum Event {
         #[serde(default)]
         replaced: u32,
     },
+    /// A hook ran (docs/plan/11-security.md#hooks) on event `on`. `outcome` is `ok`, `context` (it
+    /// added context for the model), `allowed`, `denied`, `asked`, `updated` (it changed a
+    /// tool call's arguments) or `failed`.
+    HookRan {
+        id: String,
+        /// The hook's event, e.g. `user_prompt`.
+        on: String,
+        outcome: String,
+        ms: u64,
+        /// What the hook said, or why it failed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+        /// Estimated tokens of context it added.
+        #[serde(default)]
+        context_tokens: u32,
+    },
     // diagnostics
     /// Something worth knowing that is not a problem, e.g. an offer.
     Notice {
@@ -376,6 +405,42 @@ pub enum ApprovalDecision {
     AlwaysAllow { scope: WriteScope },
     Deny,
     DenyWithFeedback { feedback: String },
+}
+
+/// A question from the model to the user.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Question {
+    /// A word or two naming the topic, e.g. `Storage`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub header: String,
+    pub question: String,
+    /// Choices; empty means a free-text answer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<QuestionOption>,
+    /// The option the model recommends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuestionOption {
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// The user's answer to one [`Question`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "answer", rename_all = "snake_case")]
+pub enum Answer {
+    /// An option, by index.
+    Picked {
+        index: usize,
+    },
+    Text {
+        text: String,
+    },
+    Skipped,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -661,6 +726,10 @@ pub struct StatsReport {
     /// A saved session that was resumed: timings start at the resume.
     #[serde(default)]
     pub resumed: bool,
+    /// The sampling settings the current model's requests carry (`temperature`, `top_p`,
+    /// ...), from its model entry and profile. Empty: the server's defaults apply.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sampling: Vec<(String, f64)>,
     /// Each request, oldest first; at most the last [`StatsReport::HISTORY`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<RequestStat>,

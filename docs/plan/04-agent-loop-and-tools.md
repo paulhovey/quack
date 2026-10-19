@@ -27,11 +27,12 @@ Op::UserTurn
 
 `/plan` (or Shift-Tab to `plan`) runs turns with the `read-only` permission set plus `todo` and `ask_user`, and a short system addendum asking for a plan instead of changes. The plan is shown as a reviewable message; **Accept** switches back to the previous mode and sends "carry out the plan" as the next turn, **Revise** keeps planning. The plan is stored in the session so `/resume` restores it. The addendum is appended at the end of the prompt, not the start, to keep the cached prefix ([05](05-context-management.md#stable-prefix-layout)).
 
-As implemented (M2, 2026-10-18; `todo` and `ask_user` don't exist yet):
+As implemented (M2, 2026-10-18; questions and the review bar 2026-10-19):
 - Plan mode is an overlay on the session's permissions. Edits are refused. Shell commands run only if they read (`ls`, `cat`, `rg`, `find` without `-exec`/`-delete`, `git status|log|diff|show|…`; every command in a pipeline or list must read, and nothing may be redirected to a file) or match an allow rule. Reads follow the normal rules.
 - The request for a plan (`plan.md` in the profile, or a compiled-in default) is appended to each user message sent in plan mode. It is stored in the history, so a resume sends exactly the same request.
 - `/plan` enters plan mode and `/plan <task>` enters it and sends the task. `/plan accept` returns to the previous mode and sends "Carry out the plan above." `/plan off` leaves without carrying it out. Shift-Tab cycles ask → auto-edit → plan.
-- After each turn in plan mode the TUI reminds the user how to accept or revise the plan. The status bar shows `plan`.
+- The default request asks the model to explore first, then to ask the user with `ask_user` about the few decisions that would change the plan in a big way (scope, approach, a trade-off, an unclear requirement), batched in one call with options and its recommendation, and never about what the code or docs answer. It then records the plan as a `todo` checklist (all pending) and replies with a short summary: decisions, files, how to check. The accepted checklist is the one that ticks off during execution.
+- After each turn in plan mode the TUI shows a review bar above the input: the checklist and three choices (carry it out in the mode plan mode started from; carry it out in `auto-edit`, offered when that mode was `ask` or `read-only`; keep planning). Enter or `1`–`3` picks, Esc keeps planning, and typing writes a revision that Enter sends as the next plan-mode message. `/plan accept` and `/plan off` still work. The status bar shows `plan`.
 - A mode set during startup is applied once a model is ready. A session switch resets the mode to the configured one.
 
 ### Planner / editor split
@@ -81,11 +82,13 @@ Internal tools have stable internal names and schemas. Profiles map onto them ([
 | `todo` | Mutating | Session task list, shown in the UI |
 | `skill` | ReadOnly | Load a skill's body on demand ([08](08-instructions-skills-commands.md)) |
 | `tool_search` | ReadOnly | Search deferred tools (MCP) and activate them ([09](09-mcp.md)) |
-| `ask_user` | Interactive | Ask the user a structured question |
+| `ask_user` | Mutating | Ask the user up to 4 questions with options (built 2026-10-19, below) |
 | `web_fetch` | ReadOnly | **Disabled by default.** Unavailable when `offline = true` |
 | `task` | Mutating | Sub-agent with its own context. M3 ([roadmap](roadmap.md)) |
 
-As implemented (2026-10-18): `todo` replaces the whole checklist on each call (items with `pending` / `in_progress` / `done`; the shapes models commonly send are accepted). While anything is unfinished, the plan is appended to the last message of every request, not stored in the history, so it survives long tool output and compaction without touching the cached prefix. It needs no approval in any mode. This follows the component study in [arXiv 2609.20804](https://arxiv.org/abs/2609.20804) (persistent plan, re-shown each step: an accuracy aid for weaker models, a cost saver for stronger ones). The TUI shows it as a tool line; there is no todo pane yet.
+As implemented (2026-10-18): `todo` replaces the whole checklist on each call (items with `pending` / `in_progress` / `done`; the shapes models commonly send are accepted). While anything is unfinished, the plan is appended to the last message of every request, not stored in the history, so it survives long tool output and compaction without touching the cached prefix. It needs no approval in any mode. This follows the component study in [arXiv 2609.20804](https://arxiv.org/abs/2609.20804) (persistent plan, re-shown each step: an accuracy aid for weaker models, a cost saver for stronger ones). The TUI shows it as a tool line, a strip above the input, and `/todo` for the whole list.
+
+As implemented (2026-10-19): `ask_user` takes `questions: [{question, header?, options?: [label | {label, description}], recommended?}]`, at most 4 questions and 6 options each; a single `{question, options}`, `choices`, and a `(recommended)` mark in a label are accepted too. It needs no approval in any mode (`Subject::Plan`). The engine sends `Event::Questions` and waits for `Op::AnswerQuestions` (one `Answer` per question: `picked`, `text` or `skipped`, plus `stop_asking`); the wait counts as user time in `/stats`, and a `questions` record goes in the session log. The model reads `Q: … / A: …` lines, a skip as "decide yourself and say what you assumed", and `stop_asking` as no more questions. Headless runs (`quack exec`, `quack eval`) answer at once with everything skipped. The TUI shows a picker above the input: Up/Down or `1`–`9` and Enter pick (the recommendation is preselected), typing answers in the user's own words, Esc skips, Left goes back, Ctrl-S skips the rest and stops the asking. Profiles map it like any tool (`AskUserQuestion` in `cc-style`).
 
 Each tool lives in `quack-tools/src/<tool>.rs` and implements:
 

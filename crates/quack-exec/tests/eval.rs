@@ -42,6 +42,13 @@ async fn runs_checks_and_reports() {
         .respond_with(sse(json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"edit","arguments":args}}]},"finish_reason":"tool_calls"}]})))
         .mount(&server)
         .await;
+    // The asking task: a question nobody is there to answer, then the answer.
+    let ask = json!({"question": "Which file?", "options": ["a.txt", "b.txt"]}).to_string();
+    Mock::given(method("POST"))
+        .and(body_string_contains("Ask me first"))
+        .respond_with(sse(json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"q1","function":{"name":"ask_user","arguments":ask}}]},"finish_reason":"tool_calls"}]})))
+        .mount(&server)
+        .await;
     // Anything else: a wrong answer.
     Mock::given(method("POST"))
         .respond_with(sse(
@@ -66,6 +73,14 @@ async fn runs_checks_and_reports() {
         "category = \"navigate\"\nprompt = \"What is the port?\"\n[[check]]\nanswer_contains = \"8080\"\n",
         &[("config.toml", "port = 8080\n")],
     );
+    // Unattended: the question is skipped at once and the model goes on.
+    task(
+        &suite,
+        "asks",
+        "category = \"navigate\"\nprompt = \"Ask me first.\"\n[[check]]\nanswer_contains = \"7\"\n\
+         [[check]]\ntool_called = \"ask_user\"\n",
+        &[],
+    );
     task(
         &suite,
         "needs-tool",
@@ -77,7 +92,10 @@ async fn runs_checks_and_reports() {
     std::fs::create_dir_all(user.join("providers.d")).expect("mkdir");
     std::fs::write(
         user.join("providers.d").join("mock.toml"),
-        format!("base_url = \"{}/v1\"\nmodels = [\"tiny\"]\n", server.uri()),
+        format!(
+            "base_url = \"{}/v1\"\nmodels = [{{ id = \"tiny\", sampling = {{ temperature = 0.3, top_k = 40 }} }}]\n",
+            server.uri()
+        ),
     )
     .expect("provider");
     let mut env: HashMap<String, OsString> = HashMap::new();
@@ -99,7 +117,7 @@ async fn runs_checks_and_reports() {
         env,
     };
     let tasks = load_tasks(&suite, &[]).expect("tasks");
-    assert_eq!(tasks.len(), 3);
+    assert_eq!(tasks.len(), 4);
     let mut results = Vec::new();
     for t in &tasks {
         results.push(run_task(t, &opts, 0).await);
@@ -109,10 +127,17 @@ async fn runs_checks_and_reports() {
     assert!(edit.passed, "{edit:?}");
     assert_eq!((edit.steps, edit.tool_calls, edit.edit_failures), (2, 1, 0));
     assert_eq!(edit.model, "mock/tiny");
+    // What the requests carried is recorded with the result.
+    assert_eq!(
+        edit.sampling,
+        [("temperature".to_owned(), 0.3), ("top_k".to_owned(), 40.0)]
+    );
     let answer = by("answer");
     assert!(!answer.passed);
     assert_eq!(answer.failed_checks.len(), 1, "{answer:?}");
     assert!(by("needs-tool").skipped.is_some());
+    let asks = by("asks");
+    assert!(asks.passed, "{asks:?}");
     // Workspaces are cleaned up.
     assert!(std::fs::read_dir(tmp.path().join("scratch")).map_or(true, |mut d| d.next().is_none()));
 
@@ -121,9 +146,14 @@ async fn runs_checks_and_reports() {
         date: "2026-10-18".into(),
         model: "mock/tiny".into(),
         profile: "empty".into(),
+        sampling: Report::sampling_of(&edit.sampling),
         results,
     };
-    assert_eq!(report.score(), (1, 2));
-    assert!(table(&report).contains("1/2 passed"));
+    assert_eq!(report.score(), (2, 3));
+    let text = table(&report);
+    assert!(
+        text.contains("sampling: temperature 0.3, top_k 40 · 2/3 passed"),
+        "{text}"
+    );
     assert!(load_tasks(&suite, &["nope".into()]).is_err());
 }

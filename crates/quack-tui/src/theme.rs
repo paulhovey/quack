@@ -137,7 +137,7 @@ impl Theme {
             "read" | "ls" | "glob" | "grep" | "find" | "lsp" | "index" => self.accent,
             "edit" | "write" | "edit_hashline" | "patch" | "apply_patch" => self.warn,
             "shell" | "bash" | "$" | "run" => self.magenta,
-            "plan" | "todo" => self.ok,
+            "plan" | "todo" | "ask" | "ask_user" => self.ok,
             _ => self.accent,
         }
     }

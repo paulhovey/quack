@@ -548,6 +548,13 @@
         "dir": ""
       }
     },
+    "hooks": {
+      "$ref": "#/$defs/ItemToggles",
+      "default": {
+        "disabled": []
+      },
+      "description": "Turn off hooks from lower layers; the system layer's hooks cannot be turned off."
+    },
     "instructions": {
       "$ref": "#/$defs/InstructionSettings",
       "default": {

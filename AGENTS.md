@@ -30,6 +30,7 @@ cargo run -q -p quack-cli -- config schema --dir defaults/schemas   # after chan
   - `scripts/no-egress.sh` runs in a loopback-only network namespace with `strace -e connect` (Linux).
   - `scripts/first-frame.sh <ms>` checks the startup budget.
   - `scripts/local-server-ci.sh` and `scripts/local-server-turn.sh` run a real llama.cpp or Ollama turn on CPU.
+  - `scripts/eval-matrix.sh` and `scripts/eval-table.py` run and compare `quack eval` across models and profiles (see "Evaluating new models").
 
 ## Architecture
 
@@ -70,6 +71,24 @@ There is one engine and three in-process clients, connected by an Op/Event proto
 - A profile is a folder in `defaults/profiles.d/` (`profile.toml` + `system.md`). Prompts must be original text; `source` says what the tool names and shapes follow. Family profiles ship with empty `[match]` lists until `quack eval` shows they beat `generic`.
 - `quack eval` (`quack-exec/src/eval.rs`) runs `evals/tasks/*`. **Every task calls the model**, so running it costs money on a paid key; prove runner changes with `quack-exec/tests/eval.rs` (mock server) instead.
 - A new task needs `task.toml`, `repo/` and `solution/` (files, `ANSWER`, `DELETE`). `cargo test -p quack-exec --test suite` checks that it fails as given and passes when solved. Commands use `{python}` and stay portable (no shell quoting tricks: put logic in a `check.py`).
+- Check behaviour, not exact text. A `contains` check over several lines fails a correct fix that adds a comment (this happened to `big-file-edit`); import the module in a `check.py` instead.
+
+### Evaluating new models (live calls: costs money, so say so first)
+
+1. **Find the ids and prices.** A provider's `/models` is free (no inference), and discovery reads its `pricing`, so eval results carry the cost. For Charm Hyper: `curl -s -H "Authorization: Bearer $CHARM_API_KEY" https://hyper.charm.land/v1/models` (never echo the key). Estimate before running: one suite pass is about 21 × (3k fresh + 12k cached prompt + 1.5k output) tokens.
+2. **Smoke-test one cheap task** to prove the key, the model id and the cost column: `QUACK_DEFAULTS_DIR=defaults target/debug/quack eval -m charm-hyper/<model> --profile generic --tasks fix-typo --out /tmp/smoke.json`.
+3. **Run the matrix**: each model with `generic` and its family profile (Qwen → `qwen-code`; GLM, DeepSeek, MiniMax, MiMo → `cc-style`; Kimi → `kimi-code`; gpt-oss → `codex`):
+   `scripts/eval-matrix.sh charm-hyper/glm-5.3:generic,cc-style charm-hyper/kimi-k3:generic,kimi-code ...`
+   Models run in parallel; `EVAL_ARGS="--repeat 3"` or `--tasks a,b` pass through. It ends with `scripts/eval-table.py evals/results/<date>`, which prints one row per model and profile.
+4. **Read the signals, not the pass rate**, which saturates on this suite:
+   - **parse failures**: the profile's tool names or argument shapes don't suit the model. Any non-zero count is a profile bug.
+   - **edit failures**: the edit tool's description or format confuses the model.
+   - **steps and prompt tokens**: each step re-sends the whole context, so they decide the cost.
+   - **cached %**: a low share means the request prefix is changing somewhere it shouldn't.
+   - **tool errors** count shell commands that exit non-zero (a `grep` with no match, `pytest` finding no tests), so they run high for shell-first profiles like `codex`. Look at a session before reading much into them.
+5. **Look at a run before blaming the model.** Rerun the task with `--keep`. The session log is in `~/.cache/quack/eval/<pid>/<task>-<run>/data/sessions/*/*/events.jsonl`. Fix false negatives in the check first.
+6. **Turning a profile on**: a family profile gets `[match]` globs only when it beats `generic` at `--repeat 3`, with no parse failures and fewer edit failures or steps at the same pass rate. One run per task is noise (±5–10% on steps).
+7. **Record the result**: a dated line in `docs/plan/roadmap.md` (models, profiles, total cost, the decision). The baseline is 2026-10-19: 8 models × 2 profiles on Charm Hyper, all 21/21, $2.42 in total, and no family profile clearly ahead of `generic`.
 
 ### Adding a slash command
 

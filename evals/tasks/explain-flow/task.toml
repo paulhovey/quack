@@ -1,0 +1,6 @@
+category = "navigate"
+prompt = "When `main()` in main.py runs, which function finally writes the report file, and in which file is it defined? Reply with the function name and the path."
+[[check]]
+answer_contains = "write_report"
+[[check]]
+answer_contains = "output.py"

@@ -1,0 +1,7 @@
+category = "create"
+prompt = "Create slug.py with a function `slugify(text)` that lowercases the text, turns every run of characters that are not letters or digits into a single hyphen, and strips hyphens from both ends. The tests in test_slug.py must pass."
+requires = ["python"]
+[[check]]
+exists = "slug.py"
+[[check]]
+command = "{python} -m unittest -q test_slug"

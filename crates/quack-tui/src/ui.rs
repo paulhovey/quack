@@ -18,7 +18,10 @@ const MAX_INPUT_LINES: usize = 6;
 const MAX_POPUP_ROWS: usize = 8;
 
 pub(crate) fn draw(f: &mut Frame<'_>, app: &App) {
-    let panel_rows = if app.panel_visible() {
+    // The question or plan review bar takes rows from the transcript, keeping a few; the
+    // startup panel gives way to it.
+    let choices = choices(app, usize::from(f.area().width).saturating_sub(2));
+    let panel_rows = if app.panel_visible() && choices.is_none() {
         u16::try_from(app.startup.len()).unwrap_or(0) + 1
     } else {
         0
@@ -33,10 +36,18 @@ pub(crate) fn draw(f: &mut Frame<'_>, app: &App) {
     } else {
         u16::from(plan_open(app))
     };
-    let [header, panel, transcript, plan, input, status] = Layout::vertical([
+    let choice_rows = choices.as_ref().map_or(0, |c| {
+        let room = f
+            .area()
+            .height
+            .saturating_sub(1 + panel_rows + plan_rows + input_rows + 1 + 3);
+        u16::try_from(c.height()).unwrap_or(u16::MAX).min(room)
+    });
+    let [header, panel, transcript, choice_area, plan, input, status] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(panel_rows),
         Constraint::Min(1),
+        Constraint::Length(choice_rows),
         Constraint::Length(plan_rows),
         Constraint::Length(input_rows),
         Constraint::Length(1),
@@ -56,6 +67,9 @@ pub(crate) fn draw(f: &mut Frame<'_>, app: &App) {
     draw_input(f, app, input);
     draw_status(f, app, status);
     draw_popup(f, app, transcript);
+    if let Some(c) = choices {
+        draw_choices(f, app, choice_area, c);
+    }
     draw_approval(f, app, transcript);
     if let Some(modal) = &app.modal {
         modal.draw(f, &app.theme, &app.glyphs);
@@ -302,6 +316,23 @@ fn tool_rows(app: &App, tool: &ToolEntry, width: usize, rows: &mut Vec<Line<'sta
                 Span::styled(format!("     {mark} "), style),
                 Span::styled(truncate(&text, width.saturating_sub(6)), text_style),
             ]));
+        }
+        return;
+    }
+
+    if tool.name == "ask_user" && tool.ok == Some(true) {
+        let mut q = "";
+        for l in tool.detail.lines() {
+            if let Some(rest) = l.strip_prefix("Q: ") {
+                q = rest;
+            } else if let Some(a) = l.strip_prefix("A: ") {
+                let q = truncate(q, width.saturating_sub(10) / 2);
+                let used = q.width() + 9;
+                rows.push(Line::from(vec![
+                    Span::styled(format!("     {q} → "), t.dim),
+                    Span::raw(truncate(a, width.saturating_sub(used))),
+                ]));
+            }
         }
         return;
     }
@@ -823,6 +854,166 @@ fn draw_approval(f: &mut Frame<'_>, app: &App, above: Rect) {
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
+/// The question or plan review bar, built before layout so it can take its rows.
+struct Choices<'a> {
+    title: String,
+    /// The question, or the plan; it gives way first when rows are short.
+    body: Vec<Line<'a>>,
+    /// The choices and the keys line.
+    rows: Vec<Line<'a>>,
+}
+
+impl Choices<'_> {
+    /// Rows wanted, borders included.
+    fn height(&self) -> usize {
+        let spacer = usize::from(!self.body.is_empty());
+        self.body.len() + spacer + self.rows.len() + 2
+    }
+}
+
+/// Numbered choices above the input: the model's questions (`ask_user`), or the plan
+/// review once a plan-mode turn ends. The input stays live for typed answers.
+fn choices(app: &App, width: usize) -> Option<Choices<'_>> {
+    if app.approval.is_some() {
+        return None;
+    }
+    let t = &app.theme;
+    let (arrows, left) = if app.info.ui.ascii {
+        ("up/down", "left")
+    } else {
+        ("↑↓", "←")
+    };
+    // (label, description, recommended)
+    let mut lead: Vec<Line<'_>> = Vec::new();
+    let mut options: Vec<(String, Option<String>, bool)> = Vec::new();
+    let (title, body, selected, own, keys) = if let Some(a) = &app.asking {
+        let q = a.question();
+        let n = a.questions.len();
+        let count = if n > 1 {
+            format!("{}/{n}", a.current + 1)
+        } else {
+            String::new()
+        };
+        let title = match (q.header.is_empty(), count.is_empty()) {
+            (true, true) => " Question ".to_owned(),
+            (true, false) => format!(" Question {count} "),
+            (false, true) => format!(" {} ", q.header),
+            (false, false) => format!(" {} · {count} ", q.header),
+        };
+        // The question is part of the choices, never cut.
+        let body: Vec<Line<'_>> = Vec::new();
+        lead = wrap(&q.question, width.saturating_sub(1))
+            .into_iter()
+            .map(|l| Line::styled(format!(" {l}"), Style::new().add_modifier(Modifier::BOLD)))
+            .collect();
+        for (i, o) in q.options.iter().enumerate() {
+            options.push((
+                o.label.clone(),
+                o.description.clone(),
+                q.recommended == Some(i),
+            ));
+        }
+        let own = if app.input.is_empty() {
+            "Type your own answer below"
+        } else {
+            "Your own answer (Enter sends it)"
+        };
+        let back = if a.current > 0 {
+            format!("  {left} back")
+        } else {
+            String::new()
+        };
+        let keys = format!(
+            " {arrows} choose  enter confirm  esc skip{back}  ctrl-s stop asking  ctrl-c interrupts"
+        );
+        (title, body, a.selected, Some(own), keys)
+    } else {
+        let selected = app.review?;
+        let body: Vec<Line<'_>> = app
+            .plan
+            .iter()
+            .map(|(state, text)| {
+                let (mark, style) = plan_mark(app, *state);
+                Line::from(vec![
+                    Span::styled(format!(" {mark} "), style),
+                    Span::raw(truncate(text, width.saturating_sub(4))),
+                ])
+            })
+            .collect();
+        for (_, label) in app.review_choices() {
+            options.push((label, None, false));
+        }
+        let keys =
+            format!(" {arrows} choose  enter confirm  esc keep planning  or type what to change");
+        (
+            " Ready to carry out this plan? ".to_owned(),
+            body,
+            selected,
+            None,
+            keys,
+        )
+    };
+
+    let mut rows = lead;
+    for (i, (label, description, recommended)) in options.iter().enumerate() {
+        let on = i == selected;
+        let lead = if on { app.glyphs.bar } else { " " };
+        let style = if on {
+            t.accent.add_modifier(Modifier::BOLD)
+        } else {
+            Style::new()
+        };
+        let mut spans = vec![
+            Span::styled(lead.to_owned(), t.accent),
+            Span::styled(format!("{}. {label}", i + 1), style),
+        ];
+        if *recommended {
+            spans.push(Span::styled(" (recommended)", t.ok));
+        }
+        if let Some(d) = description {
+            let used: usize = spans.iter().map(|s| s.content.width()).sum();
+            let room = width.saturating_sub(used + 3);
+            if room > 8 {
+                spans.push(Span::styled(format!(" · {}", truncate(d, room)), t.dim));
+            }
+        }
+        rows.push(Line::from(spans));
+    }
+    if let Some(own) = own {
+        let on = selected == options.len();
+        let lead = if on { app.glyphs.bar } else { " " };
+        let style = if on { t.accent } else { t.dim };
+        rows.push(Line::from(vec![
+            Span::styled(lead.to_owned(), t.accent),
+            Span::styled(format!("{}. {own}", options.len() + 1), style),
+        ]));
+    }
+    rows.push(Line::styled(truncate(&keys, width), t.dim));
+    Some(Choices { title, body, rows })
+}
+
+fn draw_choices(f: &mut Frame<'_>, app: &App, area: Rect, c: Choices<'_>) {
+    if area.height == 0 {
+        return;
+    }
+    let t = &app.theme;
+    // The choices first; a long body (a plan) gives way, keeping its first lines.
+    let room = usize::from(area.height)
+        .saturating_sub(2 + c.rows.len() + 1)
+        .min(c.body.len());
+    let mut lines: Vec<Line<'_>> = c.body.into_iter().take(room).collect();
+    if !lines.is_empty() {
+        lines.push(Line::raw(""));
+    }
+    lines.extend(c.rows);
+    let title = c.title;
+    let block = Block::bordered()
+        .title(Span::styled(title, t.pill(t.accent)))
+        .border_set(app.glyphs.border)
+        .border_style(t.accent);
+    f.render_widget(Paragraph::new(lines).block(block), area);
+}
+
 /// What the model is doing right now, for the status bar.
 fn activity(app: &App) -> String {
     match app.transcript.last() {
@@ -1246,6 +1437,7 @@ mod tests {
             compactions: 1,
             pruned: 8,
             resumed: false,
+            sampling: vec![("temperature".into(), 0.7), ("top_k".into(), 20.0)],
             // A context that grows, with a dip at the compaction.
             history: (0..23_u32)
                 .map(|i| RequestStat {
@@ -1611,6 +1803,69 @@ mod tests {
         app.context = Some((70_000, 104_000));
         app.speed = Some(48.0);
         insta::assert_snapshot!(render(&app, 80, 24));
+    }
+
+    #[test]
+    fn question_and_plan_review_bars() {
+        use crate::app::PlanState;
+        use quack_protocol::{CallId, Question, QuestionOption, TurnId, Usage};
+        let mut app = started_app();
+        app.on_engine(Event::Questions {
+            call_id: CallId("q1".into()),
+            questions: vec![
+                Question {
+                    header: "Storage".into(),
+                    question: "Where should the login tokens live?".into(),
+                    options: vec![
+                        QuestionOption {
+                            label: "OS keyring".into(),
+                            description: Some("safest; needs secret-tool on Linux".into()),
+                        },
+                        QuestionOption {
+                            label: "A dotfile".into(),
+                            description: None,
+                        },
+                    ],
+                    recommended: Some(0),
+                },
+                Question {
+                    header: String::new(),
+                    question: "Which database?".into(),
+                    options: Vec::new(),
+                    recommended: None,
+                },
+            ],
+        });
+        let s = render(&app, 80, 24);
+        assert!(
+            s.contains("Storage · 1/2") && s.contains("(recommended)"),
+            "{s}"
+        );
+        insta::assert_snapshot!("question_bar_80x24", s);
+
+        app.asking = None;
+        app.on_engine(Event::PermissionMode {
+            mode: "plan".into(),
+        });
+        app.plan = vec![
+            (PlanState::Pending, "add the token store".into()),
+            (PlanState::Pending, "wire the login command".into()),
+            (PlanState::Pending, "test it against the mock server".into()),
+        ];
+        app.on_engine(Event::TurnComplete {
+            turn: TurnId(1),
+            usage: Usage {
+                prompt_tokens: 1,
+                completion_tokens: 1,
+                cached_prompt_tokens: None,
+            },
+        });
+        let s = render(&app, 100, 30);
+        assert!(
+            s.contains("Ready to carry out this plan?") && s.contains("wire the login command"),
+            "{s}"
+        );
+        insta::assert_snapshot!("plan_review_bar_100x30", s);
     }
 
     #[test]

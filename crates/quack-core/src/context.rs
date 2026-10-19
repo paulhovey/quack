@@ -152,6 +152,13 @@ pub(crate) async fn compact_now(
     };
     let cut = compact::cut_point(history, keep_turns, keep, scale)
         .ok_or("nothing to compact yet: the conversation is only the current turn")?;
+    let hooked = ctx
+        .hooks(
+            quack_config::hooks::HookEvent::PreCompact,
+            serde_json::json!({ "reason": reason, "focus": focus }),
+            crate::hooks::Target::None,
+        )
+        .await;
     ctx.emit(Event::Compacting {
         reason: reason.to_owned(),
     });
@@ -163,6 +170,10 @@ pub(crate) async fn compact_now(
         .unwrap_or_else(|| compact::DEFAULT_PROMPT.to_owned());
     if let Some(f) = focus.map(str::trim).filter(|f| !f.is_empty()) {
         prompt.push_str(&format!("\n\nPay particular attention to: {f}"));
+    }
+    if let Some(extra) = hooked.context_text() {
+        prompt.push_str("\n\n");
+        prompt.push_str(&extra);
     }
     // About 60% of the budget in characters, leaving room for the prompt and the reply.
     let text = compact::transcript(&history[..cut], budget as usize * 2);

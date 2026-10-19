@@ -1,0 +1,5 @@
+category = "long-context"
+prompt = "In handlers.py, the function `handle_event_742` returns the wrong status: it should return \"archived\" instead of \"active\". Fix only that function."
+requires = ["python"]
+[[check]]
+command = "{python} check.py"

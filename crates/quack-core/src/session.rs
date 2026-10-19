@@ -3,7 +3,8 @@
 //! Record types: `session_start`, `resume`, `message` (one chat message, exactly as sent),
 //! `tool` (UI summary of a tool call), `usage` (with `cost` when priced), `prune` (tool results replaced),
 //! `compaction` (history before `cut` replaced by `message`), `rewind` (history cut back
-//! to its first `to` messages).
+//! to its first `to` messages), `approval` and `questions` (what the user answered; replay
+//! skips them, since the tool results carry the answers).
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

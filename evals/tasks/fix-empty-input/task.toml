@@ -1,0 +1,8 @@
+category = "fix-test"
+prompt = "Run the tests in tests/test_median.py, then fix the failing case in stats/median.py without changing the tests."
+requires = ["python"]
+[[check]]
+command = "{python} -m unittest -q tests.test_median"
+[[check]]
+file = "tests/test_median.py"
+contains = "self.assertIsNone(median([]))"

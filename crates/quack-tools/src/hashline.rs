@@ -349,6 +349,7 @@ mod tests {
             max_timeout: std::time::Duration::from_secs(5),
             cancel: Default::default(),
             on_output: None,
+            ask: None,
             reads: Default::default(),
             memory: None,
             skills: Default::default(),

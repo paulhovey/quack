@@ -23,6 +23,7 @@ quack-sandbox.workspace = true
 quack-store.workspace = true
 quack-instructions.workspace = true
 futures.workspace = true
+regex.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

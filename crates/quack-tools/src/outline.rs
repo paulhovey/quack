@@ -66,30 +66,31 @@ impl Outline {
     }
 
     /// The symbol a name points at: `name`, or `Parent::name` / `Parent.name` for one
-    /// inside another. The innermost match wins.
+    /// inside another (a C++ `Parent::name` defined outside its class counts too). The
+    /// longest match wins, so a definition beats its prototype, then the innermost.
     pub fn find(&self, query: &str) -> Option<&Symbol> {
         let parts: Vec<&str> = query.split([':', '.']).filter(|p| !p.is_empty()).collect();
         let (last, parents) = parts.split_last()?;
-        let candidates = self
-            .symbols
+        self.symbols
             .iter()
             .enumerate()
-            .filter(|(_, s)| s.name == *last);
-        candidates
             .filter(|(i, s)| {
-                // Each named parent must enclose it, innermost last.
-                let mut need = parents.iter().rev();
-                let mut next = need.next();
-                for p in self.symbols[..*i].iter().rev() {
-                    let Some(want) = next else { break };
-                    if p.start <= s.start && p.end >= s.end && p.name == *want {
-                        next = need.next();
-                    }
-                }
-                next.is_none()
+                // Its path: the names of what encloses it, outermost first, then its own.
+                let mut path: Vec<&str> = self.symbols[..*i]
+                    .iter()
+                    .filter(|p| p.start <= s.start && p.end >= s.end)
+                    .flat_map(|p| p.name.split("::"))
+                    .collect();
+                path.extend(s.name.split("::"));
+                let Some((own, above)) = path.split_last() else {
+                    return false;
+                };
+                // Each named parent must be on the path, in order.
+                let mut above = above.iter();
+                own == last && parents.iter().all(|p| above.any(|a| a == p))
             })
             .map(|(_, s)| s)
-            .max_by_key(|s| s.depth)
+            .max_by_key(|s| (s.end - s.start, s.depth))
     }
 }
 
@@ -97,7 +98,7 @@ impl Symbol {
     fn kind_word(&self) -> &str {
         match self.kind.as_str() {
             "function" | "method" => "fn",
-            "class" => "type",
+            "class" | "struct" | "union" | "enum" => "type",
             "interface" => "trait",
             "module" => "mod",
             other => other,
@@ -115,6 +116,12 @@ pub fn language_of(path: &Path) -> Option<&'static str> {
         "ts" | "mts" | "cts" => "typescript",
         "tsx" => "tsx",
         "go" => "go",
+        "c" => "c",
+        "cc" | "cpp" | "cxx" | "c++" | "hpp" | "hh" | "hxx" | "h++" | "ipp" | "tpp" | "inl" => {
+            "cpp"
+        }
+        // C or C++: the C++ grammar reads both.
+        "h" => "c/c++",
         _ => return None,
     })
 }
@@ -158,20 +165,85 @@ mod imp {
 
     const SIGNATURE_CHARS: usize = 100;
 
-    /// A definition's first line, trimmed and shortened.
-    fn signature(text: &str, start_byte: usize) -> String {
-        let line = text[start_byte..].lines().next().unwrap_or_default().trim();
+    /// A definition's first line, trimmed and shortened. When the name is not on it (a
+    /// return type or macro on its own line, `typedef struct {`), the lines up to the
+    /// name's, or the first and the name's line around `…` when the name is further down.
+    fn signature(text: &str, start: usize, name: std::ops::Range<usize>) -> String {
+        let first = text[start..].lines().next().unwrap_or_default();
+        let line = if name.start < start + first.len() {
+            first.trim().to_owned()
+        } else {
+            let line_end = text[name.end..]
+                .find('\n')
+                .map_or(text.len(), |i| name.end + i);
+            let span = &text[start..line_end];
+            if span.lines().count() <= 3 {
+                span.split_whitespace().collect::<Vec<_>>().join(" ")
+            } else {
+                let name_line = span.lines().last().unwrap_or_default();
+                format!("{} … {}", first.trim(), name_line.trim())
+            }
+        };
         if line.chars().count() > SIGNATURE_CHARS {
             let cut: String = line.chars().take(SIGNATURE_CHARS).collect();
             format!("{cut}…")
         } else {
-            line.to_owned()
+            line
         }
     }
 
     /// `impl` blocks are references in the Rust query; they hold the methods, so they are
     /// shown as definitions.
     const RUST_EXTRA: &str = "(impl_item type: (_) @name) @definition.impl\n";
+
+    // The C and C++ grammars' own `tags.scm` capture a function's declarator (its name and
+    // parameters) rather than the definition, so every function would be one line long;
+    // these capture the whole definition, and add namespaces, methods and macros.
+
+    /// Definitions shared by C and C++.
+    const C_COMMON: &str = r#"
+(struct_specifier name: (type_identifier) @name body: (_)) @definition.struct
+(union_specifier name: (type_identifier) @name body: (_)) @definition.union
+(enum_specifier name: (type_identifier) @name body: (_)) @definition.enum
+(type_definition declarator: (type_identifier) @name) @definition.type
+(preproc_function_def name: (identifier) @name) @definition.macro
+"#;
+
+    const C_TAGS: &str = r#"
+(function_definition declarator: [
+  (function_declarator declarator: (identifier) @name)
+  (pointer_declarator declarator: (function_declarator declarator: (identifier) @name))
+  (pointer_declarator declarator: (pointer_declarator
+    declarator: (function_declarator declarator: (identifier) @name)))
+]) @definition.function
+"#;
+
+    /// C++: also used for `.h`, so prototypes count (a header is mostly prototypes).
+    /// `Foo::bar` defined outside its class keeps its qualified name.
+    const CPP_TAGS: &str = r#"
+(class_specifier name: (type_identifier) @name body: (_)) @definition.class
+(namespace_definition name: [(namespace_identifier) (nested_namespace_specifier)] @name) @definition.module
+(function_definition declarator: [
+  (function_declarator declarator: [(identifier) (field_identifier) (destructor_name) (operator_name)] @name)
+  (pointer_declarator declarator: (function_declarator declarator: [(identifier) (field_identifier)] @name))
+  (reference_declarator (function_declarator declarator: [(identifier) (field_identifier) (operator_name)] @name))
+]) @definition.function
+(function_definition declarator: [
+  (function_declarator declarator: (qualified_identifier) @name)
+  (pointer_declarator declarator: (function_declarator declarator: (qualified_identifier) @name))
+  (reference_declarator (function_declarator declarator: (qualified_identifier) @name))
+]) @definition.method
+(declaration declarator: [
+  (function_declarator declarator: (identifier) @name)
+  (pointer_declarator declarator: (function_declarator declarator: (identifier) @name))
+]) @definition.function
+(field_declaration declarator: [
+  (function_declarator declarator: [(field_identifier) (destructor_name) (operator_name)] @name)
+  (pointer_declarator declarator: (function_declarator declarator: (field_identifier) @name))
+  (reference_declarator (function_declarator declarator: [(field_identifier) (operator_name)] @name))
+]) @definition.method
+(declaration declarator: (function_declarator declarator: (destructor_name) @name)) @definition.method
+"#;
 
     struct Grammar {
         language: Language,
@@ -188,46 +260,82 @@ mod imp {
         Some(Grammar { language, query })
     }
 
-    fn grammar(name: &str) -> Option<&'static Grammar> {
-        macro_rules! cached {
-            ($build:expr) => {{
-                static G: OnceLock<Option<Grammar>> = OnceLock::new();
-                G.get_or_init(|| $build).as_ref()
-            }};
-        }
-        match name {
-            "rust" => cached!(build(
+    /// Each language with a grammar: its parser and its definition queries.
+    const LANGUAGES: [&str; 8] = [
+        "rust",
+        "python",
+        "javascript",
+        "typescript",
+        "tsx",
+        "go",
+        "c",
+        "cpp",
+    ];
+
+    fn sources(name: &str) -> Option<(Language, &'static [&'static str])> {
+        Some(match name {
+            "rust" => (
                 tree_sitter_rust::LANGUAGE.into(),
-                &[tree_sitter_rust::TAGS_QUERY, RUST_EXTRA]
-            )),
-            "python" => cached!(build(
+                &[tree_sitter_rust::TAGS_QUERY, RUST_EXTRA],
+            ),
+            "python" => (
                 tree_sitter_python::LANGUAGE.into(),
-                &[tree_sitter_python::TAGS_QUERY]
-            )),
-            "javascript" => cached!(build(
+                &[tree_sitter_python::TAGS_QUERY],
+            ),
+            "javascript" => (
                 tree_sitter_javascript::LANGUAGE.into(),
-                &[tree_sitter_javascript::TAGS_QUERY]
-            )),
-            "typescript" => cached!(build(
+                &[tree_sitter_javascript::TAGS_QUERY],
+            ),
+            "typescript" => (
                 tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
                 &[
                     tree_sitter_javascript::TAGS_QUERY,
-                    tree_sitter_typescript::TAGS_QUERY
-                ]
-            )),
-            "tsx" => cached!(build(
+                    tree_sitter_typescript::TAGS_QUERY,
+                ],
+            ),
+            "tsx" => (
                 tree_sitter_typescript::LANGUAGE_TSX.into(),
                 &[
                     tree_sitter_javascript::TAGS_QUERY,
-                    tree_sitter_typescript::TAGS_QUERY
-                ]
-            )),
-            "go" => cached!(build(
+                    tree_sitter_typescript::TAGS_QUERY,
+                ],
+            ),
+            "go" => (
                 tree_sitter_go::LANGUAGE.into(),
-                &[tree_sitter_go::TAGS_QUERY]
-            )),
-            _ => None,
-        }
+                &[tree_sitter_go::TAGS_QUERY],
+            ),
+            "c" => (tree_sitter_c::LANGUAGE.into(), &[C_COMMON, C_TAGS]),
+            "cpp" => (tree_sitter_cpp::LANGUAGE.into(), &[C_COMMON, CPP_TAGS]),
+            _ => return None,
+        })
+    }
+
+    fn grammar(name: &str) -> Option<&'static Grammar> {
+        static BUILT: [OnceLock<Option<Grammar>>; LANGUAGES.len()] =
+            [const { OnceLock::new() }; LANGUAGES.len()];
+        let name = if name == "c/c++" { "cpp" } else { name };
+        let i = LANGUAGES.iter().position(|l| *l == name)?;
+        BUILT[i]
+            .get_or_init(|| {
+                let (language, queries) = sources(name)?;
+                build(language, queries)
+            })
+            .as_ref()
+    }
+
+    /// Each language's queries that do not compile as a whole (`build` would quietly fall
+    /// back to the last one).
+    #[cfg(test)]
+    pub(super) fn query_errors() -> Vec<String> {
+        LANGUAGES
+            .iter()
+            .filter_map(|name| {
+                let (language, queries) = sources(name)?;
+                Query::new(&language, &queries.concat())
+                    .err()
+                    .map(|e| format!("{name}: {e}"))
+            })
+            .collect()
     }
 
     pub(super) fn symbols(language: &str, text: &str) -> Option<Vec<Symbol>> {
@@ -239,13 +347,17 @@ mod imp {
         let mut cursor = QueryCursor::new();
         let mut matches = cursor.matches(&g.query, tree.root_node(), text.as_bytes());
         let mut out = Vec::new();
+        // One symbol per definition and pattern: a C++ parse confused by macros can give a
+        // node several names (an initializer list read as declarators); the first is kept.
+        // Different patterns may still name one node (Rust's `impl Trait for Type`).
+        let mut seen = std::collections::HashSet::new();
         while let Some(m) = matches.next() {
             let mut def = None;
             let mut name = None;
             for c in m.captures() {
                 let capture = names[c.index as usize];
                 if capture == "name" {
-                    name = c.node.utf8_text(text.as_bytes()).ok();
+                    name = Some(c.node);
                 } else if let Some(kind) = capture
                     .strip_prefix("definition.")
                     .or_else(|| (capture == "reference.implementation").then_some("impl"))
@@ -253,15 +365,27 @@ mod imp {
                     def = Some((kind, c.node));
                 }
             }
-            let (Some((kind, node)), Some(name)) = (def, name) else {
+            let (Some((kind, node)), Some(name_node)) = (def, name) else {
                 continue;
             };
+            let Ok(name) = name_node.utf8_text(text.as_bytes()) else {
+                continue;
+            };
+            if !seen.insert((node.id(), m.pattern_index)) {
+                continue;
+            }
+            let (start, end) = (node.start_position(), node.end_position());
             out.push(Symbol {
                 name: name.to_owned(),
                 kind: kind.to_owned(),
-                start: node.start_position().row + 1,
-                end: node.end_position().row + 1,
-                signature: signature(text, node.start_byte()),
+                start: start.row + 1,
+                // A node that takes its line's newline (`#define`) ends on the line before.
+                end: if end.column == 0 && end.row > start.row {
+                    end.row
+                } else {
+                    end.row + 1
+                },
+                signature: signature(text, node.start_byte(), name_node.byte_range()),
                 depth: 0,
             });
         }
@@ -328,5 +452,129 @@ mod tests {
         let o = outline(Path::new("a.js"), js).expect("js");
         assert!(o.find("a").is_some() && o.find("K.z").is_some(), "{o:?}");
         assert!(outline(Path::new("a.txt"), "x").is_none());
+    }
+
+    #[test]
+    fn every_query_compiles() {
+        assert_eq!(imp::query_errors(), Vec::<String>::new());
+    }
+
+    fn rows(o: &Outline) -> Vec<(usize, usize, &str, &str, usize)> {
+        o.symbols
+            .iter()
+            .map(|s| (s.start, s.end, s.kind.as_str(), s.name.as_str(), s.depth))
+            .collect()
+    }
+
+    const C: &str = "#include <stdio.h>\n\
+\n\
+#define MAX(a, b) ((a) > (b) ? (a) : (b))\n\
+#define LIMIT 10\n\
+\n\
+struct point {\n\
+    int x, y;\n\
+};\n\
+\n\
+typedef enum { RED, GREEN } color;\n\
+\n\
+static int add(int a, int b);\n\
+\n\
+static int add(int a, int b) {\n\
+    return a + b;\n\
+}\n\
+\n\
+char *name(struct point *p) {\n\
+    (void)p;\n\
+    return \"p\";\n\
+}\n";
+
+    #[test]
+    fn c_outline_spans_whole_definitions() {
+        let o = outline(Path::new("src/geo.c"), C).expect("c");
+        assert_eq!(o.language, "c");
+        assert_eq!(
+            rows(&o),
+            [
+                (3, 3, "macro", "MAX", 0),
+                (6, 8, "struct", "point", 0),
+                (10, 10, "type", "color", 0),
+                (14, 16, "function", "add", 0),
+                (18, 21, "function", "name", 0),
+            ]
+        );
+        assert_eq!(o.find("name").map(|s| s.start), Some(18));
+        assert_eq!(
+            o.summary(200),
+            "macro MAX, type point, type color, fn add, fn name"
+        );
+    }
+
+    const CPP: &str = "namespace geo {\n\
+\n\
+class Shape {\n\
+public:\n\
+    virtual ~Shape();\n\
+    double area() const;\n\
+    int sides() const { return n_; }\n\
+private:\n\
+    int n_;\n\
+};\n\
+\n\
+double Shape::area() const {\n\
+    return 0.0;\n\
+}\n\
+\n\
+}  // namespace geo\n\
+\n\
+template <typename T>\n\
+T twice(T v) {\n\
+    return v * 2;\n\
+}\n";
+
+    #[test]
+    fn cpp_outline_has_namespaces_classes_and_methods() {
+        let o = outline(Path::new("src/shape.cpp"), CPP).expect("cpp");
+        assert_eq!(o.language, "cpp");
+        assert_eq!(
+            rows(&o),
+            [
+                (1, 16, "module", "geo", 0),
+                (3, 10, "class", "Shape", 1),
+                (5, 5, "method", "~Shape", 2),
+                (6, 6, "method", "area", 2),
+                (7, 7, "function", "sides", 2),
+                (12, 14, "method", "Shape::area", 1),
+                (19, 21, "function", "twice", 0),
+            ]
+        );
+        // The out-of-line definition, by its qualified name or inside its namespace;
+        // the definition over the declaration in the class.
+        assert_eq!(o.find("Shape::area").map(|s| s.start), Some(12));
+        assert_eq!(o.find("geo::Shape::area").map(|s| s.start), Some(12));
+        assert_eq!(o.find("Shape.sides").map(|s| s.start), Some(7));
+        assert_eq!(o.find("area").map(|s| s.start), Some(12));
+        assert_eq!(o.find("Other::area"), None);
+    }
+
+    #[test]
+    fn signatures_show_the_name() {
+        let c = "typedef struct {\n    int x;\n    int y;\n    int z;\n} vec3;\n\nstatic int\nadd(int a, int b)\n{\n    return a + b;\n}\n";
+        let o = outline(Path::new("v.c"), c).expect("c");
+        let sigs: Vec<&str> = o.symbols.iter().map(|s| s.signature.as_str()).collect();
+        assert_eq!(
+            sigs,
+            ["typedef struct { … } vec3;", "static int add(int a, int b)"]
+        );
+    }
+
+    #[test]
+    fn headers_read_as_c_or_cpp() {
+        let h = "#ifndef GEO_H\n#define GEO_H\n\nstruct point { int x; };\nint add(int a, int b);\nchar *name(void);\n\n#endif\n";
+        let o = outline(Path::new("include/geo.h"), h).expect("header");
+        assert_eq!(o.language, "c/c++");
+        let names: Vec<&str> = o.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["point", "add", "name"]);
+        assert_eq!(language_of(Path::new("a.HPP")), Some("cpp"));
+        assert_eq!(language_of(Path::new("a.cc")), Some("cpp"));
     }
 }

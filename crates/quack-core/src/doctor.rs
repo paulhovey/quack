@@ -154,6 +154,7 @@ fn local(config: &Loaded) -> Vec<DoctorCheck> {
     ));
 
     out.push(mcp_check(config));
+    out.push(hooks_check(config));
     out.push(lsp_check(config));
 
     let instructions = crate::env::instructions(config);
@@ -426,4 +427,36 @@ fn mcp_check(config: &Loaded) -> DoctorCheck {
     };
     lines.insert(0, summary);
     check("mcp", worst, lines.join("\n"))
+}
+
+/// Hook files: each one parses and checks, and its program (and any `{dir}` file it names)
+/// exists. Nothing runs.
+fn hooks_check(config: &Loaded) -> DoctorCheck {
+    let mut lines = Vec::new();
+    let mut worst = CheckStatus::Ok;
+    let mut enabled = 0;
+    for item in quack_config::load_hooks(config) {
+        let problem = match &item.state {
+            quack_config::ItemState::Loaded(f) => {
+                enabled += 1;
+                let dir = item.path.parent().unwrap_or(Path::new(""));
+                f.check()
+                    .err()
+                    .or_else(|| crate::hooks::command_problem(f, dir, &config.dirs.workspace_root))
+            }
+            quack_config::ItemState::Disabled(_) => continue,
+            quack_config::ItemState::Failed(d) => Some(d.one_line()),
+        };
+        if let Some(p) = problem {
+            worst = CheckStatus::Warn;
+            lines.push(format!("{}: {p}", item.id));
+        }
+    }
+    let summary = match enabled {
+        0 => return check("hooks", CheckStatus::Info, "no hooks in hooks.d"),
+        1 => "1 hook".to_owned(),
+        n => format!("{n} hooks"),
+    };
+    lines.insert(0, summary);
+    check("hooks", worst, lines.join("\n"))
 }

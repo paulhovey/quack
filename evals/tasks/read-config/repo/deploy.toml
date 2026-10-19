@@ -1,0 +1,10 @@
+[production.database]
+host = "db.prod.internal"
+port = 5432
+
+[staging.database]
+host = "db.staging.internal"
+port = 6543
+
+[staging.cache]
+port = 6379

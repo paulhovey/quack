@@ -15,8 +15,6 @@ model = []
 
 [defaults]
 edit_format = "apply_patch"
-# OpenAI's recommended sampling for gpt-oss.
-sampling = { temperature = 1.0, top_p = 1.0 }
 
 [[tools]]
 name = "shell"
@@ -34,6 +32,10 @@ name = "update_plan"
 maps_to = "todo"
 [tools.params]
 plan = { to = "items" }
+
+[[tools]]
+name = "ask_user"
+maps_to = "ask_user"
 
 [[tools]]
 name = "memory"
