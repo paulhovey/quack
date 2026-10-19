@@ -11,7 +11,7 @@ use quack_lsp::{LspManager, ServerSpec};
 
 fn manager(root: &Path) -> Arc<LspManager> {
     let file: LspServerFile = toml::from_str(&format!(
-        "command = {:?}\nextensions = [\"fx\"]\n[diagnostics]\nsettle_ms = 150\nmax_wait_ms = 3000\n",
+        "command = {:?}\nextensions = [\"fx\"]\n[diagnostics]\nsettle_ms = 500\nmax_wait_ms = 3000\n",
         env!("CARGO_BIN_EXE_lsp-fixture-server")
     ))
     .expect("parse");

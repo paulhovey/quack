@@ -199,6 +199,11 @@
           "description": "`<provider-id>/<model-id>` or `<provider-id>/<alias>`. Empty: pick with `/models`.",
           "type": "string"
         },
+        "remember_last": {
+          "default": true,
+          "description": "Start with the model last switched to, when it is still available. A project's\n`model.default`, `QUACK_MODEL` and `-m` still win; `default` is the fallback.",
+          "type": "boolean"
+        },
         "small": {
           "default": "",
           "description": "Model for titles, summaries and cheap subtasks. Empty: use `default`.",
@@ -558,6 +563,7 @@
       "$ref": "#/$defs/ModelSettings",
       "default": {
         "default": "",
+        "remember_last": true,
         "small": ""
       }
     },

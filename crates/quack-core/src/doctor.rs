@@ -113,14 +113,25 @@ fn local(config: &Loaded) -> Vec<DoctorCheck> {
         ),
     });
     // Providers are inserted here by `run`.
-    out.push(match config.settings.model.default.as_str() {
-        "" => check(
-            "model",
-            CheckStatus::Info,
-            "no [model] default; the first usable model is picked",
-        ),
-        m => check("model", CheckStatus::Ok, m),
-    });
+    out.push(
+        match (
+            config.remembered_model(),
+            config.settings.model.default.as_str(),
+        ) {
+            (Some(last), "") => check("model", CheckStatus::Ok, format!("{last} (last used)")),
+            (Some(last), d) => check(
+                "model",
+                CheckStatus::Ok,
+                format!("{last} (last used; {d} if it is unavailable)"),
+            ),
+            (None, "") => check(
+                "model",
+                CheckStatus::Info,
+                "no [model] default; the first usable model is picked",
+            ),
+            (None, m) => check("model", CheckStatus::Ok, m),
+        },
+    );
     let (status, project) = match config.project {
         ProjectStatus::None => (CheckStatus::Ok, "no .quack/"),
         ProjectStatus::Trusted => (CheckStatus::Ok, "trusted"),

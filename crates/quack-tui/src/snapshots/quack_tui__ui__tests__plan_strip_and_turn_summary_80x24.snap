@@ -1,6 +1,5 @@
 ---
 source: crates/quack-tui/src/ui.rs
-assertion_line: 1242
 expression: "render(&app, 80, 24)"
 ---
 " quack 0.1.0 · ~/src/project                                             ⎇ main "
@@ -26,4 +25,4 @@ expression: "render(&app, 80, 24)"
 "╭──────────────────────────────────────────────────────────────────────────────╮"
 "│›                                                                             │"
 "╰──────────────────────────────────────────────────────────────────────────────╯"
-"  auto-edit  charm/qwen3.8-flash · ▰▰▰▰▱▱ 70k/104k · 48 t/s               /help "
+"  auto-edit  charm/qwen3.8-flash · 34k left · 48 t/s                      /help "

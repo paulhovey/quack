@@ -22,6 +22,7 @@ use quack_context::compact;
 
 use crate::session::{self, SharedLog};
 use crate::startup::Setup;
+use crate::stats::Stats;
 
 /// Steps (model calls) per turn before pausing.
 const MAX_STEPS: usize = 100;
@@ -41,6 +42,8 @@ pub(crate) struct TurnCtx {
     pub log: Option<SharedLog>,
     /// Pre-images of edited files, for `/undo`.
     pub checkpoints: Option<Arc<Checkpoints>>,
+    /// The session's usage, fed by `emit`.
+    pub stats: Arc<Mutex<Stats>>,
 }
 
 impl TurnCtx {
@@ -51,6 +54,9 @@ impl TurnCtx {
     }
 
     pub(crate) fn emit(&self, e: Event) {
+        if let Ok(mut s) = self.stats.lock() {
+            s.observe(&e);
+        }
         let _ = self.tx.send(e);
     }
 
@@ -60,6 +66,7 @@ impl TurnCtx {
             used: estimate(&self.setup, history),
             budget: self.setup.budget.unwrap_or(0),
             cache_hit_tokens: None,
+            threshold: crate::context::threshold(&self.setup),
         });
     }
 
@@ -131,7 +138,6 @@ pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: String)
                 if let Ok(mut e) = ctx.setup.estimator.lock() {
                     e.observe(estimated, u.prompt_tokens);
                 }
-                session::record_usage(ctx.log.as_ref(), &u);
                 total.prompt_tokens = u.prompt_tokens;
                 total.completion_tokens += u.completion_tokens;
                 total.cached_prompt_tokens = u.cached_prompt_tokens;
@@ -139,6 +145,7 @@ pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: String)
                     used: u.prompt_tokens + u.completion_tokens,
                     budget: ctx.setup.budget.unwrap_or(0),
                     cache_hit_tokens: u.cached_prompt_tokens,
+                    threshold: crate::context::threshold(&ctx.setup),
                 });
             }
             let calls = match &msg {
@@ -398,6 +405,18 @@ async fn stream_step(
         ctx.emit(Event::AssistantDelta { text: tail });
     }
     let usage = b.usage;
+    let cost = usage.as_ref().and_then(|u| {
+        let c = s.model.cost.as_ref()?;
+        Some(c.of(
+            u.prompt_tokens,
+            u.cached_prompt_tokens.unwrap_or(0),
+            u.completion_tokens,
+        ))
+    });
+    session::record_usage(ctx.log.as_ref(), usage.as_ref(), cost);
+    if let Ok(mut st) = ctx.stats.lock() {
+        st.request(usage.as_ref(), cost, sent.elapsed());
+    }
     let mut msg = b.into_message();
     if let Some(first) = first {
         emit_speed(ctx, sent, first, usage, &msg);
@@ -608,10 +627,14 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
                 call_id: call_id.clone(),
                 request,
             });
+            let asked = std::time::Instant::now();
             let answer = tokio::select! {
                 () = ctx.cancel.cancelled() => None,
                 a = orx => a.ok(),
             };
+            if let Ok(mut st) = ctx.stats.lock() {
+                st.waited(asked.elapsed());
+            }
             if let Ok(mut pending) = ctx.approvals.lock() {
                 pending.remove(&call.id);
             }

@@ -67,6 +67,7 @@ Then policy is applied: any key the system layer locks is reset to the system va
 [model]
 default = "local-llama/qwen3-coder-30b"     # "<provider-id>/<model-id>"
 small = "local-llama/qwen3-4b"              # titles, summaries, cheap subtasks (optional)
+remember_last = true                        # start with the model last switched to
 
 [ui]
 theme = "auto"                 # auto | dark | light | <name in themes/>
@@ -142,6 +143,12 @@ Loading a project's `.quack/` can run code: MCP `command`s, LSP `command`s, hook
 - A `.quack/` that holds only text folders needs no decision.
 - `trust.toml` is edited with `toml_edit`, so comments survive, and the file is replaced atomically. There is one record per canonical path.
 - The hash is hand-written (about 100 lines, checked against the FIPS 180-4 vectors) rather than a new crate, per the dependency policy. The TLS stack's hash isn't used because builds without TLS must still verify trust.
+
+## Remembered state
+
+`<user data>/state.toml` holds what quack remembers between runs. It is not configuration: it is never a config layer, and deleting it only forgets. Today it holds `last_model`, written whenever the model is switched (`/models`, `/setup`).
+
+At startup the remembered model is tried before `model.default`, but only when the default is a personal one (defaults bundle, system or user layer). A trusted project's `model.default`, `QUACK_MODEL`, `-m` and a policy lock on `model.default` all win over it. If it can't be used (for example, its provider file was removed), a warning says so and startup continues with `model.default`. `model.remember_last = false` turns this off, so only `model.default` is used. `quack doctor` shows which model will be used and why.
 
 ## Secrets
 

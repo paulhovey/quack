@@ -121,7 +121,8 @@ Left out on purpose: a hosted marketplace, telemetry-backed features and cloud e
 ### Progress (2026-10-18)
 
 - Pruning rules 1 (superseded reads) and 3 (large old outputs). Compaction runs at the threshold, on server overflow (one retry) and with `/compact [focus]`. If the model can't write a summary, a plain list is kept instead. Both pruning and compaction are recorded in the session log and replayed on resume. Details: [05](05-context-management.md#as-implemented-m2-2026-10-18)
-- `/context` modal: used, budget and window, the compaction point, and tokens per segment (system prompt, tools, summary, user, model, tool results with the pruned count)
+- `/context` modal: one band of the segments (system prompt, tools, summary, user, model, tool results with the pruned count) with the compaction point marked, the room left in turns at the recent pace, and a suggestion. The status bar shows room left instead of a gauge
+- `/stats`: tokens, cache hits, cost from `[models.cost]` (logged per request, so it survives resume), where the time went, latency, speed and per-tool counts
 - AGENTS.md: system and user files, then the chain from the git root down to the cwd (the first configured name wins in each directory), `@` imports (one level, kept inside the workspace), and nested files attached to the first tool result that touches their directory ([08](08-instructions-skills-commands.md#rules))
 - Plan mode: `/plan [task|accept|off]`, Shift-Tab, edits refused and only read-only commands run, the plan request appended to the message ([04](04-agent-loop-and-tools.md#plan-mode))
 - Memory: markdown notes plus an index per scope (global, and project in the data dir or the repo), the index in the prompt via `{{ memory_index }}`, a lenient `memory` tool, `memory.writes = "ask"`, and `/memory` ([07](07-sessions-memory-checkpoints.md#behaviour))

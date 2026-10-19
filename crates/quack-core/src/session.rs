@@ -1,7 +1,7 @@
 //! Session persistence: what the engine records, and rebuilding history on resume.
 //!
 //! Record types: `session_start`, `resume`, `message` (one chat message, exactly as sent),
-//! `tool` (UI summary of a tool call), `usage`, `prune` (tool results replaced),
+//! `tool` (UI summary of a tool call), `usage` (with `cost` when priced), `prune` (tool results replaced),
 //! `compaction` (history before `cut` replaced by `message`), `rewind` (history cut back
 //! to its first `to` messages).
 
@@ -213,8 +213,13 @@ pub(crate) fn record_message(log: Option<&SharedLog>, m: &Message) {
     record(log, "message", json!({ "message": m }));
 }
 
-pub(crate) fn record_usage(log: Option<&SharedLog>, u: &Usage) {
-    record(log, "usage", json!({ "usage": u }));
+/// One model call's usage, and its price when the model has a `cost`.
+pub(crate) fn record_usage(log: Option<&SharedLog>, u: Option<&Usage>, cost: Option<f64>) {
+    let Some(u) = u else { return };
+    match cost {
+        Some(c) => record(log, "usage", json!({ "usage": u, "cost": c })),
+        None => record(log, "usage", json!({ "usage": u })),
+    }
 }
 
 #[cfg(test)]

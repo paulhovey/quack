@@ -198,6 +198,12 @@ async fn summarize(ctx: &TurnCtx, req: quack_providers::ChatRequest) -> Result<S
     Ok(text.to_owned())
 }
 
+/// Requests estimated above this get pruned, then compacted.
+pub(crate) fn threshold(s: &Setup) -> Option<u32> {
+    s.budget
+        .map(|b| (f64::from(b) * s.context.compaction_threshold.clamp(0.1, 1.0)) as u32)
+}
+
 /// What is using the context. `history` is `None` while a turn holds it.
 pub(crate) fn report(s: &Setup, history: Option<&[Message]>) -> ContextReport {
     let ratio = s.estimator.lock().map_or(1.0, |e| e.ratio());
@@ -258,9 +264,7 @@ pub(crate) fn report(s: &Setup, history: Option<&[Message]>) -> ContextReport {
             }
         }
     }
-    let threshold = s
-        .budget
-        .map(|b| (f64::from(b) * s.context.compaction_threshold.clamp(0.1, 1.0)) as u32);
+    let threshold = threshold(s);
     ContextReport {
         model: s.model_ref.clone(),
         window: s.model.context_window,

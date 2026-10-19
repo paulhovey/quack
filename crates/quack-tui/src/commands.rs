@@ -218,8 +218,8 @@ pub(crate) const COMMANDS: &[Command] = &[
         "stats",
         &[],
         "",
-        "Session usage: tokens, cache hits, TTFT, cost",
-        Some("M2"),
+        "This session: tokens, cost, cache hits, where the time went, tools used",
+        None,
     ),
     c(
         "reload",

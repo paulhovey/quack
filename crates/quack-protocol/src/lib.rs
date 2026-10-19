@@ -54,6 +54,8 @@ pub enum Op {
     ListSessions,
     /// Ask what is using the context; answered with `Event::ContextReport`.
     GetContext,
+    /// Ask for this session's usage so far; answered with `Event::Stats`.
+    GetStats,
     /// `read-only`, `ask`, `auto-edit`, `full-auto` (capped by policy), or `plan`.
     SetPermissionMode {
         mode: String,
@@ -218,6 +220,9 @@ pub enum Event {
         used: u32,
         budget: u32,
         cache_hit_tokens: Option<u32>,
+        /// Above this the next request is pruned, then compacted.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        threshold: Option<u32>,
     },
     ContextPruned {
         report: PruneReport,
@@ -236,6 +241,10 @@ pub enum Event {
     /// What is using the context, segment by segment.
     ContextReport {
         report: ContextReport,
+    },
+    /// This session's usage: tokens, cost, timings, tools.
+    Stats {
+        report: StatsReport,
     },
     MemoryNotes {
         notes: Vec<MemoryNote>,
@@ -534,6 +543,62 @@ pub struct ContextReport {
     /// Caveats, e.g. that the history is in use by a running turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+}
+
+/// Usage of one session. Token totals include earlier runs of a resumed session; timings
+/// and tool counts cover only the time since it was opened (`resumed`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct StatsReport {
+    /// The current `<provider>/<model>`.
+    pub model: String,
+    pub turns: u32,
+    /// Model calls; a turn makes one per step.
+    pub requests: u32,
+    /// Requests whose server reported no usage, so their tokens are not counted.
+    #[serde(default)]
+    pub unreported: u32,
+    /// Prompt tokens summed over requests: what was billed, not the context size.
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    /// Prompt tokens the server served from its cache.
+    pub cached_tokens: u64,
+    /// Requests that said how much was cached; zero when the server never does.
+    #[serde(default)]
+    pub cache_reported: u32,
+    /// US dollars, from the `cost` of the models used. `None` when none had one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<f64>,
+    /// Requests to models without a `cost`, left out of `cost`.
+    #[serde(default)]
+    pub unpriced: u32,
+    /// Time to first token, median and slowest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttft_ms: Option<(u32, u32)>,
+    /// Median generation speed, tokens per second.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_per_sec: Option<f32>,
+    /// Since the session was opened: in the session, waiting for the model, running tools,
+    /// and waiting for the user to approve.
+    pub open_ms: u64,
+    pub model_ms: u64,
+    pub tools_ms: u64,
+    pub approval_ms: u64,
+    /// Busiest first.
+    pub tools: Vec<ToolStat>,
+    pub compactions: u32,
+    /// Tool results replaced by a placeholder to save room.
+    pub pruned: u32,
+    /// A saved session that was resumed: timings start at the resume.
+    #[serde(default)]
+    pub resumed: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolStat {
+    pub name: String,
+    pub calls: u32,
+    pub failed: u32,
+    pub ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

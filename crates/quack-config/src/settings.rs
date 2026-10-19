@@ -34,13 +34,26 @@ pub struct Settings {
     pub policy: Policy,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct ModelSettings {
     /// `<provider-id>/<model-id>` or `<provider-id>/<alias>`. Empty: pick with `/models`.
     pub default: String,
     /// Model for titles, summaries and cheap subtasks. Empty: use `default`.
     pub small: String,
+    /// Start with the model last switched to, when it is still available. A project's
+    /// `model.default`, `QUACK_MODEL` and `-m` still win; `default` is the fallback.
+    pub remember_last: bool,
+}
+
+impl Default for ModelSettings {
+    fn default() -> Self {
+        Self {
+            default: String::new(),
+            small: String::new(),
+            remember_last: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

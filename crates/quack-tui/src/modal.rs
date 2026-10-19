@@ -698,8 +698,296 @@ pub(crate) fn config(
     )
 }
 
-/// The `/context` modal. `report` is `None` until the engine answers.
-pub(crate) fn context(report: Option<&quack_protocol::ContextReport>, theme: &Theme) -> Modal {
+/// The `/stats` modal. `report` is `None` until the engine answers.
+pub(crate) fn stats(
+    report: Option<&quack_protocol::StatsReport>,
+    ascii: bool,
+    theme: &Theme,
+) -> Modal {
+    let tabs = |items| {
+        Modal::new(
+            "Stats",
+            vec![ModalTab {
+                title: "Stats".into(),
+                items,
+            }],
+        )
+    };
+    let Some(r) = report else {
+        return tabs(vec![placeholder(
+            "counting…",
+            "Adding up this session.",
+            theme,
+        )]);
+    };
+    let k = |n: u64| crate::theme::tokens(u32::try_from(n).unwrap_or(u32::MAX));
+    let time = |ms: u64| crate::theme::elapsed(std::time::Duration::from_millis(ms));
+    let pct = |n: u64, of: u64| n * 100 / of.max(1);
+    let item = |label: &str, hint: String, detail: Vec<Line<'static>>| ModalItem {
+        label: label.to_owned(),
+        hint,
+        detail,
+        action: None,
+        run: false,
+        alt: None,
+    };
+    let since = if r.resumed {
+        "Resumed: tokens and cost include earlier runs; times and tools start at the resume."
+    } else {
+        "Since this session started."
+    };
+
+    // Tokens
+    let mut tokens = vec![
+        Line::styled("Tokens", theme.accent),
+        Line::raw(""),
+        field(theme, "sent", k(r.prompt_tokens)),
+        field(theme, "received", k(r.completion_tokens)),
+    ];
+    if r.cache_reported > 0 {
+        tokens.push(field(
+            theme,
+            "cached",
+            format!(
+                "{} · {}% of sent",
+                k(r.cached_tokens),
+                pct(r.cached_tokens, r.prompt_tokens)
+            ),
+        ));
+    }
+    tokens.extend([
+        field(theme, "requests", r.requests.to_string()),
+        Line::raw(""),
+        Line::styled(
+            "Sent counts every request's whole prompt, so it grows faster than the \
+             context: that is what a hosted service bills.",
+            theme.dim,
+        ),
+    ]);
+    if r.cache_reported == 0 && r.requests > 0 {
+        tokens.push(Line::styled(
+            "The server did not say how much of the prompt it had cached.",
+            theme.dim,
+        ));
+    }
+    if r.unreported > 0 {
+        tokens.push(Line::styled(
+            format!(
+                "{} request(s) came back without usage and are not counted.",
+                r.unreported
+            ),
+            theme.warn,
+        ));
+    }
+
+    // Cost
+    let cost_hint = r.cost.map_or_else(|| "–".to_owned(), dollars);
+    let mut cost = vec![Line::styled("Cost", theme.accent), Line::raw("")];
+    match r.cost {
+        Some(c) => {
+            cost.push(field(theme, "total", dollars(c)));
+            if r.turns > 0 {
+                cost.push(field(theme, "per turn", dollars(c / f64::from(r.turns))));
+            }
+            if r.unpriced > 0 {
+                cost.extend([
+                    Line::raw(""),
+                    Line::styled(
+                        format!(
+                            "{} request(s) to models without a price are left out.",
+                            r.unpriced
+                        ),
+                        theme.warn,
+                    ),
+                ]);
+            }
+        }
+        None => cost.extend([
+            Line::raw("No price set for this model."),
+            Line::raw(""),
+            Line::styled(
+                "To see one, add the price per million tokens to the model in its \
+                 provider file:",
+                theme.dim,
+            ),
+            Line::raw(""),
+            Line::styled("cost = { input = 0.3, output = 1.2 }", theme.accent),
+        ]),
+    }
+
+    // Time: where it went, as a band like /context's.
+    let other = r
+        .open_ms
+        .saturating_sub(r.model_ms + r.tools_ms + r.approval_ms);
+    let fills = if ascii {
+        ["#", "%", "=", "."]
+    } else {
+        ["█", "▓", "▒", "·"]
+    };
+    let parts = [
+        ("the model", r.model_ms, theme.accent, fills[0]),
+        ("tools", r.tools_ms, theme.magenta, fills[1]),
+        ("your approval", r.approval_ms, theme.warn, fills[2]),
+        ("between turns", other, theme.border, fills[3]),
+    ];
+    let total = r.open_ms.max(1);
+    let mut band = Vec::new();
+    let mut cells = 0;
+    for (_, ms, style, fill) in parts {
+        let n = ((ms * BAND as u64).div_ceil(total) as usize).min(BAND - cells);
+        band.push(Span::styled(fill.repeat(n), style));
+        cells += n;
+    }
+    let mut timing = vec![
+        Line::styled("Where the time went", theme.accent),
+        Line::raw(""),
+        Line::from(band),
+        Line::raw(""),
+    ];
+    for (name, ms, style, fill) in parts {
+        timing.push(Line::from(vec![
+            Span::styled(format!("{fill} "), style),
+            Span::raw(format!("{name:<16}")),
+            Span::styled(
+                format!("{:>7}  {:>3}%", time(ms), pct(ms, total)),
+                theme.dim,
+            ),
+        ]));
+    }
+    timing.push(Line::raw(""));
+    if let Some((median, slowest)) = r.ttft_ms {
+        timing.push(field(
+            theme,
+            "latency",
+            format!(
+                "{} to first token · {} slowest",
+                time(u64::from(median)),
+                time(u64::from(slowest))
+            ),
+        ));
+    }
+    if let Some(tps) = r.tokens_per_sec {
+        timing.push(field(theme, "speed", format!("{tps:.0} tokens/s typical")));
+    }
+
+    // Tools
+    let calls: u32 = r.tools.iter().map(|t| t.calls).sum();
+    let failed: u32 = r.tools.iter().map(|t| t.failed).sum();
+    let mut tools = vec![Line::styled("Tools", theme.accent), Line::raw("")];
+    if r.tools.is_empty() {
+        tools.push(Line::styled("No tools called yet.", theme.dim));
+    } else {
+        tools.push(Line::styled(
+            format!("{:<16}{:>6}{:>8}{:>9}", "", "calls", "failed", "time"),
+            theme.dim,
+        ));
+        for t in &r.tools {
+            let fail = if t.failed > 0 {
+                Span::styled(format!("{:>8}", t.failed), theme.error)
+            } else {
+                Span::styled(format!("{:>8}", "·"), theme.dim)
+            };
+            tools.push(Line::from(vec![
+                Span::styled(format!("{:<16}", t.name), theme.tool(&t.name)),
+                Span::raw(format!("{:>6}", t.calls)),
+                fail,
+                Span::styled(format!("{:>9}", time(t.ms)), theme.dim),
+            ]));
+        }
+    }
+    if r.compactions + r.pruned > 0 {
+        tools.extend([
+            Line::raw(""),
+            field(theme, "compacted", format!("{} time(s)", r.compactions)),
+            field(theme, "pruned", format!("{} old result(s)", r.pruned)),
+        ]);
+    }
+
+    // Overview
+    let mut overview = vec![
+        Line::styled(r.model.clone(), theme.accent),
+        Line::styled(since, theme.dim),
+        Line::raw(""),
+        field(
+            theme,
+            "turns",
+            format!("{} · {} requests", r.turns, r.requests),
+        ),
+        field(
+            theme,
+            "tokens",
+            format!(
+                "{} sent · {} received",
+                k(r.prompt_tokens),
+                k(r.completion_tokens)
+            ),
+        ),
+    ];
+    if let Some(c) = r.cost {
+        overview.push(field(theme, "cost", dollars(c)));
+    }
+    if r.cache_reported > 0 {
+        overview.push(field(
+            theme,
+            "cache",
+            format!(
+                "{}% of sent was cached",
+                pct(r.cached_tokens, r.prompt_tokens)
+            ),
+        ));
+    }
+    overview.push(field(
+        theme,
+        "time",
+        format!("{} open · model {}", time(r.open_ms), time(r.model_ms)),
+    ));
+    if calls > 0 {
+        overview.push(field(
+            theme,
+            "tools",
+            if failed > 0 {
+                format!("{calls} calls, {failed} failed")
+            } else {
+                format!("{calls} calls")
+            },
+        ));
+    }
+
+    tabs(vec![
+        item("Overview", format!("{} turns", r.turns), overview),
+        item("Tokens", k(r.prompt_tokens + r.completion_tokens), tokens),
+        item("Cost", cost_hint, cost),
+        item("Time", time(r.open_ms), timing),
+        item("Tools", format!("{calls} calls"), tools),
+    ])
+}
+
+/// `$0.0042`, `$0.312`, `$12.40`.
+fn dollars(x: f64) -> String {
+    if x < 0.1 {
+        format!("${x:.4}")
+    } else if x < 10.0 {
+        format!("${x:.3}")
+    } else {
+        format!("${x:.2}")
+    }
+}
+
+/// Width of the `/context` band, in cells.
+const BAND: usize = 32;
+
+/// The `/context` modal. `report` is `None` until the engine answers; `growth` is the
+/// context used at the end of each turn so far.
+///
+/// The overview is one band: every part of the request in its own colour and fill, the
+/// free room after it, and a mark where compaction starts. Below it, what is left in
+/// turns, how fast it has been growing, and what would help.
+pub(crate) fn context(
+    report: Option<&quack_protocol::ContextReport>,
+    growth: &[u32],
+    ascii: bool,
+    theme: &Theme,
+) -> Modal {
     let tabs = |items| {
         Modal::new(
             "Context",
@@ -716,87 +1004,189 @@ pub(crate) fn context(report: Option<&quack_protocol::ContextReport>, theme: &Th
             theme,
         )]);
     };
-    let k = |n: u32| {
-        if n >= 10_000 {
-            format!("{}k", n / 1000)
-        } else {
-            n.to_string()
-        }
+    let k = crate::theme::tokens;
+    let share = |n: u32, of: u32| u64::from(n) * 100 / u64::from(of.max(1));
+    let fills: &[&str] = if ascii {
+        &["#", "%", "=", "+", "*", "~"]
+    } else {
+        &["█", "▓", "▒", "▚", "▞", "░"]
     };
-    let share = |n: u32| match r.budget {
-        Some(b) if b > 0 => format!("{}%", u64::from(n) * 100 / u64::from(b)),
-        _ => String::new(),
-    };
-    let mut total = vec![Line::styled(r.model.clone(), theme.accent), Line::raw("")];
-    if let Some(b) = r.budget.filter(|b| *b > 0) {
-        const WIDTH: u32 = 30;
-        let filled = (r.used.min(b) * WIDTH / b) as usize;
-        total.push(Line::raw(format!(
-            "{}{} {}",
-            "█".repeat(filled),
-            "░".repeat(WIDTH as usize - filled),
-            share(r.used)
-        )));
-        total.push(Line::raw(""));
-    }
-    let unknown = || "unknown".to_owned();
-    total.extend([
-        field(theme, "used", format!("~{} tokens", r.used)),
-        field(
-            theme,
-            "budget",
-            r.budget.map_or_else(unknown, |b| b.to_string()),
-        ),
-        field(
-            theme,
-            "window",
-            r.window.map_or_else(unknown, |w| w.to_string()),
-        ),
-        field(
-            theme,
-            "compacts",
-            r.threshold
-                .map_or_else(|| "on overflow only".into(), |t| format!("above ~{t}")),
-        ),
-        field(theme, "strategy", r.strategy.clone()),
-        Line::raw(""),
-        Line::styled("/compact [focus] summarizes earlier turns now", theme.dim),
-    ]);
+    let colours = [
+        theme.accent,
+        theme.magenta,
+        theme.ok,
+        theme.warn,
+        theme.user,
+        theme.error,
+    ];
+    let paint = |i: usize| (fills[i % fills.len()], colours[i % colours.len()]);
+
+    let mut over = vec![Line::styled(r.model.clone(), theme.accent), Line::raw("")];
     if let Some(n) = &r.note {
-        total.insert(2, Line::styled(n.clone(), theme.warn));
-        total.insert(3, Line::raw(""));
+        over.push(Line::styled(n.clone(), theme.warn));
+        over.push(Line::raw(""));
     }
+    let line = r.threshold.or(r.budget).filter(|l| *l > 0);
+    if let Some(b) = r.budget.filter(|b| *b > 0) {
+        over.push(band(r, b, &paint, ascii, theme));
+        let mark = if ascii { "|" } else { "┊" };
+        over.push(Line::styled(
+            match r.threshold {
+                Some(t) => format!("{mark} compacts at {}", k(t)),
+                None => "compacts only when the server says it is too long".into(),
+            },
+            theme.dim,
+        ));
+        over.push(Line::styled(
+            match r.window {
+                Some(w) => format!("budget {} of a {} window", k(b), k(w)),
+                None => format!("budget {}", k(b)),
+            },
+            theme.dim,
+        ));
+        over.push(Line::raw(""));
+    }
+    if let Some(line) = line {
+        let room = line.saturating_sub(r.used);
+        let pace = crate::app::turns_left(growth, room);
+        let left = match pace {
+            _ if room == 0 => "Past the line: the next request is pruned, then compacted.".into(),
+            Some(n) => format!(
+                "{} left before compaction: about {n} more turn{} at this pace.",
+                k(room),
+                if n == 1 { "" } else { "s" }
+            ),
+            None => format!("{} left before compaction.", k(room)),
+        };
+        over.push(Line::raw(left));
+    }
+    if growth.len() >= 2 {
+        over.push(Line::from(vec![
+            Span::styled("by turn   ", theme.dim),
+            Span::styled(sparkline(growth, ascii), theme.accent),
+        ]));
+    }
+    over.push(Line::raw(""));
+    over.push(Line::styled(advice(r), theme.dim));
+
     let mut items = vec![ModalItem {
-        label: "Total".into(),
-        hint: match r.budget {
-            Some(b) => format!("{} / {}", k(r.used), k(b)),
+        label: "Overview".into(),
+        hint: match line {
+            Some(l) => format!("{} left", k(l.saturating_sub(r.used))),
             None => k(r.used),
         },
-        detail: total,
+        detail: over,
         action: None,
         run: false,
         alt: None,
     }];
-    items.extend(r.segments.iter().map(|s| {
+    let budget = r.budget.unwrap_or(0);
+    items.extend(r.segments.iter().enumerate().map(|(i, seg)| {
+        let (fill, colour) = paint(i);
+        let mut detail = vec![
+            Line::from(vec![
+                Span::styled(format!("{fill} "), colour),
+                Span::styled(seg.name.clone(), theme.accent),
+            ]),
+            Line::raw(""),
+            field(theme, "tokens", format!("~{}", seg.tokens)),
+            field(theme, "of used", format!("{}%", share(seg.tokens, r.used))),
+        ];
+        if budget > 0 {
+            detail.push(field(
+                theme,
+                "of budget",
+                format!("{}%", share(seg.tokens, budget)),
+            ));
+        }
+        detail.extend([Line::raw(""), Line::raw(seg.detail.clone())]);
         ModalItem {
-            label: s.name.clone(),
-            hint: format!("{} {}", k(s.tokens), share(s.tokens))
-                .trim()
-                .to_owned(),
-            detail: vec![
-                Line::styled(s.name.clone(), theme.accent),
-                Line::raw(""),
-                field(theme, "tokens", format!("~{}", s.tokens)),
-                field(theme, "of budget", share(s.tokens)),
-                Line::raw(""),
-                Line::raw(s.detail.clone()),
-            ],
+            // The fill matches the band, so the list doubles as its legend.
+            label: format!("{fill} {}", seg.name),
+            hint: k(seg.tokens),
+            detail,
             action: None,
             run: false,
             alt: None,
         }
     }));
     tabs(items)
+}
+
+/// The parts of the request side by side, then the free room, with the compaction mark.
+fn band(
+    r: &quack_protocol::ContextReport,
+    budget: u32,
+    paint: &dyn Fn(usize) -> (&'static str, Style),
+    ascii: bool,
+    theme: &Theme,
+) -> Line<'static> {
+    let cells = |n: u32| (u64::from(n) * BAND as u64 / u64::from(budget)) as usize;
+    let mut spans = Vec::new();
+    let mut used = 0;
+    for (i, seg) in r.segments.iter().enumerate() {
+        // Every part gets at least a cell, so a small one is still visible.
+        let n = cells(seg.tokens)
+            .max(usize::from(seg.tokens > 0))
+            .min(BAND - used);
+        if n == 0 {
+            continue;
+        }
+        let (fill, colour) = paint(i);
+        spans.push(Span::styled(fill.repeat(n), colour));
+        used += n;
+    }
+    let free = if ascii { "." } else { "·" };
+    let mark = r.threshold.map(cells).filter(|m| *m < BAND);
+    for cell in used..BAND {
+        if Some(cell) == mark {
+            spans.push(Span::styled(if ascii { "|" } else { "┊" }, theme.warn));
+        } else {
+            spans.push(Span::styled(free, theme.border));
+        }
+    }
+    Line::from(spans)
+}
+
+/// Context at the end of each turn, as block heights.
+fn sparkline(values: &[u32], ascii: bool) -> String {
+    let bars: &[char] = if ascii {
+        &['_', '.', '-', '=', '#']
+    } else {
+        &['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█']
+    };
+    let recent = &values[values.len().saturating_sub(BAND)..];
+    let max = recent.iter().copied().max().unwrap_or(0).max(1);
+    recent
+        .iter()
+        .map(|v| bars[(u64::from(*v) * (bars.len() as u64 - 1) / u64::from(max)) as usize])
+        .collect()
+}
+
+/// One suggestion, from what is taking the room.
+fn advice(r: &quack_protocol::ContextReport) -> String {
+    let tokens = |name: &str| {
+        r.segments
+            .iter()
+            .find(|s| s.name == name)
+            .map_or(0, |s| s.tokens)
+    };
+    let fixed = tokens("System prompt") + tokens("Tool definitions");
+    let results = tokens("Tool results");
+    let pct = |n: u32, of: u32| u64::from(n) * 100 / u64::from(of.max(1));
+    match r.budget {
+        Some(b) if b > 0 && pct(fixed, b) >= 30 => format!(
+            "The system prompt and tool definitions take {}% of the budget before \
+             anything is said. A smaller profile or fewer MCP servers leaves more room.",
+            pct(fixed, b)
+        ),
+        _ if r.used > 0 && pct(results, r.used) >= 50 => format!(
+            "Tool results are {}% of it. Old ones are pruned on their own; \
+             /compact [focus] summarizes earlier turns now.",
+            pct(results, r.used)
+        ),
+        _ => "/compact [focus] summarizes earlier turns now; /new starts afresh.".into(),
+    }
 }
 
 /// The `/memory` modal. `notes` is `None` while the engine reads them.

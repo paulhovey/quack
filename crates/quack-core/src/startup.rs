@@ -403,6 +403,21 @@ async fn resolve_model(
     tx: &broadcast::Sender<Event>,
 ) -> Result<Resolved, Unresolved> {
     let failed = |msg: String| (LoadState::Failed { error: msg.clone() }, msg);
+    // The model last switched to comes first; if it is gone, say so and carry on.
+    if let Some(last) = config.remembered_model()
+        && let Some((pid, mid)) = last.split_once('/')
+    {
+        match named(config, providers, pid, mid, prov, tx).await {
+            Ok((p, m)) => return Ok((p, m, false)),
+            Err(e) => {
+                let _ = tx.send(Event::Warning {
+                    message: format!(
+                        "last used model {last} is not available ({e}); using the default"
+                    ),
+                });
+            }
+        }
+    }
     let wanted = config.settings.model.default.as_str();
     if !wanted.is_empty() {
         let Some((pid, mid)) = wanted.split_once('/') else {

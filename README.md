@@ -62,6 +62,10 @@ Everything below works today. Planned work is listed separately at the end.
 - Mistral's API differences are handled.
 - `/models` lists every model of every provider; switch mid-conversation without losing
   history or approvals. `/providers` shows which are usable and why the others are not.
+- quack starts with the model you last switched to (remembered in `state.toml` in the data
+  folder), falling back to `model.default` when it is unavailable. A project's
+  `model.default`, `QUACK_MODEL` and `-m` still win; `model.remember_last = false` turns
+  it off.
 - Model profiles adapt prompts and tools per model family, using Jinja-style templates.
 - Speed in the status bar: tokens per second and time to first token.
 
@@ -133,8 +137,14 @@ Everything below works today. Planned work is listed separately at the end.
   pruned.
 - Automatic compaction at a threshold or when the server reports the window is full, and
   `/compact [focus]` on demand. If the model cannot summarize, a plain list is kept.
-- `/context` shows where the tokens go. Estimates are corrected with the token counts the
-  server reports.
+- `/context` shows where the tokens go as one band, each part in its own fill, with the
+  compaction point marked. It also says how many turns are left at the recent pace and
+  what would free the most room. Estimates are corrected with the token counts the server
+  reports.
+- `/stats` adds up the session: tokens sent and received, cache hits, cost, where the time
+  went (the model, tools, waiting for your approval), latency and speed, and each tool's
+  calls and failures. Totals survive `/resume`. For cost, give a model its price per
+  million tokens in its provider file: `cost = { input = 0.3, output = 1.2 }`.
 
 ### Sessions and undo
 
@@ -186,8 +196,9 @@ Everything below works today. Planned work is listed separately at the end.
 - A slash-command palette that highlights the letters you typed and shows what doesn't fit
   on the row (the rest of a description, aliases) underneath. Every picker (`/models`,
   `/config`, `/help`, …) works the same way, with tabs, match highlighting and a scrollbar.
-- A status bar with the permission mode as a coloured badge, a context gauge that turns
-  yellow then red as the window fills, generation speed, and what the model is doing right
+- A status bar with the permission mode as a coloured badge, the room left before
+  compaction in tokens and in turns at the recent pace (yellow, then red, as it runs
+  out), generation speed, and what the model is doing right
   now (thinking, writing, running a tool) with a running clock.
 - The model's plan as a live checklist, plus a strip above the input showing progress and
   the step in hand.

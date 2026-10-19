@@ -41,6 +41,13 @@ fn main() {
                 publish(&uri, &docs);
                 None
             }
+            "textDocument/didSave" => {
+                let uri = params["textDocument"]["uri"].as_str().unwrap().to_owned();
+                if docs.contains_key(&uri) {
+                    publish(&uri, &docs);
+                }
+                None
+            }
             "textDocument/definition" => Some(word_at(params, &docs).map_or(Value::Null, |w| {
                 let found = docs.iter().find_map(|(uri, text)| {
                     text.lines().enumerate().find_map(|(i, l)| {

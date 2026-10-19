@@ -324,13 +324,25 @@ pub struct Sampling {
     pub repetition_penalty: Option<f64>,
 }
 
-/// Per million tokens.
+/// US dollars per million tokens, for `/stats`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Cost {
     pub input: f64,
     pub output: f64,
-    pub cached_input: f64,
+    /// Prompt tokens served from the server's cache. Unset: the `input` price.
+    pub cached_input: Option<f64>,
+}
+
+impl Cost {
+    /// Dollars for one request.
+    pub fn of(&self, prompt: u32, cached: u32, completion: u32) -> f64 {
+        let cached = cached.min(prompt);
+        (f64::from(prompt - cached) * self.input
+            + f64::from(cached) * self.cached_input.unwrap_or(self.input)
+            + f64::from(completion) * self.output)
+            / 1_000_000.0
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

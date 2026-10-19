@@ -1,6 +1,5 @@
 ---
 source: crates/quack-tui/src/ui.rs
-assertion_line: 1229
 expression: "render(&app, 80, 24)"
 ---
 " quack 0.1.0 · ~/src/project                                             ⎇ main "
@@ -26,4 +25,4 @@ expression: "render(&app, 80, 24)"
 "╭──────────────────────────────────────────────────────────────────────────────╮"
 "│›                                                                             │"
 "╰──────────────────────────────────────────────────────────────────────────────╯"
-"  ask  no model · ▰▱▱▱▱▱ 12.3k/104k                 waiting for approval  /help "
+"  ask  no model · 91.7k left                        waiting for approval  /help "

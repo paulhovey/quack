@@ -116,7 +116,7 @@ All configuration UIs share one modal widget, so they look and behave the same:
 | `/theme` | | Theme picker with live preview |
 | `/keys` | | Keybinding viewer/editor |
 | `/doctor` | | Runs `quack doctor` checks, shown as a modal report |
-| `/stats` | | Session usage: tokens, cache hits, TTFT, cost (hosted services) |
+| `/stats` | | Session usage: tokens sent and received, cache hits, cost (when priced), where the time went (model, tools, approvals, between turns), latency and speed, per-tool calls and failures |
 | `/reload` | | Read config, providers, MCP servers, instructions and skills again, keeping the conversation ([01](01-configuration.md#hot-reload)) |
 | `/trust` | `[trusted\|settings-only\|ignored]` | Decide whether this repo's `.quack/` loads; opens on its own when a decision is needed ([01](01-configuration.md#as-implemented-2026-10-18)) |
 | `/cd <path>` | | Change the workspace directory (updates roots, LSP, instructions) |

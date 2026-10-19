@@ -472,25 +472,31 @@ fn draw_status(f: &mut Frame<'_>, app: &App, area: Rect) {
         left.push(Span::styled(format!(" · {}", app.info.profile), t.dim));
     }
     if let Some((used, budget)) = app.context {
+        // Not a gauge: how much is left before compaction, and how long that lasts.
         let k = crate::theme::tokens;
-        if budget > 0 {
-            #[allow(clippy::cast_precision_loss)]
-            let frac = used as f32 / budget as f32;
-            let style = if frac >= 0.8 {
-                t.error
-            } else if frac >= 0.5 {
-                t.warn
-            } else {
-                t.ok
-            };
-            left.push(Span::styled(" · ", t.dim));
-            left.push(Span::styled(
-                crate::theme::meter(frac, 6, app.info.ui.ascii),
-                style,
-            ));
-            left.push(Span::styled(format!(" {}/{}", k(used), k(budget)), t.dim));
-        } else {
-            left.push(Span::styled(format!(" · {} ctx", k(used)), t.dim));
+        left.push(Span::styled(" · ", t.dim));
+        match app.room() {
+            Some((room, turns)) => {
+                let line = app.compact_at.unwrap_or(budget).max(1);
+                #[allow(clippy::cast_precision_loss)]
+                let frac = used as f32 / line as f32;
+                let style = if frac >= 0.85 {
+                    t.error
+                } else if frac >= 0.6 {
+                    t.warn
+                } else {
+                    t.dim
+                };
+                let text = match turns {
+                    _ if room == 0 => "compacts next turn".to_owned(),
+                    Some(0) => format!("{} left · compacts soon", k(room)),
+                    Some(1) => format!("{} left · ~1 turn", k(room)),
+                    Some(n) => format!("{} left · ~{n} turns", k(room)),
+                    None => format!("{} left", k(room)),
+                };
+                left.push(Span::styled(text, style));
+            }
+            None => left.push(Span::styled(format!("{} in context", k(used)), t.dim)),
         }
     }
     if let Some(tps) = app.speed {
@@ -1137,8 +1143,80 @@ mod tests {
             ],
             note: None,
         };
-        app.modal = Some(crate::modal::context(Some(&report), &app.theme));
+        let growth = [9_000, 16_000, 22_500, 30_000, 41_870];
+        app.modal = Some(crate::modal::context(
+            Some(&report),
+            &growth,
+            false,
+            &app.theme,
+        ));
         insta::assert_snapshot!(render(&app, 100, 30));
+    }
+
+    #[test]
+    fn stats_modal_100x30() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        use quack_protocol::{StatsReport, ToolStat};
+        let mut app = App::new(test_info());
+        app.on_engine(Event::StartupComplete);
+        let tool = |name: &str, calls, failed, ms| ToolStat {
+            name: name.into(),
+            calls,
+            failed,
+            ms,
+        };
+        let report = StatsReport {
+            model: "charm/qwen3.8-flash".into(),
+            turns: 6,
+            requests: 23,
+            unreported: 0,
+            prompt_tokens: 412_000,
+            completion_tokens: 9_800,
+            cached_tokens: 301_000,
+            cache_reported: 23,
+            cost: Some(0.1374),
+            unpriced: 0,
+            ttft_ms: Some((640, 2_900)),
+            tokens_per_sec: Some(52.0),
+            open_ms: 600_000,
+            model_ms: 210_000,
+            tools_ms: 45_000,
+            approval_ms: 30_000,
+            tools: vec![
+                tool("read", 9, 0, 400),
+                tool("shell", 6, 2, 40_000),
+                tool("edit", 4, 0, 4_600),
+            ],
+            compactions: 1,
+            pruned: 8,
+            resumed: false,
+        };
+        app.modal = Some(crate::modal::stats(Some(&report), false, &app.theme));
+        insta::assert_snapshot!(render(&app, 100, 30));
+        for _ in 0..3 {
+            key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        }
+        let s = render(&app, 100, 30);
+        assert!(s.contains("Where the time went"), "{s}");
+        assert!(s.contains("the model"), "{s}");
+        assert!(s.contains("35%"), "model is 210 of 600 s: {s}");
+        insta::assert_snapshot!("stats_modal_time_100x30", s);
+    }
+
+    #[test]
+    fn status_bar_shows_room_left_in_turns() {
+        let mut app = started_app();
+        app.context = Some((60_000, 104_000));
+        app.compact_at = Some(83_200);
+        let s = render(&app, 100, 24);
+        assert!(s.contains("23.2k left"), "{s}");
+        assert!(!s.contains("turns"), "no pace without turns: {s}");
+        app.growth = vec![30_000, 38_000, 44_000, 52_000, 60_000];
+        let s = render(&app, 100, 24);
+        assert!(s.contains("23.2k left · ~2 turns"), "{s}");
+        app.context = Some((90_000, 104_000));
+        let s = render(&app, 100, 24);
+        assert!(s.contains("compacts next turn"), "{s}");
     }
 
     #[test]

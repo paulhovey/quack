@@ -139,10 +139,10 @@ repetition_penalty = 1.05
 [models.extra_body]                    # merged verbatim into request JSON
 chat_template_kwargs = { enable_thinking = false }
 
-[models.cost]                          # optional; per million tokens, for hosted services
+[models.cost]                          # optional; US$ per million tokens, for /stats
 input = 0.0
 output = 0.0
-cached_input = 0.0
+cached_input = 0.0                     # unset: the input price
 
 [models.serving]
 prefill_tps = 3000                     # hint for cache-aware pruning (05-context); "auto" = measure

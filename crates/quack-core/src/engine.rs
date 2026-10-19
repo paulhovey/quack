@@ -133,6 +133,8 @@ pub struct Engine {
     mcp: Arc<crate::mcp::Mcp>,
     /// Language servers, likewise.
     lsp: Arc<LspManager>,
+    /// This session's usage, for `/stats`.
+    stats: Arc<Mutex<crate::stats::Stats>>,
 }
 
 impl Engine {
@@ -173,6 +175,7 @@ impl Engine {
             switch_tx: None,
             pending_mode: None,
             notes: Vec::new(),
+            stats: Arc::default(),
             mcp: crate::mcp::Mcp::new(McpManager::new(
                 Vec::new(),
                 PathBuf::new(),
@@ -350,6 +353,7 @@ impl Engine {
             }
         };
         let (history, items, turns) = session::replay(&records);
+        self.stats = Arc::new(Mutex::new(crate::stats::Stats::from_log(&records)));
         self.log = None;
         match ps.reopen(entry.clone()) {
             Ok(log) => {
@@ -395,6 +399,7 @@ impl Engine {
                 self.sync_log();
                 self.log = None;
                 self.session.id = new_session_id();
+                self.stats = Arc::default();
                 self.turns = 0;
                 self.title = None;
                 Vec::new()
@@ -770,6 +775,12 @@ impl Engine {
         };
         self.session.model = Some(setup.model_ref.clone());
         self.session.profile = setup.profile.id.clone();
+        if self.config.settings.model.remember_last
+            && let Err(e) =
+                quack_config::save_last_model(&self.config.dirs.user_data, &setup.model_ref)
+        {
+            self.warn(format!("cannot remember the model for next time: {e}"));
+        }
         session::record(
             self.log.as_ref(),
             "model_switch",
@@ -1010,6 +1021,20 @@ impl Engine {
                 }),
                 None => self.warn("no model is ready, so there is no context yet".into()),
             },
+            Op::GetStats => {
+                let model = self
+                    .convo
+                    .as_ref()
+                    .map(|c| c.setup.model_ref.clone())
+                    .or_else(|| self.session.model.clone())
+                    .unwrap_or_default();
+                let report = self
+                    .stats
+                    .lock()
+                    .map(|s| s.report(&model, self.turns))
+                    .unwrap_or_default();
+                self.emit(Event::Stats { report });
+            }
             Op::SetTitle { title } => {
                 let title = title.trim().to_owned();
                 session::record(
@@ -1207,6 +1232,7 @@ impl Engine {
             cancel,
             log: self.log.clone(),
             checkpoints: None,
+            stats: self.stats.clone(),
         };
         tokio::spawn(async move {
             ctx.emit(Event::TurnStarted { turn });
@@ -1301,6 +1327,7 @@ impl Engine {
             cancel,
             log: self.log.clone(),
             checkpoints: self.checkpoints(),
+            stats: self.stats.clone(),
         };
         tokio::spawn(async move {
             let history = turn::run(ctx, history, prompt).await;
@@ -1405,6 +1432,7 @@ fn op_name(op: &Op) -> &'static str {
         Op::NewSession => "new_session",
         Op::ListSessions => "list_sessions",
         Op::GetContext => "get_context",
+        Op::GetStats => "get_stats",
         Op::ListMemory => "list_memory",
         Op::RunDoctor => "run_doctor",
         Op::DetectServers => "detect_servers",

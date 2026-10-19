@@ -53,7 +53,7 @@ budget = floor(context_window × budget_ratio) − max_output_reserve
 
 The `ContextLedger` tracks tokens per segment: system, tools, instructions, memory, summary, and each history item. It uses local token counts ([02](02-providers.md#tokenizers)), corrected by the server's reported usage.
 
-`/context` shows a breakdown (bar + table): which segment, how many tokens, what is prunable, and the estimated cache state. The status bar shows `used/budget` and the cache-hit percentage from the last request.
+`/context` shows a breakdown: one band with each segment in its own fill and the compaction point marked, tokens per segment, the room left before compaction in turns at the recent pace, and a suggestion based on what takes the most room. The status bar shows the room left (`34k left · ~4 turns`) rather than a gauge, because "how long can I keep going" is the question a user has.
 
 ## Tree-sitter: structure first
 
@@ -138,7 +138,7 @@ The `task` tool runs a sub-agent with a fresh context and a restricted tool set.
 
 ## Metrics
 
-Logged per request: prompt tokens, cached tokens (when reported), completion tokens, TTFT, prefill tps, prune and compaction events. `/stats` shows per-session totals. These feed the `auto` strategy and the eval reports.
+Logged per request: prompt tokens, cached tokens (when reported), completion tokens and, when the model has a `cost`, the price. `/stats` shows per-session totals, rebuilt from the log on resume. Timings (TTFT, speed, time in tools and approvals) are kept in memory only, so after a resume they cover the time since. These feed the `auto` strategy and the eval reports.
 
 ## Open questions
 

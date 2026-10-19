@@ -14,6 +14,7 @@ mod sandbox;
 mod session;
 pub mod setup;
 mod startup;
+mod stats;
 mod turn;
 
 pub use engine::{Engine, EngineHandle};

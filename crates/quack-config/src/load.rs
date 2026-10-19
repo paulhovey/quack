@@ -509,6 +509,56 @@ mod tests {
     }
 
     #[test]
+    fn last_used_model_replaces_only_a_personal_default() {
+        let f = Fixture::new();
+        f.write("user/config.toml", "[model]\ndefault = \"a/default\"");
+        let none = f.load(|_| {});
+        assert_eq!(none.remembered_model(), None, "nothing remembered yet");
+        crate::save_last_model(&f.root.join("data"), "b/last").expect("save");
+
+        let l = f.load(|_| {});
+        assert_eq!(l.remembered_model().as_deref(), Some("b/last"));
+        assert_eq!(l.settings.model.default, "a/default", "config is untouched");
+
+        // `-m` and QUACK_MODEL are explicit for this run.
+        let cli = f.load(|o| o.model = Some("c/cli".into()));
+        assert_eq!(cli.remembered_model(), None);
+        let mut env = Fixture::new();
+        env.vars.insert("QUACK_MODEL".into(), "d/env".into());
+        crate::save_last_model(&env.root.join("data"), "b/last").expect("save");
+        assert_eq!(env.load(|_| {}).remembered_model(), None);
+
+        // So is a trusted project's choice.
+        let repo = f.root.join("repo").canonicalize().expect("canonical");
+        f.write(
+            "data/trust.toml",
+            &format!(
+                "[[project]]\npath = {:?}\ndecision = \"trusted\"\n",
+                repo.display().to_string()
+            ),
+        );
+        f.write(
+            "repo/.quack/config.toml",
+            "[model]\ndefault = \"p/project\"",
+        );
+        assert_eq!(f.load(|_| {}).remembered_model(), None);
+        std::fs::remove_file(f.root.join("repo/.quack/config.toml")).expect("rm");
+
+        // Turned off, or locked by policy.
+        f.write(
+            "user/config.toml",
+            "[model]\ndefault = \"a/default\"\nremember_last = false",
+        );
+        assert_eq!(f.load(|_| {}).remembered_model(), None);
+        f.write("user/config.toml", "[model]\ndefault = \"a/default\"");
+        f.write(
+            "system/config.toml",
+            "[model]\ndefault = \"s/locked\"\n[policy]\nlocked = [\"model.default\"]",
+        );
+        assert_eq!(f.load(|_| {}).remembered_model(), None);
+    }
+
+    #[test]
     fn empty_environment_yields_compiled_defaults() {
         let f = Fixture::new();
         let l = f.load(|_| {});

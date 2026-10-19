@@ -2,12 +2,16 @@
   "$defs": {
     "Cost": {
       "additionalProperties": false,
-      "description": "Per million tokens.",
+      "description": "US dollars per million tokens, for `/stats`.",
       "properties": {
         "cached_input": {
-          "default": 0.0,
+          "default": null,
+          "description": "Prompt tokens served from the server's cache. Unset: the `input` price.",
           "format": "double",
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "input": {
           "default": 0.0,

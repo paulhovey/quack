@@ -92,6 +92,22 @@ impl AppInfo {
     }
 }
 
+/// Turns that fit in `room` at the typical growth of the last few turns. Compactions show
+/// up as shrinking turns and are left out.
+pub(crate) fn turns_left(growth: &[u32], room: u32) -> Option<u32> {
+    let mut steps: Vec<u32> = growth
+        .windows(2)
+        .rev()
+        .take(6)
+        .filter_map(|w| w[1].checked_sub(w[0]).filter(|d| *d > 0))
+        .collect();
+    if steps.is_empty() {
+        return None;
+    }
+    steps.sort_unstable();
+    Some(room / steps[steps.len() / 2])
+}
+
 /// The branch in `.git/HEAD` of `dir` or a parent; worktrees and submodules point at
 /// their git dir with a `gitdir:` file.
 fn git_branch(dir: &std::path::Path) -> Option<String> {
@@ -220,6 +236,10 @@ pub struct App {
     pub(crate) approval: Option<Approval>,
     /// `(used, budget)` tokens from the last response.
     pub(crate) context: Option<(u32, u32)>,
+    /// Where compaction starts, in tokens.
+    pub(crate) compact_at: Option<u32>,
+    /// Context used at the end of each turn, oldest first: how fast it grows.
+    pub(crate) growth: Vec<u32>,
     /// Generation speed of the last response, tokens per second.
     pub(crate) speed: Option<f32>,
     /// When the running turn started, and how many tools it has called.
@@ -273,6 +293,8 @@ impl App {
             queued: false,
             approval: None,
             context: None,
+            compact_at: None,
+            growth: Vec::new(),
             speed: None,
             turn_started: None,
             turn_tools: 0,
@@ -499,6 +521,7 @@ impl App {
                     self.transcript.truncate(i);
                 }
                 self.context = None;
+                self.growth.clear();
                 if self.input.is_empty() {
                     self.input.set(&text);
                 }
@@ -536,7 +559,17 @@ impl App {
             }
             Event::ContextReport { report } => {
                 if self.modal.as_ref().is_some_and(|m| m.title == "Context") {
-                    self.modal = Some(modal::context(Some(&report), &self.theme));
+                    self.modal = Some(modal::context(
+                        Some(&report),
+                        &self.growth,
+                        self.info.ui.ascii,
+                        &self.theme,
+                    ));
+                }
+            }
+            Event::Stats { report } => {
+                if self.modal.as_ref().is_some_and(|m| m.title == "Stats") {
+                    self.modal = Some(modal::stats(Some(&report), self.info.ui.ascii, &self.theme));
                 }
             }
             Event::SessionList { sessions } => {
@@ -554,6 +587,7 @@ impl App {
                 if std::mem::take(&mut self.resuming) {
                     self.transcript.clear();
                     self.context = None;
+                    self.growth.clear();
                 }
                 self.panel_collapsed = true;
                 let short: String = session.id.0.chars().take(12).collect();
@@ -645,7 +679,15 @@ impl App {
             Event::ApprovalRequest { call_id, request } => {
                 self.approval = Some(Approval { call_id, request });
             }
-            Event::ContextUpdate { used, budget, .. } => self.context = Some((used, budget)),
+            Event::ContextUpdate {
+                used,
+                budget,
+                threshold,
+                ..
+            } => {
+                self.context = Some((used, budget));
+                self.compact_at = threshold;
+            }
             Event::Speed { tokens_per_sec, .. } => {
                 if tokens_per_sec.is_some() {
                     self.speed = tokens_per_sec;
@@ -668,6 +710,9 @@ impl App {
             )),
             Event::TurnComplete { usage, .. } => {
                 self.turn_running = false;
+                if let Some((used, _)) = self.context {
+                    self.growth.push(used);
+                }
                 self.approval = None;
                 if let Some(started) = self.turn_started.take() {
                     let mut parts = vec![crate::theme::elapsed(started.elapsed())];
@@ -879,6 +924,15 @@ impl App {
         self.dirty = true;
     }
 
+    /// Tokens left before compaction (or the budget), and how many turns that is at the
+    /// recent pace, once there are turns to measure. `None` without a budget.
+    pub(crate) fn room(&self) -> Option<(u32, Option<u32>)> {
+        let (used, budget) = self.context?;
+        let line = self.compact_at.or((budget > 0).then_some(budget))?;
+        let room = line.saturating_sub(used);
+        Some((room, turns_left(&self.growth, room)))
+    }
+
     /// Whether the terminal should capture the mouse (`ui.mouse`), for wheel scrolling.
     pub fn wants_mouse(&self) -> bool {
         self.info.ui.mouse
@@ -1075,6 +1129,7 @@ impl App {
                 }
                 self.transcript.clear();
                 self.context = None;
+                self.growth.clear();
                 self.ops.push(Op::NewSession);
                 self.note("new session; the previous one is saved (/resume)".into());
             }
@@ -1225,8 +1280,17 @@ impl App {
                 }
             },
             "context" => {
-                self.modal = Some(modal::context(None, &self.theme));
+                self.modal = Some(modal::context(
+                    None,
+                    &self.growth,
+                    self.info.ui.ascii,
+                    &self.theme,
+                ));
                 self.ops.push(Op::GetContext);
+            }
+            "stats" => {
+                self.modal = Some(modal::stats(None, self.info.ui.ascii, &self.theme));
+                self.ops.push(Op::GetStats);
             }
             "compact" => self.ops.push(Op::Compact {
                 focus: Some(args.to_owned()).filter(|a| !a.is_empty()),
