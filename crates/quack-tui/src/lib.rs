@@ -19,7 +19,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste, EventStream};
+use crossterm::event::{
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    EventStream,
+};
 use futures::StreamExt;
 use quack_config::Loaded;
 use quack_core::EngineHandle;
@@ -62,7 +65,7 @@ pub async fn run(
     let mut terminal = ratatui::init();
     let _ = crossterm::execute!(io::stdout(), EnableBracketedPaste);
     let result = event_loop(&mut terminal, &mut app, &mut engine, trace.as_ref()).await;
-    let _ = crossterm::execute!(io::stdout(), DisableBracketedPaste);
+    let _ = crossterm::execute!(io::stdout(), DisableBracketedPaste, DisableMouseCapture);
     ratatui::restore();
     engine.shutdown().await;
     result
@@ -75,6 +78,8 @@ async fn event_loop(
     trace: Option<&StartupTrace>,
 ) -> io::Result<()> {
     let mut input = EventStream::new();
+    // `ui.mouse`: capture the mouse so the wheel scrolls; followed across `/reload`.
+    let mut mouse = false;
     let mut tick = tokio::time::interval(FRAME);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     terminal.draw(|f| ui::draw(f, app))?;
@@ -104,6 +109,14 @@ async fn event_loop(
                 if app.take_dirty() {
                     terminal.draw(|f| ui::draw(f, app))?;
                 }
+            }
+        }
+        if app.wants_mouse() != mouse {
+            mouse = app.wants_mouse();
+            if mouse {
+                crossterm::execute!(io::stdout(), EnableMouseCapture)?;
+            } else {
+                crossterm::execute!(io::stdout(), DisableMouseCapture)?;
             }
         }
         if let Some(text) = app.take_clipboard() {

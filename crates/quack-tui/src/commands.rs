@@ -243,6 +243,13 @@ pub(crate) const COMMANDS: &[Command] = &[
         Some("M3"),
     ),
     c(
+        "thinking",
+        &["think"],
+        "[show|hide]",
+        "Show or hide the model's thinking, when it sends any (Ctrl-T)",
+        None,
+    ),
+    c(
         "copy",
         &[],
         "[code]",
@@ -264,7 +271,13 @@ pub(crate) const KEYS: &[(&str, &str)] = &[
     ("Esc", "Close modal or popup; otherwise interrupt the turn"),
     ("Ctrl-C", "Clear input, interrupt, or press twice to quit"),
     ("Up / Down", "Input history"),
-    ("PageUp / PageDown", "Scroll the transcript"),
+    ("PageUp / PageDown", "Scroll the transcript a page"),
+    ("Shift-Up / Shift-Down", "Scroll the transcript a line"),
+    (
+        "Ctrl-Home / Ctrl-End",
+        "Jump to the top or bottom of the transcript",
+    ),
+    ("Ctrl-T", "Show or hide the model's thinking"),
     ("/", "Slash commands; Tab completes"),
     ("Ctrl-P", "Command palette (opens help for now)"),
     ("Shift-Tab", "Cycle mode: ask → auto-edit → plan"),

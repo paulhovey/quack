@@ -1,7 +1,10 @@
+use std::cell::Cell;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use quack_config::settings::{StartupPanel, UiSettings};
+use crossterm::event::{
+    Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
+};
+use quack_config::settings::{ShowReasoning, StartupPanel, UiSettings};
 use quack_config::{LayerStatus, Loaded, SettingRow};
 use quack_protocol::{
     ApprovalDecision, ApprovalRequest, CallId, Event, InputItem, LoadState, ModelId, Op,
@@ -20,6 +23,8 @@ const DOUBLE_ESC: Duration = Duration::from_millis(600);
 const SPIN_EVERY: u64 = 5;
 /// Welcome duck advances animation every N frames (16 ms each).
 const DUCK_ANIM_EVERY: u64 = 8;
+/// Transcript rows one mouse-wheel notch scrolls.
+const WHEEL_ROWS: usize = 3;
 
 /// Static facts the UI shows, captured once at startup.
 #[derive(Debug, Clone)]
@@ -201,8 +206,13 @@ pub struct App {
     pub(crate) transcript: Vec<Entry>,
     pub(crate) input: Input,
     pub(crate) modal: Option<Modal>,
-    /// Transcript rows scrolled up from the bottom.
-    pub(crate) scroll: usize,
+    /// Transcript rows scrolled up from the bottom. Drawing clamps it and keeps the view
+    /// still while new rows arrive below, so it lives in a `Cell`.
+    pub(crate) scroll: Cell<usize>,
+    /// `(rows, height)` of the transcript as last drawn.
+    pub(crate) view: Cell<(usize, usize)>,
+    /// How reasoning shows right now: `ui.show_reasoning`, flipped by Ctrl-T.
+    pub(crate) show_reasoning: ShowReasoning,
     pub(crate) popup_selected: usize,
     popup_dismissed: bool,
     pub(crate) turn_running: bool,
@@ -254,7 +264,9 @@ impl App {
             transcript: Vec::new(),
             input: Input::default(),
             modal: None,
-            scroll: 0,
+            scroll: Cell::new(0),
+            view: Cell::new((0, 0)),
+            show_reasoning: info.ui.show_reasoning,
             popup_selected: 0,
             popup_dismissed: false,
             turn_running: false,
@@ -717,6 +729,11 @@ impl App {
                 self.dirty = true;
             }
             TermEvent::Resize(..) => self.dirty = true,
+            TermEvent::Mouse(m) if self.modal.is_none() => match m.kind {
+                MouseEventKind::ScrollUp => self.scroll_up(WHEEL_ROWS),
+                MouseEventKind::ScrollDown => self.scroll_down(WHEEL_ROWS),
+                _ => {}
+            },
             _ => {}
         }
     }
@@ -776,6 +793,8 @@ impl App {
                     self.input.set(&format!("/{} ", cmd.name));
                 }
             }
+            _ if self.scroll_key(key) => {}
+            KeyCode::Char('t') if ctrl => self.toggle_reasoning(None),
             KeyCode::Up if !popup.is_empty() => {
                 self.popup_selected = self.popup_selected.saturating_sub(1);
             }
@@ -784,8 +803,6 @@ impl App {
             }
             KeyCode::Up => self.input.history_prev(),
             KeyCode::Down => self.input.history_next(),
-            KeyCode::PageUp => self.scroll += 10,
-            KeyCode::PageDown => self.scroll = self.scroll.saturating_sub(10),
             KeyCode::Left => self.input.left(),
             KeyCode::Right => self.input.right(),
             KeyCode::Home => self.input.home(),
@@ -805,6 +822,68 @@ impl App {
         }
     }
 
+    /// Transcript scrolling keys, shared by the prompt and the approval bar. Returns
+    /// whether `key` was one.
+    fn scroll_key(&mut self, key: KeyEvent) -> bool {
+        let page = self.view.get().1.saturating_sub(2).max(1);
+        let jump = key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::SHIFT);
+        match key.code {
+            KeyCode::PageUp => self.scroll_up(page),
+            KeyCode::PageDown => self.scroll_down(page),
+            KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => self.scroll_up(1),
+            KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => self.scroll_down(1),
+            // Drawing clamps this to the first row.
+            KeyCode::Home if jump => self.scroll.set(usize::MAX),
+            KeyCode::End if jump => self.scroll.set(0),
+            _ => return false,
+        }
+        self.dirty = true;
+        true
+    }
+
+    fn scroll_up(&mut self, rows: usize) {
+        let (total, height) = self.view.get();
+        let max = total.saturating_sub(height);
+        self.scroll.set((self.scroll.get() + rows).min(max));
+        self.dirty = true;
+    }
+
+    fn scroll_down(&mut self, rows: usize) {
+        self.scroll.set(self.scroll.get().saturating_sub(rows));
+        self.dirty = true;
+    }
+
+    /// Show (`Some(true)`), hide (`Some(false)`) or flip the model's reasoning. Hiding goes
+    /// back to `ui.show_reasoning`, or to a one-line summary when that is `expanded`.
+    fn toggle_reasoning(&mut self, show: Option<bool>) {
+        let show = show.unwrap_or(self.show_reasoning != ShowReasoning::Expanded);
+        self.show_reasoning = match (show, self.info.ui.show_reasoning) {
+            (true, _) => ShowReasoning::Expanded,
+            (false, ShowReasoning::Expanded) => ShowReasoning::Collapsed,
+            (false, configured) => configured,
+        };
+        // Without any reasoning on screen the change is invisible; say what happened.
+        if !self
+            .transcript
+            .iter()
+            .any(|e| matches!(e, Entry::Reasoning(_)))
+        {
+            let state = if show { "shown" } else { "hidden" };
+            self.note(format!(
+                "thinking will be {state} (Ctrl-T); nothing to show yet, \
+                 and only some models send it"
+            ));
+        }
+        self.dirty = true;
+    }
+
+    /// Whether the terminal should capture the mouse (`ui.mouse`), for wheel scrolling.
+    pub fn wants_mouse(&self) -> bool {
+        self.info.ui.mouse
+    }
+
     fn tool_mut(&mut self, id: &CallId) -> Option<&mut ToolEntry> {
         self.transcript.iter_mut().rev().find_map(|e| match e {
             Entry::Tool(t) if &t.call_id == id => Some(t),
@@ -817,14 +896,7 @@ impl App {
             KeyCode::Char('y' | 'Y') | KeyCode::Enter => ApprovalDecision::AllowOnce,
             KeyCode::Char('a' | 'A') => ApprovalDecision::AllowSession,
             KeyCode::Char('n' | 'N') | KeyCode::Esc => ApprovalDecision::Deny,
-            KeyCode::PageUp => {
-                self.scroll += 10;
-                return;
-            }
-            KeyCode::PageDown => {
-                self.scroll = self.scroll.saturating_sub(10);
-                return;
-            }
+            _ if self.scroll_key(key) => return,
             _ => return,
         };
         if let Some(a) = self.approval.take() {
@@ -885,7 +957,7 @@ impl App {
         if text.trim().is_empty() {
             return;
         }
-        self.scroll = 0;
+        self.scroll.set(0);
         if text.starts_with('/') {
             return self.execute(&text);
         }
@@ -955,7 +1027,7 @@ impl App {
     }
 
     /// Run a `/command args` line.
-    fn execute(&mut self, text: &str) {
+    pub(crate) fn execute(&mut self, text: &str) {
         let rest = text.trim().trim_start_matches('/');
         let (name, args) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
         match commands::find(name) {
@@ -1101,6 +1173,12 @@ impl App {
                 self.modal = Some(modal::doctor(None, &self.theme));
                 self.ops.push(Op::RunDoctor);
             }
+            "thinking" => match args {
+                "" => self.toggle_reasoning(None),
+                "show" | "on" => self.toggle_reasoning(Some(true)),
+                "hide" | "off" => self.toggle_reasoning(Some(false)),
+                _ => self.note("usage: /thinking [show|hide]".into()),
+            },
             "copy" => {
                 let last = self.transcript.iter().rev().find_map(|e| match e {
                     Entry::Assistant(t) if !t.trim().is_empty() => Some(t.clone()),
@@ -1214,6 +1292,9 @@ impl App {
     /// Settings from a reloaded config. What the engine reports (model, profile, mode)
     /// stays as it is until the engine says otherwise.
     pub fn reconfigure(&mut self, info: AppInfo) {
+        if info.ui.show_reasoning != self.info.ui.show_reasoning {
+            self.show_reasoning = info.ui.show_reasoning;
+        }
         let keep = (
             self.info.model.take(),
             std::mem::take(&mut self.info.profile),

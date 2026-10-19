@@ -50,8 +50,9 @@ Everything below works today. Planned work is listed separately at the end.
 
 ### Models
 
-- Streaming replies, with reasoning ("thinking") shown, and retries with backoff that honour
-  `Retry-After`.
+- Streaming replies, with reasoning ("thinking") shown as a one-line summary that Ctrl-T
+  (or `/thinking`) expands, and retries with backoff that honour `Retry-After`. Set
+  `ui.show_reasoning` to `expanded` or `hidden` to change how it starts.
 - Thinking models keep their reasoning across tool calls (sent back as the server
   expects), which DeepSeek requires and MiniMax, Kimi and GLM rely on.
 - Messy tool calls are repaired: Hermes and Qwen3-XML calls printed as text become real calls
@@ -178,6 +179,10 @@ Everything below works today. Planned work is listed separately at the end.
 ### Interface
 
 - A full-screen terminal UI with markdown rendering and an ASCII mode.
+- A scrollable history with a scrollbar: PageUp/PageDown by page, Shift-Up/Down by line,
+  Ctrl-Home/Ctrl-End to the top or the latest. The view holds still while a reply streams
+  in below. Set `ui.mouse = true` to scroll with the wheel (it takes over the mouse, so
+  hold Shift to select text).
 - A slash-command palette that highlights the letters you typed and shows what doesn't fit
   on the row (the rest of a description, aliases) underneath. Every picker (`/models`,
   `/config`, `/help`, …) works the same way, with tabs, match highlighting and a scrollbar.

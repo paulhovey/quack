@@ -2,7 +2,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, Paragraph};
+use ratatui::widgets::{Block, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use quack_protocol::LoadState;
@@ -185,16 +185,22 @@ fn transcript_rows(app: &App, width: usize) -> Vec<Line<'static>> {
                 rows.push(Line::raw(""));
                 continue;
             }
-            Entry::Reasoning(s) => match app.info.ui.show_reasoning {
+            Entry::Reasoning(s) => match app.show_reasoning {
                 ShowReasoning::Hidden => continue,
                 ShowReasoning::Collapsed => {
                     let words = s.split_whitespace().count();
                     let italic = t.dim.add_modifier(Modifier::ITALIC);
+                    let live = app.turn_running && i + 1 == app.transcript.len();
+                    let what = if live {
+                        format!("thinking… {words} words")
+                    } else {
+                        format!("thought for {words} words")
+                    };
                     (
                         app.glyphs.think,
                         t.magenta,
                         italic,
-                        format!("thought for {words} words"),
+                        format!("{what} · ctrl-t shows"),
                     )
                 }
                 ShowReasoning::Expanded => (
@@ -349,13 +355,59 @@ fn draw_transcript(f: &mut Frame<'_>, app: &App, area: Rect) {
         return;
     }
     // Only the visible rows are handed to ratatui. Per-message layout caching lands in M1.
-    let rows = transcript_rows(app, usize::from(area.width));
+    // The last column is kept for the scrollbar.
+    let rows = transcript_rows(app, usize::from(area.width.saturating_sub(1)));
     let height = usize::from(area.height);
-    let end = rows
-        .len()
-        .saturating_sub(app.scroll.min(rows.len().saturating_sub(height)));
+    let total = rows.len();
+    let max = total.saturating_sub(height);
+    // Scrolled up while a reply streams in: move with the new rows so the view holds still.
+    let (drawn, _) = app.view.get();
+    let mut scroll = app.scroll.get();
+    if scroll > 0 && drawn > 0 && total > drawn {
+        scroll = scroll.saturating_add(total - drawn);
+    }
+    let scroll = scroll.min(max);
+    app.scroll.set(scroll);
+    app.view.set((total, height));
+
+    let end = total - scroll;
     let start = end.saturating_sub(height);
     f.render_widget(Paragraph::new(rows[start..end].to_vec()), area);
+
+    if max > 0 {
+        let mut state = ScrollbarState::new(max)
+            .position(max - scroll)
+            .viewport_content_length(height);
+        f.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .thumb_symbol(app.glyphs.scroll[0])
+                .thumb_style(app.theme.dim)
+                .track_symbol(Some(app.glyphs.scroll[1]))
+                .track_style(app.theme.border),
+            area,
+            &mut state,
+        );
+    }
+    if scroll > 0 {
+        // What is below, and the way back to it, on the bottom row.
+        let arrow = if app.info.ui.ascii { "v" } else { "↓" };
+        let hint = format!(" {arrow} {scroll} more lines · ctrl-end jumps to the latest ");
+        let w = u16::try_from(hint.width())
+            .unwrap_or(u16::MAX)
+            .min(area.width);
+        let at = Rect {
+            x: area.right().saturating_sub(w + 1),
+            y: area.bottom() - 1,
+            width: w,
+            height: 1,
+        };
+        f.render_widget(
+            Paragraph::new(Span::styled(hint, app.theme.pill(app.theme.accent))),
+            at,
+        );
+    }
 }
 
 fn draw_input(f: &mut Frame<'_>, app: &App, area: Rect) {
@@ -1300,6 +1352,74 @@ mod tests {
         assert!(underlined(r), "r of /rewind is a match");
         assert!(!underlined(r + 1), "e is not");
         assert!(underlined(r + 2), "w is a match");
+    }
+
+    fn key(app: &mut App, code: crossterm::event::KeyCode, mods: crossterm::event::KeyModifiers) {
+        app.on_terminal(crossterm::event::Event::Key(
+            crossterm::event::KeyEvent::new(code, mods),
+        ));
+    }
+
+    #[test]
+    fn transcript_scrolls_to_top_and_bottom_and_holds_still_while_streaming() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let mut app = started_app();
+        for n in 1..=40 {
+            app.transcript.push(Entry::User(format!("message {n}")));
+        }
+        let s = render(&app, 80, 24);
+        assert!(s.contains("message 40") && !s.contains("message 1 "), "{s}");
+        assert!(!s.contains("more lines"), "no hint at the bottom");
+
+        key(&mut app, KeyCode::Home, KeyModifiers::CONTROL);
+        let s = render(&app, 80, 24);
+        assert!(s.contains("message 1 ") && !s.contains("message 40"), "{s}");
+        assert!(s.contains("more lines · ctrl-end"), "{s}");
+
+        // New output arrives below: the top stays in view.
+        app.transcript.push(Entry::Assistant("a new reply".into()));
+        let s = render(&app, 80, 24);
+        assert!(s.contains("message 1 "), "{s}");
+
+        key(&mut app, KeyCode::PageDown, KeyModifiers::NONE);
+        let s = render(&app, 80, 24);
+        assert!(!s.contains("message 1 "), "{s}");
+
+        key(&mut app, KeyCode::End, KeyModifiers::CONTROL);
+        let s = render(&app, 80, 24);
+        assert!(
+            s.contains("a new reply") && !s.contains("more lines"),
+            "{s}"
+        );
+
+        // Plain Home and End still move the input cursor.
+        key(&mut app, KeyCode::Up, KeyModifiers::SHIFT);
+        assert_eq!(app.scroll.get(), 1);
+        key(&mut app, KeyCode::End, KeyModifiers::NONE);
+        assert_eq!(app.scroll.get(), 1);
+    }
+
+    #[test]
+    fn ctrl_t_shows_and_hides_thinking() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let mut app = started_app();
+        app.transcript.push(Entry::User("hi".into()));
+        app.on_engine(Event::ReasoningDelta {
+            text: "The user greets me; greet back.".into(),
+        });
+        app.transcript.push(Entry::Assistant("Hello!".into()));
+        let s = render(&app, 80, 24);
+        assert!(s.contains("thought for 6 words · ctrl-t shows"), "{s}");
+        assert!(!s.contains("greet back"));
+
+        key(&mut app, KeyCode::Char('t'), KeyModifiers::CONTROL);
+        let s = render(&app, 80, 24);
+        assert!(s.contains("The user greets me; greet back."), "{s}");
+
+        app.execute("/thinking hide");
+        let s = render(&app, 80, 24);
+        assert!(!s.contains("greet back"), "{s}");
+        assert!(s.contains("thought for 6 words"), "{s}");
     }
 
     #[test]

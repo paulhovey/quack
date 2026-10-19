@@ -1,10 +1,11 @@
 ---
 source: crates/quack-tui/src/ui.rs
+assertion_line: 1177
 expression: "render(&app, 60, 20)"
 ---
 "╭ Help ────────────────────────────────────────────────────╮"
 "│  Commands   Keys                                         │"
-"│ › type to filter                                      38 │"
+"│ › type to filter                                      39 │"
 "│╭────────────────────────────────────────────────────────╮│"
 "││▌ /models                                               ┃│"
 "││  /providers                                            ││"

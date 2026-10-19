@@ -3,16 +3,24 @@
 
 mod common;
 
+#[cfg(unix)]
 use std::sync::Arc;
+#[cfg(unix)]
 use std::time::Duration;
 
+#[cfg(unix)]
 use common::{bodies, sse_text, turn};
+#[cfg(unix)]
 use quack_core::protocol::{Event, Op};
+#[cfg(unix)]
 use quack_core::{Engine, EngineHandle};
+#[cfg(unix)]
 use wiremock::matchers::method;
+#[cfg(unix)]
 use wiremock::{Mock, MockServer};
 
 /// Events up to and including the first that `stop` accepts.
+#[cfg(unix)]
 async fn until(engine: &mut EngineHandle, stop: impl Fn(&Event) -> bool) -> Vec<Event> {
     let mut seen = Vec::new();
     loop {

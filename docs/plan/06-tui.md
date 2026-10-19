@@ -148,7 +148,7 @@ The **approval dialog** shows a diff view for edits (side-by-side at 160 columns
 
 ## Keybindings
 
-Defaults are listed in `quack keys --print`. Users override them in `config.toml [keys]`. Notable defaults: Esc interrupts the turn (double Esc opens the rewind picker), Ctrl-C clears input or interrupts, and a second Ctrl-C quits. Shift-Tab cycles permission mode, and Ctrl-T toggles the todo pane.
+Defaults are listed in `quack keys --print`. Users override them in `config.toml [keys]`. Notable defaults: Esc interrupts the turn (double Esc opens the rewind picker), Ctrl-C clears input or interrupts, and a second Ctrl-C quits. Shift-Tab cycles permission mode, and Ctrl-T shows or hides the model's thinking (`/thinking`). PageUp/PageDown and Shift-Up/Down scroll the transcript, Ctrl-Home/Ctrl-End jump to its top and bottom, and the todo pane is toggled with `/todo`.
 
 ## Themes
 
@@ -163,7 +163,7 @@ Defaults are listed in `quack keys --print`. Users override them in `config.toml
 - Supported: Windows 10 1809+ and Windows 11, on x64 and ARM64. VT processing is required. On legacy conhost without VT, print a clear message suggesting Windows Terminal.
 - Unicode width: use `unicode-width` and avoid ambiguous-width glyphs in chrome. Provide `ui.ascii = true` for fonts that lack box-drawing or spinner glyphs.
 - Clipboard: OSC 52 where supported, with `arboard` as a fallback (Windows clipboard API) for "copy last response" and "copy code block".
-- Mouse: optional (`ui.mouse = false` default), because mouse capture breaks native text selection in most terminals.
+- Mouse: optional (`ui.mouse = false` default), because mouse capture breaks native text selection in most terminals. When on, the wheel scrolls the transcript; `/reload` turns capture on or off.
 
 ## Accessibility
 
