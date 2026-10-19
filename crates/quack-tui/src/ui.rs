@@ -1151,12 +1151,23 @@ mod tests {
             &app.theme,
         ));
         insta::assert_snapshot!(render(&app, 100, 30));
+        // The biggest part, with its share drawn in its band colour.
+        for _ in 0..6 {
+            key(
+                &mut app,
+                crossterm::event::KeyCode::Down,
+                crossterm::event::KeyModifiers::NONE,
+            );
+        }
+        let s = render(&app, 100, 30);
+        assert!(s.contains("of budget"), "{s}");
+        insta::assert_snapshot!("context_modal_segment_100x30", s);
     }
 
     #[test]
     fn stats_modal_100x30() {
         use crossterm::event::{KeyCode, KeyModifiers};
-        use quack_protocol::{StatsReport, ToolStat};
+        use quack_protocol::{RequestStat, StatsReport, ToolStat};
         let mut app = App::new(test_info());
         app.on_engine(Event::StartupComplete);
         let tool = |name: &str, calls, failed, ms| ToolStat {
@@ -1190,17 +1201,97 @@ mod tests {
             compactions: 1,
             pruned: 8,
             resumed: false,
+            // A context that grows, with a dip at the compaction.
+            history: (0..23_u32)
+                .map(|i| RequestStat {
+                    prompt: 8_000 + (i % 14) * 2_000,
+                    cached: 6_000 + (i % 14) * 1_500,
+                    completion: 200 + (i * 37) % 700,
+                    cost: Some(0.002 + f64::from(i % 14) * 0.0005),
+                    ttft_ms: Some(400 + (i * 113) % 900),
+                    tokens_per_sec: Some(40.0 + f64::from((i * 7) % 20) as f32),
+                })
+                .collect(),
         };
         app.modal = Some(crate::modal::stats(Some(&report), false, &app.theme));
         insta::assert_snapshot!(render(&app, 100, 30));
-        for _ in 0..3 {
+        for pane in ["tokens", "cost", "time", "tools"] {
+            key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+            let s = render(&app, 100, 30);
+            if pane == "time" {
+                assert!(s.contains("Where the time went"), "{s}");
+                assert!(s.contains("the model"), "{s}");
+                assert!(s.contains("35%"), "model is 210 of 600 s: {s}");
+            }
+            insta::assert_snapshot!(format!("stats_modal_{pane}_100x30"), s);
+        }
+
+        // Small terminals squeeze the charts or drop them, without panicking.
+        for (w, h) in [(60, 20), (40, 12), (20, 8)] {
+            for _ in 0..5 {
+                render(&app, w, h);
+                key(&mut app, KeyCode::Up, KeyModifiers::NONE);
+            }
+        }
+
+        // ASCII mode draws the same charts from plain characters.
+        app.modal = Some(crate::modal::stats(Some(&report), true, &app.theme));
+        for _ in 0..5 {
+            let s = render(&app, 100, 30);
+            let fancy = s
+                .chars()
+                .find(|c| matches!(c, '▁'..='█' | '━' | '\u{2800}'..='\u{28ff}'));
+            assert_eq!(fancy, None, "{s}");
             key(&mut app, KeyCode::Down, KeyModifiers::NONE);
         }
+    }
+
+    #[test]
+    fn doctor_and_models_modals_100x30() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        use quack_protocol::{CheckStatus, DoctorCheck, ModelInfo, ProviderModels};
+        let mut app = started_app();
+        let check = |name: &str, status, detail: &str| DoctorCheck {
+            name: name.into(),
+            status,
+            detail: detail.into(),
+        };
+        let checks = [
+            check("config", CheckStatus::Ok, "2 files"),
+            check("charm", CheckStatus::Ok, "ready"),
+            check("ollama", CheckStatus::Warn, "not running"),
+            check("sandbox", CheckStatus::Fail, "Landlock is not available"),
+        ];
+        app.modal = Some(crate::modal::doctor(Some(&checks), &app.theme));
         let s = render(&app, 100, 30);
-        assert!(s.contains("Where the time went"), "{s}");
-        assert!(s.contains("the model"), "{s}");
-        assert!(s.contains("35%"), "model is 210 of 600 s: {s}");
-        insta::assert_snapshot!("stats_modal_time_100x30", s);
+        assert!(s.contains("Summary") && s.contains("1 failed"), "{s}");
+        insta::assert_snapshot!("doctor_modal_100x30", s);
+
+        let model = |id: &str, window| ModelInfo {
+            id: id.into(),
+            alias: None,
+            context_window: window,
+        };
+        let catalog = [ProviderModels {
+            bundled: false,
+            id: "charm".into(),
+            available: true,
+            note: String::new(),
+            models: vec![
+                model("glm-5.3", Some(1_000_000)),
+                model("qwen3.8-flash", Some(262_144)),
+            ],
+        }];
+        app.modal = Some(crate::modal::models(
+            Some(&catalog),
+            Some("charm/glm-5.3"),
+            false,
+            &app.theme,
+        ));
+        key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        let s = render(&app, 100, 30);
+        assert!(s.contains("26% of largest"), "{s}");
+        insta::assert_snapshot!("models_modal_100x30", s);
     }
 
     #[test]

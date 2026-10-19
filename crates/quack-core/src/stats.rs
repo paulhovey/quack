@@ -4,10 +4,10 @@
 //! waits are recorded where they happen. Token totals are rebuilt from the session log on
 //! resume; timings are not logged, so they start at the resume.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
-use quack_protocol::{Event, StatsReport, ToolStat, Usage};
+use quack_protocol::{Event, RequestStat, StatsReport, ToolStat, Usage};
 use quack_store::session::Record;
 
 #[derive(Debug)]
@@ -31,6 +31,9 @@ pub(crate) struct Stats {
     running: HashMap<String, (String, Instant)>,
     compactions: u32,
     pruned: u32,
+    history: VecDeque<RequestStat>,
+    /// The newest history entry is still waiting for its `Speed`.
+    timing: bool,
 }
 
 #[derive(Debug, Default)]
@@ -61,6 +64,8 @@ impl Default for Stats {
             running: HashMap::new(),
             compactions: 0,
             pruned: 0,
+            history: VecDeque::new(),
+            timing: false,
         }
     }
 }
@@ -80,8 +85,9 @@ impl Stats {
                         .get("usage")
                         .and_then(|v| serde_json::from_value::<Usage>(v.clone()).ok())
                     {
-                        s.tokens(&u);
-                        s.price(r.data.get("cost").and_then(serde_json::Value::as_f64));
+                        let cost = r.data.get("cost").and_then(serde_json::Value::as_f64);
+                        s.tokens(&u, cost);
+                        s.price(cost);
                     }
                 }
                 "compaction" => s.compactions += 1,
@@ -91,8 +97,19 @@ impl Stats {
         s
     }
 
-    fn tokens(&mut self, u: &Usage) {
+    fn tokens(&mut self, u: &Usage, cost: Option<f64>) {
         self.requests += 1;
+        if self.history.len() == StatsReport::HISTORY {
+            self.history.pop_front();
+        }
+        self.history.push_back(RequestStat {
+            prompt: u.prompt_tokens,
+            cached: u.cached_prompt_tokens.unwrap_or(0),
+            completion: u.completion_tokens,
+            cost,
+            ttft_ms: None,
+            tokens_per_sec: None,
+        });
         self.prompt += u64::from(u.prompt_tokens);
         self.completion += u64::from(u.completion_tokens);
         if let Some(c) = u.cached_prompt_tokens {
@@ -104,12 +121,13 @@ impl Stats {
     /// One model call, with its price when the model it went to has one.
     pub(crate) fn request(&mut self, usage: Option<&Usage>, cost: Option<f64>, took: Duration) {
         self.model += took;
+        self.timing = usage.is_some();
         let Some(u) = usage else {
             self.requests += 1;
             self.unreported += 1;
             return;
         };
-        self.tokens(u);
+        self.tokens(u, cost);
         self.price(cost);
     }
 
@@ -132,6 +150,12 @@ impl Stats {
             } => {
                 self.ttft_ms.push(*ttft_ms);
                 self.tps.extend(*tokens_per_sec);
+                // Speed follows its request's usage, so it belongs to the newest entry.
+                if let Some(last) = self.history.back_mut().filter(|_| self.timing) {
+                    last.ttft_ms = Some(*ttft_ms);
+                    last.tokens_per_sec = *tokens_per_sec;
+                }
+                self.timing = false;
             }
             Event::ToolCallBegin { call } => {
                 self.running
@@ -193,6 +217,7 @@ impl Stats {
             compactions: self.compactions,
             pruned: self.pruned,
             resumed: self.resumed,
+            history: self.history.iter().cloned().collect(),
         }
     }
 }
@@ -299,5 +324,31 @@ mod tests {
         assert_eq!(r.ttft_ms, Some((500, 900)));
         assert_eq!(r.tokens_per_sec, Some(60.0));
         assert_eq!(r.cost, None);
+    }
+
+    #[test]
+    fn history_keeps_each_request_with_its_speed() {
+        let mut s = Stats::default();
+        let speed = |ttft_ms| Event::Speed {
+            ttft_ms,
+            tokens_per_sec: Some(50.0),
+        };
+        s.request(Some(&usage(100, 10, Some(60))), Some(0.5), Duration::ZERO);
+        s.observe(&speed(300));
+        // No usage: nothing to chart, and its speed must not land on the request before.
+        s.request(None, None, Duration::ZERO);
+        s.observe(&speed(900));
+        s.request(Some(&usage(200, 20, None)), None, Duration::ZERO);
+        let h = s.report("m/x", 1).history;
+        assert_eq!(h.len(), 2);
+        assert_eq!((h[0].prompt, h[0].cached, h[0].completion), (100, 60, 10));
+        assert_eq!((h[0].ttft_ms, h[0].cost), (Some(300), Some(0.5)));
+        assert_eq!((h[1].prompt, h[1].ttft_ms), (200, None));
+
+        for _ in 0..StatsReport::HISTORY + 5 {
+            s.request(Some(&usage(1, 1, None)), None, Duration::ZERO);
+        }
+        let h = s.report("m/x", 1).history;
+        assert_eq!(h.len(), StatsReport::HISTORY, "only the newest are kept");
     }
 }

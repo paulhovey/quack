@@ -591,6 +591,29 @@ pub struct StatsReport {
     /// A saved session that was resumed: timings start at the resume.
     #[serde(default)]
     pub resumed: bool,
+    /// Each request, oldest first; at most the last [`StatsReport::HISTORY`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub history: Vec<RequestStat>,
+}
+
+impl StatsReport {
+    /// How many requests `history` keeps.
+    pub const HISTORY: usize = 200;
+}
+
+/// One model call, for the charts in `/stats`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RequestStat {
+    pub prompt: u32,
+    pub cached: u32,
+    pub completion: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<f64>,
+    /// Absent for requests from before a resume, and for replies too short to time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttft_ms: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_per_sec: Option<f32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

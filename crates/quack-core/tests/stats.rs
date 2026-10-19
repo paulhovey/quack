@@ -70,6 +70,10 @@ async fn a_turn_is_counted_priced_and_kept_on_resume() {
     assert_eq!((r.tools[0].name.as_str(), r.tools[0].calls), ("ls", 1));
     assert!(r.ttft_ms.is_some());
     assert!(!r.resumed);
+    let sent: Vec<u32> = r.history.iter().map(|q| q.prompt).collect();
+    assert_eq!(sent, [1000, 3000]);
+    assert_eq!(r.history[1].cached, 2000);
+    assert!(r.history.iter().all(|q| q.cost.is_some()));
     engine.shutdown().await;
 
     // Resumed: tokens come back from the log; timings and tools start over.
@@ -89,6 +93,8 @@ async fn a_turn_is_counted_priced_and_kept_on_resume() {
     assert_eq!((r.turns, r.requests), (1, 2));
     assert_eq!(r.prompt_tokens, 4000);
     assert!(r.tools.is_empty());
+    assert_eq!(r.history.len(), 2, "the charts come back from the log");
+    assert!(r.history.iter().all(|q| q.ttft_ms.is_none()));
     assert!((r.cost.expect("priced in the log") - want).abs() < 1e-12);
     assert_eq!(r.unpriced, 0);
     engine.shutdown().await;

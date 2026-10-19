@@ -60,6 +60,7 @@ There is one engine and three in-process clients, connected by an Op/Event proto
   - `quack-tui/src/app.rs`: state, keys, how events update state, slash-command handling in `run_command`.
   - `ui.rs`: drawing.
   - `modal.rs`: every list-with-detail picker (`/models`, `/context`, `/stats`, `/help`, ...).
+  - `charts.rs`: charts for a modal's details pane (`Visual`: figure tiles, bars, sparklines, meters, a line chart). A `ModalItem`'s `charts` places each one before a `detail` line; in `modal.rs`, the `Detail` builder does this for you. Charts that don't fit the pane are left out. Each is built with `ascii` already applied; the Trend line chart has no ASCII form, so give ASCII mode a sparkline instead.
   - `commands.rs`: the command catalogue and the help key list.
 
 ### Adding a slash command

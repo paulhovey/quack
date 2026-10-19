@@ -9,12 +9,21 @@ set -eu
 
 bin=$(cargo test -p quack-core --test invariants --no-run --locked --message-format=json \
     | sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' | grep invariants | tail -n 1)
-log=$(mktemp)
+# strace creates the log itself, inside the namespace: on hardened images (Ubuntu 24.04+)
+# the sudo fallback runs as root, and opening the runner-owned mktemp file in sticky /tmp
+# is denied (fs.protected_regular=2). The 0700 mktemp directory gates access afterwards.
+dir=$(mktemp -d)
+trap 'rm -rf "$dir"' EXIT
+log=$dir/trace
 
 # Unprivileged namespaces are disabled on some distributions (Ubuntu 24.04+); fall back to sudo.
 if unshare -rn true 2>/dev/null; then ns="unshare -rn"; else ns="sudo unshare -n"; fi
-$ns sh -c "ip link set lo up && strace -f -qq -e trace=connect -o '$log' '$bin' --test-threads 1"
+$ns sh -c "ip link set lo up && strace -f -qq -e trace=connect -o '$log' '$bin' --test-threads 1; rc=\$?; chmod 644 '$log' 2>/dev/null; exit \$rc"
 
+if [ ! -r "$log" ]; then
+    echo "no-egress: no readable trace at $log" >&2
+    exit 1
+fi
 total=$(grep -c 'connect(' "$log" || true)
 bad=$(grep -E 'sa_family=AF_INET6?,' "$log" \
     | grep -v -E 'inet_addr\("127\.0\.0\.1"\)|inet_pton\(AF_INET6, "::1"' || true)

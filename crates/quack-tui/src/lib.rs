@@ -5,6 +5,7 @@
 //! never triggers a draw per delta.
 
 mod app;
+mod charts;
 mod commands;
 mod fuzzy;
 mod input;

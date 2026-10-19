@@ -138,12 +138,13 @@ Everything below works today. Planned work is listed separately at the end.
 - Automatic compaction at a threshold or when the server reports the window is full, and
   `/compact [focus]` on demand. If the model cannot summarize, a plain list is kept.
 - `/context` shows where the tokens go as one band, each part in its own fill, with the
-  compaction point marked. It also says how many turns are left at the recent pace and
-  what would free the most room. Estimates are corrected with the token counts the server
+  compaction point marked, and charts the context turn by turn against that point. It
+  also says how many turns are left at the recent pace and what would free the most room. Estimates are corrected with the token counts the server
   reports.
 - `/stats` adds up the session: tokens sent and received, cache hits, cost, where the time
   went (the model, tools, waiting for your approval), latency and speed, and each tool's
-  calls and failures. Totals survive `/resume`. For cost, give a model its price per
+  calls and failures, drawn as charts: headline figures, bars, sparklines of every
+  request and the cost climbing over the session. Totals survive `/resume`. For cost, give a model its price per
   million tokens in its provider file: `cost = { input = 0.3, output = 1.2 }`.
 
 ### Sessions and undo

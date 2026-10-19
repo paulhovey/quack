@@ -480,6 +480,7 @@ impl App {
                     self.modal = Some(modal::models(
                         Some(&providers),
                         current.as_deref(),
+                        self.info.ui.ascii,
                         &self.theme,
                     ));
                 }
@@ -1110,7 +1111,12 @@ impl App {
                 _ => self.note("usage: /models <provider>/<model>".into()),
             },
             "models" => {
-                self.modal = Some(modal::models(None, self.info.model.as_deref(), &self.theme));
+                self.modal = Some(modal::models(
+                    None,
+                    self.info.model.as_deref(),
+                    self.info.ui.ascii,
+                    &self.theme,
+                ));
                 self.ops.push(Op::ListModels);
             }
             "resume" if !args.is_empty() => {

@@ -9,10 +9,11 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
     Block, Clear, List, ListItem, ListState, Padding, Paragraph, Scrollbar, ScrollbarOrientation,
-    ScrollbarState, Wrap,
+    ScrollbarState,
 };
 use unicode_width::UnicodeWidthStr;
 
+use crate::charts::{BarRow, Visual};
 use crate::commands::{COMMANDS, KEYS};
 use crate::fuzzy;
 use crate::theme::{Glyphs, Theme};
@@ -32,6 +33,8 @@ pub(crate) struct ModalItem {
     pub run: bool,
     /// Command run by the modal's secondary key (Ctrl-S), if any.
     pub alt: Option<String>,
+    /// Charts in the details pane, each before the `detail` line it names.
+    pub charts: Vec<(usize, Visual)>,
 }
 
 #[derive(Debug, Clone)]
@@ -320,16 +323,12 @@ impl Modal {
             .border_set(glyphs.border)
             .border_style(theme.border)
             .padding(Padding::horizontal(1));
-        let lines = self.selected_item().map_or_else(
-            || vec![Line::styled("no matches", theme.dim)],
-            |i| i.detail.clone(),
-        );
-        f.render_widget(
-            Paragraph::new(lines)
-                .block(block)
-                .wrap(Wrap { trim: false }),
-            area,
-        );
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+        match self.selected_item() {
+            Some(i) => crate::charts::draw_detail(f, inner, &i.detail, &i.charts, theme),
+            None => f.render_widget(Paragraph::new(Line::styled("no matches", theme.dim)), inner),
+        }
     }
 }
 
@@ -400,6 +399,7 @@ pub(crate) fn help(theme: &Theme) -> Modal {
                 )),
                 run: false,
                 alt: None,
+                charts: Vec::new(),
             }
         })
         .collect();
@@ -416,6 +416,7 @@ pub(crate) fn help(theme: &Theme) -> Modal {
             action: None,
             run: false,
             alt: None,
+            charts: Vec::new(),
         })
         .collect();
     Modal::new(
@@ -437,6 +438,7 @@ pub(crate) fn help(theme: &Theme) -> Modal {
 pub(crate) fn models(
     catalog: Option<&[quack_protocol::ProviderModels]>,
     current: Option<&str>,
+    ascii: bool,
     theme: &Theme,
 ) -> Modal {
     let field = |k: &str, v: String| {
@@ -457,8 +459,16 @@ pub(crate) fn models(
             action: None,
             run: false,
             alt: None,
+            charts: Vec::new(),
         }),
         Some(providers) => {
+            // Context windows are drawn against the largest on offer.
+            let widest = providers
+                .iter()
+                .filter(|p| p.available)
+                .flat_map(|p| p.models.iter().filter_map(|m| m.context_window))
+                .max()
+                .unwrap_or(0);
             // The bundle's providers that are not set up are listed in /providers.
             for p in providers.iter().filter(|p| p.available || !p.bundled) {
                 if !p.available {
@@ -473,6 +483,7 @@ pub(crate) fn models(
                         action: None,
                         run: false,
                         alt: None,
+                        charts: Vec::new(),
                     });
                     continue;
                 }
@@ -495,6 +506,27 @@ pub(crate) fn models(
                         ),
                         Line::raw(""),
                     ];
+                    let mut charts = Vec::new();
+                    if let Some(c) = m.context_window.filter(|_| widest > 0) {
+                        charts.push((
+                            detail.len(),
+                            Visual::Meter {
+                                label: "window".into(),
+                                text: if c == widest {
+                                    "largest here".into()
+                                } else {
+                                    format!(
+                                        "{}% of largest",
+                                        u64::from(c) * 100 / u64::from(widest)
+                                    )
+                                },
+                                ratio: f64::from(c) / f64::from(widest),
+                                style: theme.accent,
+                                ascii,
+                            },
+                        ));
+                        detail.push(Line::raw(""));
+                    }
                     detail.push(if is_current {
                         Line::styled("in use", theme.ok)
                     } else {
@@ -515,6 +547,7 @@ pub(crate) fn models(
                         action: Some(format!("/models {reference}")),
                         run: true,
                         alt: Some(format!("/models default {reference}")),
+                        charts,
                     });
                 }
             }
@@ -554,6 +587,7 @@ fn placeholder(label: &str, detail: &str, theme: &Theme) -> ModalItem {
         action: None,
         run: false,
         alt: None,
+        charts: Vec::new(),
     }
 }
 
@@ -607,6 +641,7 @@ pub(crate) fn sessions(
                     action: (!s.current).then(|| format!("/resume {}", s.id)),
                     run: true,
                     alt: None,
+                    charts: Vec::new(),
                 }
             })
             .collect(),
@@ -665,6 +700,7 @@ pub(crate) fn config(
                 action,
                 run,
                 alt: None,
+                charts: Vec::new(),
             }
         })
         .collect();
@@ -681,6 +717,7 @@ pub(crate) fn config(
             action: None,
             run: false,
             alt: None,
+            charts: Vec::new(),
         })
         .collect();
     Modal::new(
@@ -697,6 +734,50 @@ pub(crate) fn config(
         ],
     )
 }
+
+/// Detail lines with charts set between them.
+#[derive(Default)]
+struct Detail {
+    lines: Vec<Line<'static>>,
+    charts: Vec<(usize, Visual)>,
+}
+
+impl Detail {
+    fn line(&mut self, l: Line<'static>) -> &mut Self {
+        self.lines.push(l);
+        self
+    }
+
+    fn gap(&mut self) -> &mut Self {
+        self.line(Line::raw(""))
+    }
+
+    /// A chart here, then a blank line.
+    fn chart(&mut self, v: Visual) -> &mut Self {
+        self.meter(v).gap()
+    }
+
+    /// A chart here, with the next one straight under it: for a stack of meters.
+    fn meter(&mut self, v: Visual) -> &mut Self {
+        self.charts.push((self.lines.len(), v));
+        self
+    }
+
+    fn item(self, label: &str, hint: String) -> ModalItem {
+        ModalItem {
+            label: label.to_owned(),
+            hint,
+            detail: self.lines,
+            action: None,
+            run: false,
+            alt: None,
+            charts: self.charts,
+        }
+    }
+}
+
+/// How many tools `/stats` draws bars for; the rest are counted below them.
+const TOOL_BARS: usize = 8;
 
 /// The `/stats` modal. `report` is `None` until the engine answers.
 pub(crate) fn stats(
@@ -723,55 +804,164 @@ pub(crate) fn stats(
     let k = |n: u64| crate::theme::tokens(u32::try_from(n).unwrap_or(u32::MAX));
     let time = |ms: u64| crate::theme::elapsed(std::time::Duration::from_millis(ms));
     let pct = |n: u64, of: u64| n * 100 / of.max(1);
-    let item = |label: &str, hint: String, detail: Vec<Line<'static>>| ModalItem {
-        label: label.to_owned(),
-        hint,
-        detail,
-        action: None,
-        run: false,
-        alt: None,
+    #[allow(clippy::cast_precision_loss)]
+    let ratio = |n: u64, of: u64| n as f64 / of.max(1) as f64;
+    let on_bar = theme.pill(theme.accent).bg(ratatui::style::Color::Reset);
+    let bars = |rows| Visual::Bars {
+        rows,
+        ascii,
+        on_bar,
     };
+    let spark = |label: &str, caption: String, data: Vec<u64>, style, height| Visual::Spark {
+        label: label.to_owned(),
+        caption,
+        data,
+        style,
+        height,
+        ascii,
+    };
+    let meter = |label: &str, text: String, ratio: f64, style| Visual::Meter {
+        label: label.to_owned(),
+        text,
+        ratio,
+        style,
+        ascii,
+    };
+    let row = |label: &str, value: u64, text: String, style| BarRow {
+        label: label.to_owned(),
+        value,
+        text,
+        style,
+    };
+    let series = |f: &dyn Fn(&quack_protocol::RequestStat) -> u64| -> Vec<u64> {
+        r.history.iter().map(f).collect()
+    };
+    let peak = |v: &[u64]| v.iter().copied().max().unwrap_or(0);
     let since = if r.resumed {
         "Resumed: tokens and cost include earlier runs; times and tools start at the resume."
     } else {
         "Since this session started."
     };
+    let calls: u32 = r.tools.iter().map(|t| t.calls).sum();
+    let failed: u32 = r.tools.iter().map(|t| t.failed).sum();
+    let sent = series(&|q| u64::from(q.prompt));
+    let received = series(&|q| u64::from(q.completion));
+
+    // Overview: the headline figures, then how well the cache and the clock went.
+    let mut overview = Detail::default();
+    overview
+        .line(Line::styled(r.model.clone(), theme.accent))
+        .line(Line::styled(since, theme.dim))
+        .gap();
+    let mut tiles = vec![
+        (r.turns.to_string(), "turns".to_owned(), theme.user),
+        (k(r.prompt_tokens), "sent".to_owned(), theme.accent),
+        (k(r.completion_tokens), "received".to_owned(), theme.magenta),
+    ];
+    if let Some(c) = r.cost {
+        tiles.push((dollars(c), "cost".to_owned(), theme.ok));
+    }
+    tiles.push((time(r.open_ms), "open".to_owned(), theme.warn));
+    overview.chart(Visual::Tiles(tiles));
+    if r.cache_reported > 0 {
+        overview.meter(meter(
+            "cached",
+            format!("{}% of sent", pct(r.cached_tokens, r.prompt_tokens)),
+            ratio(r.cached_tokens, r.prompt_tokens),
+            theme.ok,
+        ));
+    }
+    overview.meter(meter(
+        "model",
+        format!("{}% of the time", pct(r.model_ms, r.open_ms)),
+        ratio(r.model_ms, r.open_ms),
+        theme.accent,
+    ));
+    if calls > 0 {
+        let ok = calls - failed;
+        overview.meter(meter(
+            "tools",
+            format!("{ok} of {calls} ok"),
+            ratio(u64::from(ok), u64::from(calls)),
+            if failed > 0 { theme.warn } else { theme.ok },
+        ));
+    }
+    overview.gap();
+    if sent.len() >= 2 {
+        overview.chart(spark(
+            "sent",
+            "by request".into(),
+            sent.clone(),
+            theme.accent,
+            3,
+        ));
+    }
 
     // Tokens
-    let mut tokens = vec![
-        Line::styled("Tokens", theme.accent),
-        Line::raw(""),
-        field(theme, "sent", k(r.prompt_tokens)),
-        field(theme, "received", k(r.completion_tokens)),
-    ];
+    let mut tokens = Detail::default();
+    tokens.line(Line::styled("Tokens", theme.accent)).gap();
+    let fresh = r.prompt_tokens.saturating_sub(r.cached_tokens);
+    let mut rows = vec![row(
+        "sent",
+        fresh,
+        if r.cache_reported > 0 {
+            format!("{} fresh", k(fresh))
+        } else {
+            k(fresh)
+        },
+        theme.accent,
+    )];
     if r.cache_reported > 0 {
-        tokens.push(field(
-            theme,
+        rows.push(row(
             "cached",
+            r.cached_tokens,
             format!(
-                "{} · {}% of sent",
+                "{} · {}%",
                 k(r.cached_tokens),
                 pct(r.cached_tokens, r.prompt_tokens)
             ),
+            theme.ok,
         ));
     }
-    tokens.extend([
-        field(theme, "requests", r.requests.to_string()),
-        Line::raw(""),
-        Line::styled(
-            "Sent counts every request's whole prompt, so it grows faster than the \
-             context: that is what a hosted service bills.",
-            theme.dim,
-        ),
-    ]);
+    rows.push(row(
+        "received",
+        r.completion_tokens,
+        k(r.completion_tokens),
+        theme.magenta,
+    ));
+    tokens.chart(bars(rows));
+    if sent.len() >= 2 {
+        tokens.chart(spark(
+            "sent",
+            format!("peak {}", k(peak(&sent))),
+            sent.clone(),
+            theme.accent,
+            3,
+        ));
+        tokens.chart(spark(
+            "received",
+            format!("peak {}", k(peak(&received))),
+            received,
+            theme.magenta,
+            2,
+        ));
+    }
+    tokens
+        .line(field(theme, "requests", r.requests.to_string()))
+        .gap();
+    tokens.line(Line::styled(
+        "Sent counts every request's whole prompt, so it grows faster than the \
+         context: that is what a hosted service bills.",
+        theme.dim,
+    ));
     if r.cache_reported == 0 && r.requests > 0 {
-        tokens.push(Line::styled(
+        tokens.line(Line::styled(
             "The server did not say how much of the prompt it had cached.",
             theme.dim,
         ));
     }
     if r.unreported > 0 {
-        tokens.push(Line::styled(
+        tokens.line(Line::styled(
             format!(
                 "{} request(s) came back without usage and are not counted.",
                 r.unreported
@@ -780,83 +970,137 @@ pub(crate) fn stats(
         ));
     }
 
-    // Cost
+    // Cost: the figures, and the total climbing request by request.
     let cost_hint = r.cost.map_or_else(|| "–".to_owned(), dollars);
-    let mut cost = vec![Line::styled("Cost", theme.accent), Line::raw("")];
+    let mut cost = Detail::default();
+    cost.line(Line::styled("Cost", theme.accent)).gap();
     match r.cost {
         Some(c) => {
-            cost.push(field(theme, "total", dollars(c)));
+            let mut tiles = vec![(dollars(c), "total".to_owned(), theme.ok)];
             if r.turns > 0 {
-                cost.push(field(theme, "per turn", dollars(c / f64::from(r.turns))));
+                tiles.push((
+                    dollars(c / f64::from(r.turns)),
+                    "per turn".to_owned(),
+                    theme.accent,
+                ));
+            }
+            let priced = r.requests.saturating_sub(r.unpriced + r.unreported);
+            if priced > 0 {
+                tiles.push((
+                    dollars(c / f64::from(priced)),
+                    "per request".to_owned(),
+                    theme.magenta,
+                ));
+            }
+            cost.chart(Visual::Tiles(tiles));
+            let each: Vec<f64> = r.history.iter().map(|q| q.cost.unwrap_or(0.0)).collect();
+            if each.len() >= 2 {
+                // Requests older than the history start the line where they left it.
+                let mut total = (c - each.iter().sum::<f64>()).max(0.0);
+                #[allow(clippy::cast_precision_loss)]
+                let points: Vec<(f64, f64)> = each
+                    .iter()
+                    .enumerate()
+                    .map(|(i, x)| {
+                        total += x;
+                        ((i + 1) as f64, total)
+                    })
+                    .collect();
+                let n = points.len();
+                cost.chart(if ascii {
+                    // Micro-dollars, so the sparkline has whole numbers to scale.
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let data = points.iter().map(|p| (p.1 * 1e6) as u64).collect();
+                    spark("total", "by request".into(), data, theme.ok, 4)
+                } else {
+                    Visual::Trend {
+                        points,
+                        style: theme.ok,
+                        limit: None,
+                        y: ["$0".into(), dollars(c)],
+                        x: ["1".into(), format!("{n} requests")],
+                        height: 7,
+                    }
+                });
             }
             if r.unpriced > 0 {
-                cost.extend([
-                    Line::raw(""),
-                    Line::styled(
-                        format!(
-                            "{} request(s) to models without a price are left out.",
-                            r.unpriced
-                        ),
-                        theme.warn,
+                cost.line(Line::styled(
+                    format!(
+                        "{} request(s) to models without a price are left out.",
+                        r.unpriced
                     ),
-                ]);
+                    theme.warn,
+                ));
             }
         }
-        None => cost.extend([
-            Line::raw("No price set for this model."),
-            Line::raw(""),
-            Line::styled(
-                "To see one, add the price per million tokens to the model in its \
-                 provider file:",
-                theme.dim,
-            ),
-            Line::raw(""),
-            Line::styled("cost = { input = 0.3, output = 1.2 }", theme.accent),
-        ]),
+        None => {
+            cost.line(Line::raw("No price set for this model."))
+                .gap()
+                .line(Line::styled(
+                    "To see one, add the price per million tokens to the model in its \
+                     provider file:",
+                    theme.dim,
+                ))
+                .gap()
+                .line(Line::styled(
+                    "cost = { input = 0.3, output = 1.2 }",
+                    theme.accent,
+                ));
+        }
     }
 
-    // Time: where it went, as a band like /context's.
+    // Time: where it went, then how quick the model was request by request.
     let other = r
         .open_ms
         .saturating_sub(r.model_ms + r.tools_ms + r.approval_ms);
-    let fills = if ascii {
-        ["#", "%", "=", "."]
-    } else {
-        ["█", "▓", "▒", "·"]
-    };
-    let parts = [
-        ("the model", r.model_ms, theme.accent, fills[0]),
-        ("tools", r.tools_ms, theme.magenta, fills[1]),
-        ("your approval", r.approval_ms, theme.warn, fills[2]),
-        ("between turns", other, theme.border, fills[3]),
-    ];
     let total = r.open_ms.max(1);
-    let mut band = Vec::new();
-    let mut cells = 0;
-    for (_, ms, style, fill) in parts {
-        let n = ((ms * BAND as u64).div_ceil(total) as usize).min(BAND - cells);
-        band.push(Span::styled(fill.repeat(n), style));
-        cells += n;
+    let mut timing = Detail::default();
+    timing
+        .line(Line::styled("Where the time went", theme.accent))
+        .gap();
+    let rows = [
+        ("the model", r.model_ms, theme.accent),
+        ("tools", r.tools_ms, theme.magenta),
+        ("your approval", r.approval_ms, theme.warn),
+        ("between turns", other, theme.dim),
+    ]
+    .into_iter()
+    .filter(|(name, ms, _)| *ms > 0 || *name == "the model")
+    .map(|(name, ms, style)| {
+        row(
+            name,
+            ms,
+            format!("{} · {}%", time(ms), pct(ms, total)),
+            style,
+        )
+    })
+    .collect();
+    timing.chart(bars(rows));
+    let latency: Vec<u64> = r
+        .history
+        .iter()
+        .filter_map(|q| q.ttft_ms.map(u64::from))
+        .collect();
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let speeds: Vec<u64> = r
+        .history
+        .iter()
+        .filter_map(|q| q.tokens_per_sec.map(|t| t.round() as u64))
+        .collect();
+    if let (Some((median, _)), true) = (r.ttft_ms, latency.len() >= 2) {
+        timing.chart(spark(
+            "latency",
+            format!("{} typ.", time(u64::from(median))),
+            latency,
+            theme.warn,
+            2,
+        ));
     }
-    let mut timing = vec![
-        Line::styled("Where the time went", theme.accent),
-        Line::raw(""),
-        Line::from(band),
-        Line::raw(""),
-    ];
-    for (name, ms, style, fill) in parts {
-        timing.push(Line::from(vec![
-            Span::styled(format!("{fill} "), style),
-            Span::raw(format!("{name:<16}")),
-            Span::styled(
-                format!("{:>7}  {:>3}%", time(ms), pct(ms, total)),
-                theme.dim,
-            ),
-        ]));
+    if let (Some(tps), true) = (r.tokens_per_sec, speeds.len() >= 2) {
+        timing.chart(spark("speed", format!("{tps:.0} t/s"), speeds, theme.ok, 2));
     }
-    timing.push(Line::raw(""));
     if let Some((median, slowest)) = r.ttft_ms {
-        timing.push(field(
+        timing.line(field(
             theme,
             "latency",
             format!(
@@ -867,98 +1111,68 @@ pub(crate) fn stats(
         ));
     }
     if let Some(tps) = r.tokens_per_sec {
-        timing.push(field(theme, "speed", format!("{tps:.0} tokens/s typical")));
+        timing.line(field(theme, "speed", format!("{tps:.0} tokens/s typical")));
     }
 
-    // Tools
-    let calls: u32 = r.tools.iter().map(|t| t.calls).sum();
-    let failed: u32 = r.tools.iter().map(|t| t.failed).sum();
-    let mut tools = vec![Line::styled("Tools", theme.accent), Line::raw("")];
+    // Tools: the busiest as bars in their transcript colours.
+    let mut tools = Detail::default();
+    tools.line(Line::styled("Tools", theme.accent)).gap();
     if r.tools.is_empty() {
-        tools.push(Line::styled("No tools called yet.", theme.dim));
+        tools.line(Line::styled("No tools called yet.", theme.dim));
     } else {
-        tools.push(Line::styled(
-            format!("{:<16}{:>6}{:>8}{:>9}", "", "calls", "failed", "time"),
-            theme.dim,
-        ));
-        for t in &r.tools {
-            let fail = if t.failed > 0 {
-                Span::styled(format!("{:>8}", t.failed), theme.error)
-            } else {
-                Span::styled(format!("{:>8}", "·"), theme.dim)
-            };
-            tools.push(Line::from(vec![
-                Span::styled(format!("{:<16}", t.name), theme.tool(&t.name)),
-                Span::raw(format!("{:>6}", t.calls)),
-                fail,
-                Span::styled(format!("{:>9}", time(t.ms)), theme.dim),
-            ]));
+        let rows = r
+            .tools
+            .iter()
+            .take(TOOL_BARS)
+            .map(|t| {
+                let text = if t.failed > 0 {
+                    format!("{} · {} failed · {}", t.calls, t.failed, time(t.ms))
+                } else {
+                    format!("{} · {}", t.calls, time(t.ms))
+                };
+                row(&t.name, u64::from(t.calls), text, theme.tool(&t.name))
+            })
+            .collect();
+        tools.chart(bars(rows));
+        if r.tools.len() > TOOL_BARS {
+            let rest = &r.tools[TOOL_BARS..];
+            tools.line(Line::styled(
+                format!(
+                    "and {} more, {} calls",
+                    rest.len(),
+                    rest.iter().map(|t| t.calls).sum::<u32>()
+                ),
+                theme.dim,
+            ));
+            tools.gap();
         }
+        tools.chart(meter(
+            "succeeded",
+            format!("{} of {calls}", calls - failed),
+            ratio(u64::from(calls - failed), u64::from(calls)),
+            if failed > 0 { theme.warn } else { theme.ok },
+        ));
     }
     if r.compactions + r.pruned > 0 {
-        tools.extend([
-            Line::raw(""),
-            field(theme, "compacted", format!("{} time(s)", r.compactions)),
-            field(theme, "pruned", format!("{} old result(s)", r.pruned)),
-        ]);
-    }
-
-    // Overview
-    let mut overview = vec![
-        Line::styled(r.model.clone(), theme.accent),
-        Line::styled(since, theme.dim),
-        Line::raw(""),
-        field(
-            theme,
-            "turns",
-            format!("{} · {} requests", r.turns, r.requests),
-        ),
-        field(
-            theme,
-            "tokens",
-            format!(
-                "{} sent · {} received",
-                k(r.prompt_tokens),
-                k(r.completion_tokens)
-            ),
-        ),
-    ];
-    if let Some(c) = r.cost {
-        overview.push(field(theme, "cost", dollars(c)));
-    }
-    if r.cache_reported > 0 {
-        overview.push(field(
-            theme,
-            "cache",
-            format!(
-                "{}% of sent was cached",
-                pct(r.cached_tokens, r.prompt_tokens)
-            ),
-        ));
-    }
-    overview.push(field(
-        theme,
-        "time",
-        format!("{} open · model {}", time(r.open_ms), time(r.model_ms)),
-    ));
-    if calls > 0 {
-        overview.push(field(
-            theme,
-            "tools",
-            if failed > 0 {
-                format!("{calls} calls, {failed} failed")
-            } else {
-                format!("{calls} calls")
-            },
-        ));
+        tools
+            .line(field(
+                theme,
+                "compacted",
+                format!("{} time(s)", r.compactions),
+            ))
+            .line(field(
+                theme,
+                "pruned",
+                format!("{} old result(s)", r.pruned),
+            ));
     }
 
     tabs(vec![
-        item("Overview", format!("{} turns", r.turns), overview),
-        item("Tokens", k(r.prompt_tokens + r.completion_tokens), tokens),
-        item("Cost", cost_hint, cost),
-        item("Time", time(r.open_ms), timing),
-        item("Tools", format!("{calls} calls"), tools),
+        overview.item("Overview", format!("{} turns", r.turns)),
+        tokens.item("Tokens", k(r.prompt_tokens + r.completion_tokens)),
+        cost.item("Cost", cost_hint),
+        timing.item("Time", time(r.open_ms)),
+        tools.item("Tools", format!("{calls} calls")),
     ])
 }
 
@@ -1060,11 +1274,33 @@ pub(crate) fn context(
         };
         over.push(Line::raw(left));
     }
-    if growth.len() >= 2 {
+    let mut charts = Vec::new();
+    if growth.len() >= 2 && ascii {
         over.push(Line::from(vec![
             Span::styled("by turn   ", theme.dim),
             Span::styled(sparkline(growth, ascii), theme.accent),
         ]));
+    } else if growth.len() >= 2 {
+        // Context at the end of each turn, rising towards the dashed compaction line.
+        over.push(Line::raw(""));
+        #[allow(clippy::cast_precision_loss)]
+        let points: Vec<(f64, f64)> = growth
+            .iter()
+            .enumerate()
+            .map(|(i, v)| ((i + 1) as f64, f64::from(*v)))
+            .collect();
+        let top = growth.iter().copied().chain(line).max().unwrap_or(0);
+        charts.push((
+            over.len(),
+            Visual::Trend {
+                points,
+                style: theme.accent,
+                limit: line.map(|l| (f64::from(l), theme.warn)),
+                y: ["0".into(), k(top)],
+                x: ["turn 1".into(), format!("turn {}", growth.len())],
+                height: 6,
+            },
+        ));
     }
     over.push(Line::raw(""));
     over.push(Line::styled(advice(r), theme.dim));
@@ -1079,6 +1315,7 @@ pub(crate) fn context(
         action: None,
         run: false,
         alt: None,
+        charts,
     }];
     let budget = r.budget.unwrap_or(0);
     items.extend(r.segments.iter().enumerate().map(|(i, seg)| {
@@ -1090,14 +1327,20 @@ pub(crate) fn context(
             ]),
             Line::raw(""),
             field(theme, "tokens", format!("~{}", seg.tokens)),
-            field(theme, "of used", format!("{}%", share(seg.tokens, r.used))),
+            Line::raw(""),
         ];
+        // Its share of what is used and of the budget, in its band colour.
+        #[allow(clippy::cast_precision_loss)]
+        let meter = |label: &str, of: u32| Visual::Meter {
+            label: label.to_owned(),
+            text: format!("{}%", share(seg.tokens, of)),
+            ratio: f64::from(seg.tokens) / f64::from(of.max(1)),
+            style: colour,
+            ascii,
+        };
+        let mut charts = vec![(detail.len(), meter("of used", r.used))];
         if budget > 0 {
-            detail.push(field(
-                theme,
-                "of budget",
-                format!("{}%", share(seg.tokens, budget)),
-            ));
+            charts.push((detail.len(), meter("of budget", budget)));
         }
         detail.extend([Line::raw(""), Line::raw(seg.detail.clone())]);
         ModalItem {
@@ -1108,6 +1351,7 @@ pub(crate) fn context(
             action: None,
             run: false,
             alt: None,
+            charts,
         }
     }));
     tabs(items)
@@ -1229,6 +1473,7 @@ pub(crate) fn memory(notes: Option<&[quack_protocol::MemoryNote]>, theme: &Theme
                     action: None,
                     run: false,
                     alt: Some(format!("/memory delete {}/{}", n.scope, n.name)),
+                    charts: Vec::new(),
                 }
             })
             .collect(),
@@ -1299,6 +1544,7 @@ pub(crate) fn permissions(current: &str, rules: &[(String, String)], theme: &The
             action: Some(format!("/permissions {name}")),
             run: true,
             alt: None,
+            charts: Vec::new(),
         })
         .collect();
     let rule_items = if rules.is_empty() {
@@ -1327,6 +1573,7 @@ pub(crate) fn permissions(current: &str, rules: &[(String, String)], theme: &The
                 action: None,
                 run: false,
                 alt: None,
+                charts: Vec::new(),
             })
             .collect()
     };
@@ -1387,6 +1634,7 @@ pub(crate) fn rewind(points: Option<&[quack_protocol::RewindPoint]>, theme: &The
                     action: Some(format!("/rewind {} both", p.back)),
                     run: true,
                     alt: Some(format!("/rewind {} conversation", p.back)),
+                    charts: Vec::new(),
                 }
             })
             .collect(),
@@ -1464,6 +1712,7 @@ pub(crate) fn trust(pending: Option<&TrustPrompt>, theme: &Theme) -> Modal {
                 action: Some(format!("/trust {id}")),
                 run: true,
                 alt: None,
+                charts: Vec::new(),
             }
         })
         .collect();
@@ -1478,6 +1727,7 @@ pub(crate) fn trust(pending: Option<&TrustPrompt>, theme: &Theme) -> Modal {
         action: Some("/trust later".into()),
         run: true,
         alt: None,
+        charts: Vec::new(),
     });
     Modal::new(
         "Trust",
@@ -1505,19 +1755,48 @@ pub(crate) fn doctor(checks: Option<&[quack_protocol::DoctorCheck]>, theme: &The
             "Running environment checks and contacting each configured provider.",
             theme,
         )],
-        Some(list) => list
-            .iter()
-            .map(|c| {
-                let (hint, style) = match c.status {
-                    CheckStatus::Ok => ("ok", theme.ok),
-                    CheckStatus::Info => ("info", theme.dim),
-                    CheckStatus::Warn => ("warn", theme.warn),
-                    CheckStatus::Fail => ("FAIL", theme.error),
-                };
+        Some(list) => {
+            let paint = |status: &CheckStatus| match status {
+                CheckStatus::Ok => ("ok", theme.ok),
+                CheckStatus::Info => ("info", theme.dim),
+                CheckStatus::Warn => ("warn", theme.warn),
+                CheckStatus::Fail => ("FAIL", theme.error),
+            };
+            let count = |s: CheckStatus| list.iter().filter(|c| c.status == s).count();
+            let (ok, warn, fail) = (
+                count(CheckStatus::Ok),
+                count(CheckStatus::Warn),
+                count(CheckStatus::Fail),
+            );
+            let mut summary = Detail::default();
+            summary
+                .line(Line::styled("Environment checks", theme.accent))
+                .gap()
+                .chart(Visual::Tiles(vec![
+                    (ok.to_string(), "passed".into(), theme.ok),
+                    (warn.to_string(), "warnings".into(), theme.warn),
+                    (fail.to_string(), "failed".into(), theme.error),
+                ]))
+                .line(Line::styled(
+                    match (fail, warn) {
+                        (0, 0) => "Everything checks out.",
+                        (0, _) => "Nothing is broken; the warnings say what could be better.",
+                        _ => "Pick a failed check to see what to do about it.",
+                    },
+                    theme.dim,
+                ));
+            let hint = match (fail, warn) {
+                (0, 0) => "all ok".to_owned(),
+                (0, w) => format!("{w} warn"),
+                (f, _) => format!("{f} failed"),
+            };
+            let mut items = vec![summary.item("Summary", hint)];
+            items.extend(list.iter().map(|c| {
+                let (hint, style) = paint(&c.status);
                 let mut detail = vec![
                     Line::styled(c.name.trim().to_owned(), theme.accent),
                     Line::raw(""),
-                    Line::styled(hint, style),
+                    Line::from(Span::styled(format!(" {hint} "), theme.pill(style))),
                     Line::raw(""),
                 ];
                 detail.extend(c.detail.lines().map(|l| Line::raw(l.to_owned())));
@@ -1528,9 +1807,11 @@ pub(crate) fn doctor(checks: Option<&[quack_protocol::DoctorCheck]>, theme: &The
                     action: None,
                     run: false,
                     alt: None,
+                    charts: Vec::new(),
                 }
-            })
-            .collect(),
+            }));
+            items
+        }
     };
     Modal::new(
         "Doctor",
@@ -1618,6 +1899,7 @@ pub(crate) fn providers(
                     action: None,
                     run: false,
                     alt: None,
+                    charts: Vec::new(),
                 }
             })
             .collect(),
@@ -1662,6 +1944,7 @@ pub(crate) fn skills(skills: &[quack_protocol::SkillInfo], theme: &Theme) -> Mod
                 action: Some(format!("/{} ", s.name)),
                 run: false,
                 alt: None,
+                charts: Vec::new(),
             })
             .collect()
     };
@@ -1746,6 +2029,7 @@ pub(crate) fn mcp(servers: Option<&[quack_protocol::McpServerInfo]>, theme: &The
                     action: None,
                     run: false,
                     alt: Some(format!("/mcp restart {}", s.id)),
+                    charts: Vec::new(),
                 }
             })
             .collect(),
@@ -1842,6 +2126,7 @@ pub(crate) fn lsp(servers: Option<&[quack_protocol::LspServerInfo]>, theme: &The
                     action: None,
                     run: false,
                     alt: None,
+                    charts: Vec::new(),
                 }
             })
             .collect(),
@@ -1884,6 +2169,7 @@ pub(crate) fn setup(servers: Option<&[quack_protocol::DetectedServer]>, theme: &
             action: None,
             run: false,
             alt: None,
+            charts: Vec::new(),
         }],
         Some(list) => list
             .iter()
@@ -1931,6 +2217,7 @@ pub(crate) fn setup(servers: Option<&[quack_protocol::DetectedServer]>, theme: &
                         action: Some(format!("/setup use {i} {}", m.id)),
                         run: true,
                         alt: None,
+                        charts: Vec::new(),
                     }
                 })
             })
