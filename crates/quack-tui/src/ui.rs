@@ -167,14 +167,16 @@ fn transcript_rows(app: &App, width: usize) -> Vec<Line<'static>> {
             }
             Entry::Assistant(s) if s.trim().is_empty() => continue,
             Entry::Assistant(s) => {
-                for (i, row) in crate::markdown::render(s, body_width, t, app.info.ui.ascii)
+                let lead_w = 2 + app.glyphs.assistant.width();
+                let body_w = width.saturating_sub(lead_w);
+                for (i, row) in crate::markdown::render(s, body_w, t, app.info.ui.ascii)
                     .into_iter()
                     .enumerate()
                 {
                     let lead = if i == 0 {
                         format!(" {} ", app.glyphs.assistant)
                     } else {
-                        "   ".into()
+                        " ".repeat(lead_w)
                     };
                     let mut spans = vec![Span::styled(lead, t.accent)];
                     spans.extend(row);
@@ -872,24 +874,88 @@ fn welcome(app: &App, area: Rect) -> Vec<Line<'static>> {
     let beak = t.gradient.get(1).map_or(t.warn, |c| {
         Style::new().fg(ratatui::style::Color::Rgb(c.0, c.1, c.2))
     });
-    let duck: [Vec<Span<'static>>; 5] = [
-        vec![Span::styled("      __      ", body)],
-        vec![
-            Span::styled("    ", body),
-            Span::styled("<", beak),
-            Span::styled("(o )___  ", body),
-        ],
-        vec![
-            Span::styled("     ( .", body),
-            Span::styled("_>", beak),
-            Span::styled(" /  ", body),
-        ],
-        vec![Span::styled("      `---'   ", body)],
-        vec![
-            Span::styled("   ", t.accent),
-            Span::styled("~~~~~~~~~~ ", t.accent),
-        ],
-    ];
+
+    let step = if app.info.ui.reduced_motion {
+        0
+    } else {
+        (app.frame() / 8) % 16
+    };
+
+    let (shift, eye, beak_lower, tail, wave_idx) = match step {
+        // 0: default / static pose
+        0 => (0, "(o )", "_>", " /  ", 0),
+        1 => (0, "(o )", "_>", " /  ", 1),
+        2 => (0, "(o )", "_>", " |  ", 2),
+        3 => (0, "(o )", "_>", " /  ", 3),
+        // 4..9: glide forward & quack
+        4 => (1, "(o )", "_>", " / ", 0),
+        5 => (1, "(o )", "_>", " | ", 1),
+        6 => (1, "(o )", "_>", " / ", 2),
+        7 => (1, "(o )", " >", " / ", 3), // quack!
+        8 => (1, "(o )", " >", " / ", 0), // quack!
+        9 => (1, "(o )", "_>", " / ", 1),
+        // 10..15: glide back, blink & rest
+        10 => (0, "(o )", "_>", " |  ", 2),
+        11 => (0, "(o )", "_>", " /  ", 3),
+        12 => (0, "(o )", "_>", " /  ", 0),
+        13 => (0, "(- )", "_>", " /  ", 1), // blink!
+        14 => (0, "(o )", "_>", " /  ", 2),
+        _ => (0, "(o )", "_>", " /  ", 3),
+    };
+
+    let water = if app.info.ui.ascii {
+        match wave_idx {
+            1 | 3 => "~-~-~-~-~-",
+            2 => "-~-~-~-~-~",
+            _ => "~~~~~~~~~~",
+        }
+    } else {
+        match wave_idx {
+            1 | 3 => "~≈~≈~≈~≈~≈",
+            2 => "≈~≈~≈~≈~≈~",
+            _ => "~~~~~~~~~~",
+        }
+    };
+
+    let duck: [Vec<Span<'static>>; 5] = if shift == 0 {
+        [
+            vec![Span::styled("      __      ", body)],
+            vec![
+                Span::styled("    ", body),
+                Span::styled("<", beak),
+                Span::styled(format!("{eye}___  "), body),
+            ],
+            vec![
+                Span::styled("     ( .", body),
+                Span::styled(beak_lower, beak),
+                Span::styled(tail, body),
+            ],
+            vec![Span::styled("      `---'   ", body)],
+            vec![
+                Span::styled("   ", t.accent),
+                Span::styled(format!("{water} "), t.accent),
+            ],
+        ]
+    } else {
+        [
+            vec![Span::styled("       __     ", body)],
+            vec![
+                Span::styled("     ", body),
+                Span::styled("<", beak),
+                Span::styled(format!("{eye}___ "), body),
+            ],
+            vec![
+                Span::styled("      ( .", body),
+                Span::styled(beak_lower, beak),
+                Span::styled(tail, body),
+            ],
+            vec![Span::styled("       `---'  ", body)],
+            vec![
+                Span::styled("   ", t.accent),
+                Span::styled(format!("{water} "), t.accent),
+            ],
+        ]
+    };
     let mut lines = vec![Line::raw("")];
     for (d, r) in duck.into_iter().zip(right) {
         let mut spans = d;
@@ -1234,5 +1300,46 @@ mod tests {
         assert!(underlined(r), "r of /rewind is a match");
         assert!(!underlined(r + 1), "e is not");
         assert!(underlined(r + 2), "w is a match");
+    }
+
+    #[test]
+    fn welcome_duck_animates_and_honors_reduced_motion() {
+        let mut app = App::new(test_info());
+        app.on_engine(Event::StartupComplete);
+
+        // Frame 0: static duck, closed beak, open eye, resting wave
+        let s0 = render(&app, 80, 24);
+        assert!(s0.contains("<(o )___"));
+        assert!(s0.contains("._> /"));
+        assert!(s0.contains("~~~~~~~~~~"));
+
+        // Advance 56 frames (step 7): quack with open beak and water ripple
+        for _ in 0..56 {
+            app.on_tick();
+        }
+        let s_quack = render(&app, 80, 24);
+        assert!(s_quack.contains("<(o )___"));
+        assert!(s_quack.contains(". > /"));
+        assert!(s_quack.contains("~≈~≈~≈~≈~≈"));
+
+        // Advance to step 13 (frame 104 = 56 + 48 more): eye blink
+        for _ in 0..48 {
+            app.on_tick();
+        }
+        let s_blink = render(&app, 80, 24);
+        assert!(s_blink.contains("<(- )___"));
+
+        // With reduced motion, step is locked at 0
+        let mut info_rm = test_info();
+        info_rm.ui.reduced_motion = true;
+        let mut app_rm = App::new(info_rm);
+        app_rm.on_engine(Event::StartupComplete);
+        for _ in 0..104 {
+            app_rm.on_tick();
+        }
+        let s_rm = render(&app_rm, 80, 24);
+        assert!(s_rm.contains("<(o )___"));
+        assert!(s_rm.contains("._> /"));
+        assert!(s_rm.contains("~~~~~~~~~~"));
     }
 }

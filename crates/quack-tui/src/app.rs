@@ -18,6 +18,8 @@ const DOUBLE_CTRL_C: Duration = Duration::from_millis(1500);
 const DOUBLE_ESC: Duration = Duration::from_millis(600);
 /// Spinner advances every N frames (16 ms each).
 const SPIN_EVERY: u64 = 5;
+/// Welcome duck advances animation every N frames (16 ms each).
+const DUCK_ANIM_EVERY: u64 = 8;
 
 /// Static facts the UI shows, captured once at startup.
 #[derive(Debug, Clone)]
@@ -305,6 +307,10 @@ impl App {
         frames[(self.frame / SPIN_EVERY) as usize % frames.len()]
     }
 
+    pub(crate) fn frame(&self) -> u64 {
+        self.frame
+    }
+
     pub(crate) fn startup_issues(&self) -> usize {
         self.startup
             .iter()
@@ -371,6 +377,13 @@ impl App {
                 .iter()
                 .any(|(_, s)| matches!(s, LoadState::Running { .. }));
         if animating && !self.info.ui.reduced_motion && self.frame.is_multiple_of(SPIN_EVERY) {
+            self.dirty = true;
+        }
+        // The welcome duck animates on startup while the transcript is empty.
+        if self.transcript.is_empty()
+            && !self.info.ui.reduced_motion
+            && self.frame.is_multiple_of(DUCK_ANIM_EVERY)
+        {
             self.dirty = true;
         }
         // The elapsed-time clock in the status bar.
