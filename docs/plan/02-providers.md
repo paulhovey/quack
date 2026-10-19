@@ -54,6 +54,12 @@ pub enum StreamEvent {
 
 `ChatRequest` is our canonical, provider-neutral message list, tool list and sampling parameters. The profile layer ([03](03-model-profiles.md)) shapes it *before* the adapter serializes it.
 
+## anthropic-messages and openai-responses (2026-10-18)
+
+- **`anthropic-messages`** (`proto-anthropic`): `POST <base>/v1/messages`, or `<base>/messages` when `base_url` already ends in `/v1`. With no `auth_header`, the key goes in `x-api-key` and `anthropic-version: 2023-06-01` is sent. The history is folded into alternating turns: tool results are `tool_result` blocks in the next user turn, a system message after the first becomes user text, and the conversation always opens with the user. The system prompt and the newest block carry `cache_control: ephemeral`. `max_tokens` is required, so 8,192 is sent when the model sets none. Earlier reasoning is not sent back (it needs signatures this harness does not keep), and extended thinking is not requested yet. Usage counts cache reads and writes in the prompt, and cache reads as cached. Models are listed from `/v1/models`.
+- **`openai-responses`** (`proto-openai-responses`): `POST <base>/responses`, stateless (`store: false`, the whole history in `input` each time, as with chat). The first system message is `instructions`, later ones `developer` messages. Tool calls and results are `function_call` / `function_call_output` items. Streams of text, reasoning (`reasoning_text` and `reasoning_summary_text`) and function-call arguments are handled, including servers that send arguments only at `.done`. `reasoning.effort` comes from the model's `reasoning.effort`.
+- Both are tested against mock servers only (`quack-providers/tests/mock_server.rs`, plus unit tests of the request bodies and stream parsing).
+
 ## Provider file schema
 
 ### Minimal form (what most users write)

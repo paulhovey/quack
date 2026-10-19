@@ -1,6 +1,7 @@
 //! `write`: create or overwrite a file.
 
 use futures::future::BoxFuture;
+use quack_config::settings::EditFormat;
 use quack_protocol::ApprovalRequest;
 use serde_json::{Value, json};
 
@@ -65,10 +66,31 @@ impl Tool for Write {
         ToolKind::Mutating
     }
 
-    fn description(&self, _ctx: &ToolCtx) -> String {
-        "Create a new file or replace a file's entire content. Parent directories are created. \
-         Prefer `edit` for changing part of an existing file."
-            .into()
+    fn description(&self, ctx: &ToolCtx) -> String {
+        match ctx.edit_format {
+            EditFormat::WholeFile => {
+                "Create a file, or change one by writing its complete new content. Parent \
+                 directories are created. Read a file before rewriting it, and keep every line \
+                 you are not changing exactly as it was."
+            }
+            EditFormat::ApplyPatch => {
+                "Create a new file or replace a file's entire content. Parent directories are \
+                 created. Prefer `apply_patch` for changing part of an existing file."
+            }
+            EditFormat::SearchReplaceBlocks => {
+                "Create a new file or replace a file's entire content. Parent directories are \
+                 created. Prefer `edit_blocks` for changing part of an existing file."
+            }
+            EditFormat::Hashline => {
+                "Create a new file or replace a file's entire content. Parent directories are \
+                 created. Prefer `edit_hashline` for changing part of an existing file."
+            }
+            EditFormat::StrReplace | EditFormat::Auto => {
+                "Create a new file or replace a file's entire content. Parent directories are \
+                 created. Prefer `edit` for changing part of an existing file."
+            }
+        }
+        .into()
     }
 
     fn schema(&self) -> Value {

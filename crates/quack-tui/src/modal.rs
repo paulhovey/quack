@@ -1957,6 +1957,183 @@ pub(crate) fn skills(skills: &[quack_protocol::SkillInfo], theme: &Theme) -> Mod
     )
 }
 
+/// The `/instructions` modal: the AGENTS.md files the model has, in the system prompt or
+/// attached when it first worked in their folder. `None` while asking the engine.
+pub(crate) fn instructions(
+    files: Option<&[quack_protocol::InstructionFile]>,
+    theme: &Theme,
+) -> Modal {
+    let items = match files {
+        None => vec![placeholder("reading…", "", theme)],
+        Some([]) => vec![placeholder(
+            "no instruction files",
+            "None was found. quack reads AGENTS.md (and the other names in \
+             `[instructions] files`) from your config folder, then from each folder between \
+             the git root and the working directory. Files in subfolders are added when the \
+             model first works there. /init writes one for this project.",
+            theme,
+        )],
+        Some(files) => files
+            .iter()
+            .map(|f| {
+                let mut detail = vec![
+                    Line::styled(f.source.clone(), theme.accent),
+                    Line::raw(""),
+                    field(
+                        theme,
+                        "where",
+                        if f.in_prompt {
+                            "in the system prompt".into()
+                        } else {
+                            "added to a tool result in its folder".into()
+                        },
+                    ),
+                    field(theme, "size", format!("~{} tokens", f.tokens)),
+                    Line::raw(""),
+                ];
+                detail.extend(f.text.lines().map(|l| Line::raw(l.to_owned())));
+                ModalItem {
+                    label: f.source.clone(),
+                    hint: crate::theme::tokens(f.tokens),
+                    detail,
+                    action: None,
+                    run: false,
+                    alt: None,
+                    charts: Vec::new(),
+                }
+            })
+            .collect(),
+    };
+    Modal::new(
+        "Instructions",
+        vec![ModalTab {
+            title: "Instructions".into(),
+            items,
+        }],
+    )
+}
+
+/// What `/profiles` shows: the profile in use, whether it was chosen for the session,
+/// and every installed profile.
+pub(crate) type ProfileList<'a> = (&'a str, bool, &'a [quack_protocol::ProfileInfo]);
+
+/// The `/profiles` modal: each profile previewed for the current model. `None` while
+/// asking the engine.
+pub(crate) fn profiles(list: Option<ProfileList<'_>>, theme: &Theme) -> Modal {
+    let Some((active, forced, profiles)) = list else {
+        return Modal::new(
+            "Profiles",
+            vec![ModalTab {
+                title: "Profiles".into(),
+                items: vec![placeholder("rendering profiles…", "", theme)],
+            }],
+        );
+    };
+    let mut items: Vec<ModalItem> = profiles
+        .iter()
+        .map(|p| {
+            let hint = match (p.id == active, p.matches) {
+                (true, _) => "in use".into(),
+                (false, true) => "auto pick".into(),
+                _ => String::new(),
+            };
+            let mut detail = vec![
+                Line::styled(p.id.clone(), theme.accent),
+                Line::raw(""),
+                Line::raw(p.description.clone()),
+                Line::raw(""),
+                field(theme, "source", p.source.clone()),
+                field(theme, "edits", p.edit_format.replace('_', " ")),
+                field(theme, "tools", p.tools.join(", ")),
+                Line::raw(""),
+                Line::styled("System prompt, rendered for this model", theme.dim),
+            ];
+            detail.extend(p.system.lines().map(|l| Line::raw(l.to_owned())));
+            ModalItem {
+                label: p.id.clone(),
+                hint,
+                detail,
+                action: Some(format!("/profiles {}", p.id)),
+                run: true,
+                alt: Some(format!("/profiles default {}", p.id)),
+                charts: Vec::new(),
+            }
+        })
+        .collect();
+    items.push(ModalItem {
+        label: "auto".into(),
+        hint: if forced { String::new() } else { "on".into() },
+        detail: vec![
+            Line::styled("auto", theme.accent),
+            Line::raw(""),
+            Line::raw(
+                "Each model's own profile: the one its provider file names, else the \
+                 best `[match]` for its id, else `generic`.",
+            ),
+            Line::raw(""),
+            Line::styled("⏎ go back to it for this session", theme.dim),
+        ],
+        action: Some("/profiles auto".into()),
+        run: true,
+        alt: None,
+        charts: Vec::new(),
+    });
+    Modal::new(
+        "Profiles",
+        vec![ModalTab {
+            title: "Profiles".into(),
+            items,
+        }],
+    )
+    .with_alt("make default")
+}
+
+/// The `/commands` modal: custom slash commands from the `commands/` folders.
+pub(crate) fn custom_commands(commands: &[quack_protocol::CommandInfo], theme: &Theme) -> Modal {
+    let items = if commands.is_empty() {
+        vec![placeholder(
+            "no custom commands",
+            "Put a markdown prompt in commands/ in your config folder (or .quack/commands in \
+             a trusted project): commands/review.md is /review, commands/test/flaky.md is \
+             /test:flaky. {{ args }} in the file becomes what you type after the name; \
+             front matter can give a `description` and `args`.",
+            theme,
+        )]
+    } else {
+        commands
+            .iter()
+            .map(|c| ModalItem {
+                label: format!("/{}", c.name),
+                hint: c.source.clone(),
+                detail: vec![
+                    Line::styled(
+                        format!("/{} {}", c.name, c.args).trim_end().to_owned(),
+                        theme.accent,
+                    ),
+                    Line::raw(""),
+                    Line::raw(c.description.clone()),
+                    Line::raw(""),
+                    field(theme, "from", c.source.clone()),
+                    field(theme, "file", c.path.clone()),
+                    Line::raw(""),
+                    Line::styled("⏎ type it with a request", theme.dim),
+                ],
+                action: Some(format!("/{} ", c.name)),
+                run: false,
+                alt: None,
+                charts: Vec::new(),
+            })
+            .collect()
+    };
+    Modal::new(
+        "Commands",
+        vec![ModalTab {
+            title: "Commands".into(),
+            items,
+        }],
+    )
+}
+
 /// The `/mcp` modal: each server with its state, tools and recent stderr. `None` while
 /// asking the engine.
 pub(crate) fn mcp(servers: Option<&[quack_protocol::McpServerInfo]>, theme: &Theme) -> Modal {

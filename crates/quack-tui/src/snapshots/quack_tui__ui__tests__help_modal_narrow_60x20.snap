@@ -1,6 +1,5 @@
 ---
 source: crates/quack-tui/src/ui.rs
-assertion_line: 1177
 expression: "render(&app, 60, 20)"
 ---
 "╭ Help ────────────────────────────────────────────────────╮"
@@ -10,7 +9,7 @@ expression: "render(&app, 60, 20)"
 "││▌ /models                                               ┃│"
 "││  /providers                                            ││"
 "││  /setup                                                ││"
-"││  /profiles                                          M2 ││"
+"││  /profiles                                             ││"
 "││  /resume                                               ││"
 "││  /new                                                  ││"
 "││  /rewind                                               ││"

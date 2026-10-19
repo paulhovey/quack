@@ -178,6 +178,18 @@ Licensing rule: every profile's `source` field states where the prompt and tool 
 
 Profiles are judged by measurement, not opinion. The eval suite ([13](13-testing-and-evals.md)) can run the same task suite with one model under several profiles. It reports pass rate, tokens per task, tool-call parse failures and edit failures. Default `[match]` priorities are set from those results.
 
+## As implemented (2026-10-18)
+
+- **Shipped**: `generic`, plus `qwen-code`, `cc-style`, `kimi-code` and `codex`. The four family profiles have empty `[match]` lists, so they are used only when chosen: `profile = "<id>"` on a model, `--profile <id>`, or `[model] profile` for every model in the session. Each `profile.toml` has the proposed globs in a comment, to enable once `quack eval` shows the profile at least matches `generic` for that family.
+- **Prompts** are original text written for this project; only tool names and parameter shapes follow each family's harness, and each `source` says which. `swe-agent` is not built: it needs a text-only tool mode that does not exist yet.
+- **Tool surface**: `[[tools]]` renames tools and parameters and may replace descriptions (inline, or a `.md` file in the profile directory). Internal tools a profile does not list are still offered under their internal names, unless the profile sets `exclusive = true` (the `codex` profile does: shell, apply_patch, update_plan, memory, skill). A mapping onto a tool that is merely off this session (`lsp` without servers, `skill` without skills, another edit format's tool) is skipped without a warning.
+- **Parameters**: `transform` is `abs_to_workspace`, `zero_to_one_based`, `one_to_zero_based`, `join_lines` (an array of lines becomes one string; shown to the model as an array) or `argv` (an argument list becomes one command line; `["bash", "-lc", script]` gives the script). `default` fills a parameter the model left out and makes it optional in the schema; `[tools.fixed]` sends internal parameters with a fixed value and hides them.
+- **Defaults**: `[defaults] edit_format` picks the edit tool when `[tools] edit_format = "auto"` (the default). Sampling defaults are each vendor's published recommendation and should be checked against current model cards.
+- **Template variables**: `edit_tool` and `write_tool` give the names the model sees for the session's edit tool and for `write` (the same name under `whole_file`), so a prompt stays right whatever the edit format.
+- **`/profiles`**: every installed profile rendered for the current model (system prompt, tool names, edit format), with the one `auto` would pick marked. Enter switches the session (`Op::SetProfile`; the same model, rebuilt like a model switch, and kept through `/reload`), `auto` goes back to each model's own choice, Ctrl-S saves `[model] profile`.
+- Not built yet: `env_placement`, `system_role`, `[messages]` shaping, `result_format`, `extends`, `quack profile render`.
+- **Tests**: `core/tests/profiles.rs` starts every shipped profile, checks that it loads without warnings, names its source, offers its tools with their parameters and renders without leftover template syntax; it also runs a Codex `shell` call given as an argument list. `core/tests/prefix.rs` runs a whole session for each.
+
 ## Open questions
 
 - Should profiles allow a Lua/Wasm hook for arbitrary message shaping? Proposed: no. Keep the transform set closed, and add a new transform in code when one is needed.

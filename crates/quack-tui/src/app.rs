@@ -138,7 +138,7 @@ pub(crate) struct PopupItem {
     pub description: String,
     /// Shown after the description, e.g. a milestone or `skill`.
     pub hint: Option<&'static str>,
-    /// `None` for skills.
+    /// `None` for skills and custom commands.
     pub command: Option<&'static Command>,
 }
 
@@ -247,6 +247,8 @@ pub struct App {
     turn_tools: u32,
     /// The model's current plan, from its last `todo` call.
     pub(crate) plan: Vec<(PlanState, String)>,
+    /// `/todo`: the whole plan above the input instead of its one-line summary.
+    pub(crate) plan_expanded: bool,
     panel_collapsed: bool,
     /// A `/resume` is in flight: clear the transcript when it lands.
     resuming: bool,
@@ -258,6 +260,8 @@ pub struct App {
     clipboard: Option<String>,
     /// Installed skills, runnable as `/<name>`.
     skills: Vec<quack_protocol::SkillInfo>,
+    /// Custom slash commands, minus any that a built-in command's name hides.
+    custom: Vec<quack_protocol::CommandInfo>,
     /// Servers found by the last `/setup`.
     detected: Vec<quack_protocol::DetectedServer>,
     /// A `.quack/` waiting for a trust decision.
@@ -299,12 +303,14 @@ impl App {
             turn_started: None,
             turn_tools: 0,
             plan: Vec::new(),
+            plan_expanded: false,
             panel_collapsed: false,
             resuming: false,
             mode_before_plan: String::new(),
             mode_before_yolo: String::new(),
             clipboard: None,
             skills: Vec::new(),
+            custom: Vec::new(),
             detected: Vec::new(),
             trust: None,
             frame: 0,
@@ -388,6 +394,17 @@ impl App {
             hits.insert(0, alias);
         }
         let mut items: Vec<PopupItem> = hits.into_iter().map(PopupItem::command).collect();
+        items.extend(
+            fuzzy::filter(query, self.custom.iter().map(|c| c.name.as_str()))
+                .into_iter()
+                .map(|i| PopupItem {
+                    name: self.custom[i].name.clone(),
+                    args: self.custom[i].args.clone(),
+                    description: self.custom[i].description.clone(),
+                    hint: Some("custom"),
+                    command: None,
+                }),
+        );
         items.extend(
             fuzzy::filter(query, self.skills.iter().map(|s| s.name.as_str()))
                 .into_iter()
@@ -485,7 +502,36 @@ impl App {
                     ));
                 }
             }
+            Event::Instructions { files } => {
+                if self.modal.as_ref().is_some_and(|m| m.title == "Instructions") {
+                    self.modal = Some(modal::instructions(Some(&files), &self.theme));
+                }
+            }
+            Event::Profiles {
+                active,
+                forced,
+                profiles,
+            } => {
+                if self.modal.as_ref().is_some_and(|m| m.title == "Profiles") {
+                    self.modal = Some(modal::profiles(
+                        Some((&active, forced, &profiles)),
+                        &self.theme,
+                    ));
+                }
+            }
             Event::Skills { skills } => self.skills = skills,
+            Event::Commands { commands } => {
+                let (hidden, kept): (Vec<_>, Vec<_>) = commands
+                    .into_iter()
+                    .partition(|c| commands::find(&c.name).is_some());
+                for c in hidden {
+                    self.transcript.push(Entry::Warning(format!(
+                        "/{} in {} is not used: a built-in command has that name",
+                        c.name, c.path
+                    )));
+                }
+                self.custom = kept;
+            }
             Event::FilesRestored {
                 restored,
                 conflicts,
@@ -1088,7 +1134,11 @@ impl App {
         match commands::find(name) {
             Some(cmd) => self.run_command(cmd, args.trim()),
             // The engine expands `/<skill> args` into the skill's instructions.
-            None if self.skills.iter().any(|s| s.name == name) => self.send(text.trim().to_owned()),
+            None if self.skills.iter().any(|s| s.name == name)
+                || self.custom.iter().any(|c| c.name == name) =>
+            {
+                self.send(text.trim().to_owned());
+            }
             None => self.note(format!("unknown command /{name}; /help lists commands")),
         }
     }
@@ -1110,6 +1160,24 @@ impl App {
                 }
                 _ => self.note("usage: /models <provider>/<model>".into()),
             },
+            "instructions" => {
+                self.modal = Some(modal::instructions(None, &self.theme));
+                self.ops.push(Op::ListInstructions);
+            }
+            "profiles" if args.starts_with("default ") => {
+                let id = args["default ".len()..].trim();
+                self.save_setting("model.profile", &toml_string(id));
+            }
+            "profiles" if !args.is_empty() => {
+                self.note(format!("switching to the {args} profile…"));
+                self.ops.push(Op::SetProfile {
+                    id: args.to_owned(),
+                });
+            }
+            "profiles" => {
+                self.modal = Some(modal::profiles(None, &self.theme));
+                self.ops.push(Op::ListProfiles);
+            }
             "models" => {
                 self.modal = Some(modal::models(
                     None,
@@ -1230,6 +1298,16 @@ impl App {
                 force: args == "--force",
             }),
             "skills" => self.modal = Some(modal::skills(&self.skills, &self.theme)),
+            "todo" => {
+                self.plan_expanded = !self.plan_expanded;
+                if self.plan.is_empty() {
+                    self.note(
+                        "no plan yet; the model makes one with its `todo` tool for multi-step work"
+                            .into(),
+                    );
+                }
+            }
+            "commands" => self.modal = Some(modal::custom_commands(&self.custom, &self.theme)),
             "doctor" => {
                 self.modal = Some(modal::doctor(None, &self.theme));
                 self.ops.push(Op::RunDoctor);
@@ -1483,6 +1561,41 @@ mod tests {
         for c in s.chars() {
             press(app, KeyCode::Char(c));
         }
+    }
+
+    #[test]
+    fn custom_commands_in_the_popup_and_sent_as_turns() {
+        use quack_protocol::CommandInfo;
+        let mut app = App::new(info());
+        let cmd = |name: &str| CommandInfo {
+            name: name.into(),
+            description: format!("{name} things"),
+            args: "[focus]".into(),
+            source: "user".into(),
+            path: format!("/cfg/commands/{name}.md"),
+        };
+        app.on_engine(Event::Commands {
+            commands: vec![cmd("review"), cmd("models")],
+        });
+        // A built-in name wins, and the user is told.
+        assert!(app.transcript.iter().any(
+            |e| matches!(e, Entry::Warning(w) if w.contains("/models in /cfg/commands/models.md"))
+        ));
+        type_str(&mut app, "/revi");
+        let popup = app.popup_matches();
+        assert!(
+            popup
+                .iter()
+                .any(|p| p.name == "review" && p.hint == Some("custom")),
+            "{popup:?}"
+        );
+        app.input.clear();
+        type_str(&mut app, "/review the cache");
+        press(&mut app, KeyCode::Enter);
+        assert!(matches!(
+            app.take_ops().as_slice(),
+            [Op::UserTurn { items, .. }] if items == &vec![InputItem::text("/review the cache")]
+        ));
     }
 
     #[test]

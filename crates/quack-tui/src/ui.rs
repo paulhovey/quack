@@ -24,7 +24,15 @@ pub(crate) fn draw(f: &mut Frame<'_>, app: &App) {
         0
     };
     let input_rows = u16::try_from(app.input.line_count().min(MAX_INPUT_LINES)).unwrap_or(1) + 2;
-    let plan_rows = u16::from(plan_open(app));
+    let plan_rows = if app.plan_expanded && !app.plan.is_empty() {
+        // The whole plan, up to a third of the screen.
+        let cap = (f.area().height / 3).max(2);
+        u16::try_from(app.plan.len() + 1)
+            .unwrap_or(u16::MAX)
+            .min(cap)
+    } else {
+        u16::from(plan_open(app))
+    };
     let [header, panel, transcript, plan, input, status] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(panel_rows),
@@ -40,7 +48,9 @@ pub(crate) fn draw(f: &mut Frame<'_>, app: &App) {
         draw_panel(f, app, panel);
     }
     draw_transcript(f, app, transcript);
-    if plan_rows > 0 {
+    if plan_rows > 1 {
+        draw_plan_list(f, app, plan);
+    } else if plan_rows > 0 {
         draw_plan(f, app, plan);
     }
     draw_input(f, app, input);
@@ -877,6 +887,41 @@ fn draw_plan(f: &mut Frame<'_>, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
+/// `/todo`: every step, under the one-line summary. Done steps scroll off first when the
+/// plan is longer than the room.
+fn draw_plan_list(f: &mut Frame<'_>, app: &App, area: Rect) {
+    let [head, list] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
+    draw_plan(f, app, head);
+    let room = usize::from(list.height);
+    let skip = app
+        .plan
+        .iter()
+        .take_while(|(s, _)| *s == PlanState::Done)
+        .count()
+        .min(app.plan.len().saturating_sub(room));
+    let width = usize::from(list.width).saturating_sub(6);
+    let lines: Vec<Line<'static>> = app
+        .plan
+        .iter()
+        .skip(skip)
+        .take(room)
+        .map(|(state, text)| {
+            let (mark, style) = plan_mark(app, *state);
+            let text_style = match state {
+                PlanState::Done => app.theme.dim,
+                PlanState::Active => style,
+                PlanState::Pending => Style::default(),
+            };
+            Line::from(vec![
+                Span::raw("   "),
+                Span::styled(format!("{mark} "), style),
+                Span::styled(truncate(text, width), text_style),
+            ])
+        })
+        .collect();
+    f.render_widget(Paragraph::new(lines), list);
+}
+
 /// The empty transcript: a duck, and the few things worth knowing first.
 fn welcome(app: &App, area: Rect) -> Vec<Line<'static>> {
     let t = &app.theme;
@@ -1295,6 +1340,87 @@ mod tests {
     }
 
     #[test]
+    fn instructions_modal_100x30() {
+        use quack_protocol::InstructionFile;
+        let mut app = started_app();
+        let file = |source: &str, in_prompt, text: &str| InstructionFile {
+            source: source.into(),
+            in_prompt,
+            tokens: 1_200,
+            text: text.into(),
+        };
+        let files = [
+            file(
+                "AGENTS.md",
+                true,
+                "# Project\n\nRun `cargo test` before finishing.",
+            ),
+            file("web/AGENTS.md", false, "Use pnpm."),
+        ];
+        app.modal = Some(crate::modal::instructions(Some(&files), &app.theme));
+        let s = render(&app, 100, 30);
+        assert!(
+            s.contains("in the system prompt") && s.contains("Run `cargo test`"),
+            "{s}"
+        );
+        insta::assert_snapshot!("instructions_modal_100x30", s);
+        app.modal = Some(crate::modal::instructions(Some(&[]), &app.theme));
+        let s = render(&app, 100, 30);
+        assert!(s.contains("no instruction files"), "{s}");
+    }
+
+    #[test]
+    fn profiles_modal_100x30() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        use quack_protocol::{Event, Op, ProfileInfo};
+        let mut app = started_app();
+        let profile = |id: &str, matches, tools: &[&str], system: &str| ProfileInfo {
+            id: id.into(),
+            description: format!("The {id} profile"),
+            source: "Original".into(),
+            matches,
+            edit_format: "str_replace".into(),
+            tools: tools.iter().map(|t| (*t).to_owned()).collect(),
+            system: system.into(),
+        };
+        for c in "/profiles".chars() {
+            key(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.take_ops(), vec![Op::ListProfiles]);
+        app.on_engine(Event::Profiles {
+            active: "generic".into(),
+            forced: false,
+            profiles: vec![
+                profile(
+                    "generic",
+                    true,
+                    &["read", "edit", "shell"],
+                    "You are a coding agent.\nBe brief.",
+                ),
+                profile(
+                    "qwen-code",
+                    false,
+                    &["read_file", "edit", "run_shell_command"],
+                    "You are an interactive agent.",
+                ),
+            ],
+        });
+        key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        let s = render(&app, 100, 30);
+        assert!(s.contains("read_file, edit, run_shell_command"), "{s}");
+        assert!(s.contains("You are an interactive agent."), "{s}");
+        insta::assert_snapshot!("profiles_modal_100x30", s);
+        key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(
+            app.take_ops(),
+            vec![Op::SetProfile {
+                id: "qwen-code".into()
+            }]
+        );
+    }
+
+    #[test]
     fn status_bar_shows_room_left_in_turns() {
         let mut app = started_app();
         app.context = Some((60_000, 104_000));
@@ -1399,6 +1525,30 @@ mod tests {
         });
         app.context = Some((12_345, 104_000));
         insta::assert_snapshot!(render(&app, 80, 24));
+    }
+
+    #[test]
+    fn todo_pane_lists_the_whole_plan_80x24() {
+        use crate::app::PlanState;
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let mut app = started_app();
+        app.plan = vec![
+            (PlanState::Done, "read the parser".into()),
+            (PlanState::Active, "cache the token table".into()),
+            (PlanState::Pending, "run the benchmarks".into()),
+        ];
+        let s = render(&app, 80, 24);
+        assert!(!s.contains("run the benchmarks"), "only the summary: {s}");
+        for c in "/todo".chars() {
+            key(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        let s = render(&app, 80, 24);
+        assert!(
+            s.contains("read the parser") && s.contains("run the benchmarks"),
+            "{s}"
+        );
+        insta::assert_snapshot!("todo_pane_80x24", s);
     }
 
     #[test]

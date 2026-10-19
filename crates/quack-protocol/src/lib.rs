@@ -32,6 +32,17 @@ pub enum Op {
     },
     /// Ask for the model catalogue; answered with `Event::ModelCatalog`.
     ListModels,
+    /// Ask which instruction files (AGENTS.md and the like) the model has; answered with
+    /// `Event::Instructions`.
+    ListInstructions,
+    /// Ask for the installed profiles, each previewed for the current model; answered
+    /// with `Event::Profiles`.
+    ListProfiles,
+    /// Use this profile for every model for the rest of the session; `auto` goes back to
+    /// each model's own choice. Waits for a running turn.
+    SetProfile {
+        id: String,
+    },
     /// Summarize older history now. `focus` says what the summary should keep.
     Compact {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -146,6 +157,23 @@ pub enum Event {
         providers: Vec<ProviderModels>,
         /// `<provider>/<model>` in use, if any.
         current: Option<String>,
+    },
+    /// The instruction files in the system prompt, then those attached to tool results
+    /// so far.
+    Instructions {
+        files: Vec<InstructionFile>,
+    },
+    /// Custom slash commands found at startup.
+    Commands {
+        commands: Vec<CommandInfo>,
+    },
+    /// The installed profiles, previewed for the current model.
+    Profiles {
+        /// The profile in use.
+        active: String,
+        /// Set with `/profiles <id>` or `[model] profile`, rather than chosen per model.
+        forced: bool,
+        profiles: Vec<ProfileInfo>,
     },
     /// A saved session was loaded; `items` is its transcript for display.
     SessionResumed {
@@ -385,6 +413,48 @@ pub struct ToolResultSummary {
     /// Full diff or output for display.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+}
+
+/// A custom slash command (`commands/<name>.md`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandInfo {
+    /// Without the slash, e.g. `review` or `test:flaky`.
+    pub name: String,
+    pub description: String,
+    /// What to type after the name, e.g. `[focus]`.
+    pub args: String,
+    /// The layer it came from.
+    pub source: String,
+    pub path: String,
+}
+
+/// One instruction file the model has seen.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstructionFile {
+    /// The path as shown to the model, relative to the workspace when inside it.
+    pub source: String,
+    /// In the system prompt (`false`: attached to a tool result when the model first
+    /// worked in its folder).
+    pub in_prompt: bool,
+    /// Estimated tokens.
+    pub tokens: u32,
+    pub text: String,
+}
+
+/// A profile as it would shape the current model's session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfileInfo {
+    pub id: String,
+    pub description: String,
+    /// Where its prompt and tool shapes come from.
+    pub source: String,
+    /// `auto` would pick it for the current model.
+    pub matches: bool,
+    pub edit_format: String,
+    /// The tool names the model would see.
+    pub tools: Vec<String>,
+    /// The rendered system prompt, or why it does not render.
+    pub system: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

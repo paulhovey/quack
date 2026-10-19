@@ -49,7 +49,19 @@ fn percent(s: &Setup) -> u32 {
 /// Apply the pruning rules to everything but the most recent messages.
 pub(crate) fn prune_now(ctx: &TurnCtx, history: &mut [Message]) {
     let protect_from = history.len().saturating_sub(PROTECT_MESSAGES);
-    let ops = prune::plan(history, protect_from, |c| classify(&ctx.setup, c));
+    let s = &ctx.setup;
+    let root = &s.tool_ctx.root;
+    let hooks = prune::Hooks {
+        classify: &|c| classify(s, c),
+        stale: &|p| s.tool_ctx.reads.is_stale(std::path::Path::new(p)),
+        outline: &|p, text| {
+            let path = std::path::Path::new(p);
+            quack_tools::outline::outline(path, text)
+                .filter(|o| !o.symbols.is_empty())
+                .map(|o| o.render(&quack_tools::paths::display(root, path)))
+        },
+    };
+    let ops = prune::plan(history, protect_from, &hooks);
     if ops.is_empty() {
         return;
     }
@@ -80,15 +92,35 @@ fn classify(s: &Setup, call: &ToolCall) -> Access {
     };
     match tool.subject(&args, &s.tool_ctx) {
         // `glob`, `grep` and `list_dir` are reads too, but of many files.
-        Ok(Subject::Read(p)) if internal == "read" => Access::Read {
-            path: p.display().to_string(),
-            lines: read_lines(&args),
-        },
-        Ok(Subject::Edit(p)) => Access::Write {
-            path: p.display().to_string(),
+        // A symbol read is a part, and a large file read without a range was its outline:
+        // neither makes an earlier read of that file out of date.
+        Ok(Subject::Read(p))
+            if internal == "read"
+                && args.get("symbol").is_none()
+                && (read_lines(&args).is_some() || !outlined(s, &p)) =>
+        {
+            Access::Read {
+                path: p.display().to_string(),
+                lines: read_lines(&args),
+            }
+        }
+        Ok(sub @ (Subject::Edit(_) | Subject::Edits(_))) => Access::Write {
+            paths: sub
+                .edited()
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect(),
         },
         _ => Access::Other,
     }
+}
+
+/// Whether a whole-file `read` of `p` returns its outline instead.
+fn outlined(s: &Setup, p: &std::path::Path) -> bool {
+    let above = s.tool_ctx.outline_above;
+    above > 0
+        && quack_tools::outline::supported(p)
+        && std::fs::metadata(p).is_ok_and(|m| m.len() as usize > above)
 }
 
 fn read_lines(args: &Value) -> Option<(u64, u64)> {

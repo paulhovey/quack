@@ -239,10 +239,25 @@ impl Permissions {
 
     /// Remember an "allow for this session" answer.
     pub fn allow_session(&mut self, subject: Subject) {
-        self.session.push(subject);
+        match subject {
+            Subject::Edits(paths) => self.session.extend(paths.into_iter().map(Subject::Edit)),
+            other => self.session.push(other),
+        }
     }
 
     pub fn check(&self, subject: &Subject) -> Decision {
+        // Several files: the strictest answer for any of them.
+        if let Subject::Edits(paths) = subject {
+            let mut out = Decision::Allow;
+            for p in paths {
+                match self.check(&Subject::Edit(p.clone())) {
+                    deny @ Decision::Deny(_) => return deny,
+                    Decision::Ask => out = Decision::Ask,
+                    Decision::Allow => {}
+                }
+            }
+            return out;
+        }
         // Memory is not part of the workspace: reads are free, and writes ask only when
         // configured to (they show in the transcript and are easy to undo).
         // Installed skills are instructions the user put there.

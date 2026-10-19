@@ -49,6 +49,32 @@ async fn chain_at_start_and_nested_files_with_the_first_read() {
     );
     let second = &all[1];
     assert!(second.contains("[instructions for pkg/"), "{second}");
+
+    // `/instructions` lists the chain, then the file attached on the way.
+    engine
+        .submit(quack_core::protocol::Op::ListInstructions)
+        .await;
+    let files = loop {
+        let e = tokio::time::timeout(std::time::Duration::from_secs(10), engine.events.recv())
+            .await
+            .expect("event")
+            .expect("open");
+        if let quack_core::protocol::Event::Instructions { files } = e {
+            break files;
+        }
+    };
+    let listed: Vec<(&str, bool, &str)> = files
+        .iter()
+        .map(|f| (f.source.as_str(), f.in_prompt, f.text.as_str()))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("AGENTS.md", true, "ROOT-RULES"),
+            ("app/AGENTS.md", true, "APP-RULES"),
+            ("pkg/AGENTS.md", false, "PKG-RULES")
+        ]
+    );
     engine.shutdown().await;
 }
 
@@ -206,5 +232,47 @@ async fn other_agents_files_are_read_and_merge_is_offered() {
     let first = &bodies(&server).await[0];
     assert!(first.contains("CLAUDE-RULES"), "{first}");
     assert!(first.contains("Consolidate this project's agent instructions into AGENTS.md"));
+    engine.shutdown().await;
+}
+
+/// `commands/<name>.md` in the user folder: listed at startup, and `/<name> args` sends
+/// its prompt with the arguments filled in.
+#[tokio::test]
+async fn custom_commands_expand_into_their_prompt() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(sse_text("ok"))
+        .mount(&server)
+        .await;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("user").join("commands").join("git");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    std::fs::write(
+        dir.join("review.md"),
+        "---\ndescription: Review the staged diff\nargs: \"[focus]\"\n---\n\nReview `git diff --staged`. Focus: {{ args | default(\"correctness\") }}.\n",
+    )
+    .expect("write");
+    let loaded = common::workspace(tmp.path(), &server.uri(), r#"["tiny"]"#, "");
+    let mut engine = Engine::spawn(Arc::new(loaded));
+    let commands = loop {
+        let e = tokio::time::timeout(std::time::Duration::from_secs(10), engine.events.recv())
+            .await
+            .expect("event")
+            .expect("open");
+        if let quack_core::protocol::Event::Commands { commands } = e {
+            break commands;
+        }
+    };
+    assert_eq!(commands.len(), 1);
+    assert_eq!(
+        (commands[0].name.as_str(), commands[0].args.as_str()),
+        ("git:review", "[focus]")
+    );
+    turn(&mut engine, "/git:review error handling").await;
+    let last = bodies(&server).await.pop().expect("request");
+    assert!(
+        last.contains("Review `git diff --staged`. Focus: error handling."),
+        "{last}"
+    );
     engine.shutdown().await;
 }

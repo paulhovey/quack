@@ -30,6 +30,9 @@ fn main() -> ExitCode {
         }
     };
     let mut overrides = cli.global.overrides.clone();
+    if let Some(p) = &cli.global.profile {
+        overrides.push(format!("model.profile={}", toml_string(p)));
+    }
     let mode = match (cli.global.permission_mode, cli.global.yolo) {
         (_, true) => Some(cli::PermissionModeArg::Yolo),
         (m, false) => m,
@@ -95,6 +98,7 @@ fn main() -> ExitCode {
             KeyringCmd::Set { name } => commands::keyring_set(&name),
             KeyringCmd::Delete { name } => commands::keyring_delete(&name),
         }),
+        Cmd::Eval(args) => block_on(commands::eval(&loaded, opts.clone(), args)),
         #[cfg(feature = "acp")]
         Cmd::Acp => {
             eprintln!("ACP support lands in M6 (docs/plan/12-headless-and-acp.md)");
@@ -139,6 +143,11 @@ fn main() -> ExitCode {
             })
         }
     }
+}
+
+/// A TOML string literal (a JSON string is one).
+fn toml_string(s: &str) -> String {
+    serde_json::Value::String(s.to_owned()).to_string()
 }
 
 fn plan_op() -> quack_core::protocol::Op {

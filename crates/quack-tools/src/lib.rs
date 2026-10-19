@@ -1,10 +1,14 @@
 //! Internal tools, the tool registry and the permission engine.
 //! See docs/plan/04-agent-loop-and-tools.md and 11-security.md.
 
+mod blocks;
 mod edit;
 mod hashline;
+mod index;
 mod lsp;
 mod memory;
+pub mod outline;
+mod patch;
 pub mod paths;
 pub mod permissions;
 mod read;

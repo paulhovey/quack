@@ -22,7 +22,8 @@ fn ctx(root: &std::path::Path) -> ToolCtx {
         lsp: None,
         sandbox: Default::default(),
         plan: Default::default(),
-        hashline: false,
+        edit_format: quack_config::settings::EditFormat::StrReplace,
+        outline_above: 0,
     }
 }
 
@@ -109,4 +110,92 @@ async fn shell_reports_exit_code() {
     let out = call(&reg, &c, "shell", json!({"command": "echo hello"})).await;
     assert!(out.ok, "{out:?}");
     assert!(out.model.starts_with("exit code 0\nhello"), "{}", out.model);
+}
+
+#[cfg(feature = "lang-common")]
+#[tokio::test]
+async fn index_and_outlined_reads() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let reg = Registry::builtin();
+    let mut c = ctx(dir.path());
+    let mut src = String::from("pub struct Big;\n\nimpl Big {\n");
+    for i in 0..200 {
+        src.push_str(&format!("    pub fn f{i}(&self) -> u32 {{\n"));
+        for k in 0..6 {
+            src.push_str(&format!("        let v{k} = {i} * {k} + self.offset();\n"));
+        }
+        src.push_str(&format!("        {i}\n    }}\n\n"));
+    }
+    src.push_str("}\n");
+    std::fs::create_dir_all(dir.path().join("src")).expect("mkdir");
+    std::fs::write(dir.path().join("src").join("big.rs"), &src).expect("write");
+    std::fs::write(
+        dir.path().join("src").join("small.py"),
+        "def g():\n    return 1\n",
+    )
+    .expect("write");
+
+    let i = call(&reg, &c, "index", json!({"path": "src/big.rs"})).await;
+    assert!(i.ok, "{i:?}");
+    assert!(
+        i.model.starts_with("src/big.rs (2004 lines, rust)"),
+        "{}",
+        i.model
+    );
+    assert!(i.model.contains("pub fn f7(&self) -> u32 {"), "{}", i.model);
+    let d = call(&reg, &c, "index", json!({})).await;
+    assert!(
+        d.model.contains("src/small.py (2 lines): fn g"),
+        "{}",
+        d.model
+    );
+    assert!(
+        d.model
+            .contains("src/big.rs (2004 lines): type Big, impl Big"),
+        "{}",
+        d.model
+    );
+
+    // Off: the whole file. On: the outline, unless a range or symbol is asked for.
+    let whole = call(&reg, &c, "read", json!({"path": "src/big.rs"})).await;
+    assert!(whole.model.contains("pub fn f199"), "{}", whole.summary);
+    c.outline_above = 2000;
+    let o = call(&reg, &c, "read", json!({"path": "src/big.rs"})).await;
+    assert!(o.model.contains("so this is its outline"), "{}", o.model);
+    assert!(o.model.len() < src.len() / 2);
+    let part = call(
+        &reg,
+        &c,
+        "read",
+        json!({"path": "src/big.rs", "offset": 4, "limit": 3}),
+    )
+    .await;
+    assert!(part.model.contains("pub fn f0"), "{}", part.model);
+    let sym = call(
+        &reg,
+        &c,
+        "read",
+        json!({"path": "src/big.rs", "symbol": "Big::f150"}),
+    )
+    .await;
+    assert!(
+        sym.model.contains("pub fn f150") && sym.model.contains("let v5 = 150 * 5"),
+        "{}",
+        sym.model
+    );
+    assert!(!sym.model.contains("f151"), "{}", sym.model);
+    let small = call(&reg, &c, "read", json!({"path": "src/small.py"})).await;
+    assert!(small.model.contains("return 1"), "{}", small.model);
+    let missing = call(
+        &reg,
+        &c,
+        "read",
+        json!({"path": "src/big.rs", "symbol": "nope"}),
+    )
+    .await;
+    assert!(
+        !missing.ok && missing.model.contains("index"),
+        "{}",
+        missing.model
+    );
 }

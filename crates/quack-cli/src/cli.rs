@@ -26,6 +26,9 @@ pub(crate) struct Global {
     /// Model as <provider>/<model>; overrides [model].default.
     #[arg(short = 'm', long, global = true)]
     pub model: Option<String>,
+    /// Profile for this run, e.g. `qwen-code`; shorthand for -c model.profile=ID.
+    #[arg(long, global = true, value_name = "ID")]
+    pub profile: Option<String>,
     /// Override a setting, e.g. -c ui.ascii=true. Repeatable.
     #[arg(short = 'c', long = "config", global = true, value_name = "KEY=VALUE")]
     pub overrides: Vec<String>,
@@ -100,6 +103,8 @@ pub(crate) enum Cmd {
         #[command(subcommand)]
         cmd: KeyringCmd,
     },
+    /// Run the eval task suite with the selected model and profile.
+    Eval(EvalArgs),
     /// Run as a Zed Agent Client Protocol agent on stdio.
     #[cfg(feature = "acp")]
     Acp,
@@ -111,6 +116,26 @@ pub(crate) struct ExecArgs {
     pub prompt: String,
     #[arg(long, value_enum, default_value_t = Format::Text)]
     pub output_format: Format,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct EvalArgs {
+    /// The task suite: a folder of task folders.
+    #[arg(long, default_value = "evals/tasks")]
+    pub suite: PathBuf,
+    /// Only these tasks (folder names), comma-separated.
+    #[arg(long, value_delimiter = ',')]
+    pub tasks: Vec<String>,
+    /// Run each task this many times.
+    #[arg(long, default_value_t = 1)]
+    pub repeat: u32,
+    /// Where to write the JSON results. Default:
+    /// `evals/results/<date>/<model>-<profile>.json` next to the suite.
+    #[arg(long)]
+    pub out: Option<PathBuf>,
+    /// Keep each run's workspace (under the cache directory) to look at afterwards.
+    #[arg(long)]
+    pub keep: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

@@ -10,10 +10,14 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+#[cfg(feature = "proto-anthropic")]
+use crate::anthropic;
 use crate::error::{ErrorKind, ProviderError};
 #[cfg(feature = "proto-ollama")]
 use crate::ollama;
 use crate::openai_chat::{self, ChunkParser};
+#[cfg(feature = "proto-openai-responses")]
+use crate::responses;
 use crate::sse::SseDecoder;
 use crate::types::{ChatRequest, DiscoveredModel, StreamEvent};
 
@@ -26,6 +30,10 @@ enum Api {
     OpenAiChat,
     #[cfg(feature = "proto-ollama")]
     Ollama,
+    #[cfg(feature = "proto-anthropic")]
+    Anthropic,
+    #[cfg(feature = "proto-openai-responses")]
+    Responses,
 }
 
 #[derive(Debug, Clone)]
@@ -58,10 +66,25 @@ impl Provider {
                     "this build has no `ollama` adapter; use `openai-chat` with `/v1`".into(),
                 ));
             }
-            other @ ("openai-responses" | "anthropic-messages") => {
-                return Err(config(format!(
-                    "api `{other}` is not implemented yet; use `openai-chat`"
-                )));
+            #[cfg(feature = "proto-anthropic")]
+            "anthropic-messages" => Api::Anthropic,
+            #[cfg(feature = "proto-openai-responses")]
+            "openai-responses" => Api::Responses,
+            #[cfg(not(feature = "proto-anthropic"))]
+            "anthropic-messages" => {
+                return Err(config(
+                    "this build has no `anthropic-messages` adapter; use `openai-chat` if the \
+                     service offers it"
+                        .into(),
+                ));
+            }
+            #[cfg(not(feature = "proto-openai-responses"))]
+            "openai-responses" => {
+                return Err(config(
+                    "this build has no `openai-responses` adapter; use `openai-chat` if the \
+                     service offers it"
+                        .into(),
+                ));
             }
             other => return Err(config(format!("unknown api `{other}`"))),
         };
@@ -71,8 +94,15 @@ impl Provider {
             let key = key
                 .resolve(env)
                 .map_err(|e| config(format!("api_key: {e}")))?;
-            let name = file.auth_header.as_deref().unwrap_or("Authorization");
+            // Anthropic's API takes the bare key in `x-api-key`.
+            let anthropic = file.api == "anthropic-messages";
+            let name = file.auth_header.as_deref().unwrap_or(if anthropic {
+                "x-api-key"
+            } else {
+                "Authorization"
+            });
             let value = match file.auth_scheme.as_deref() {
+                None if anthropic && file.auth_header.is_none() => key,
                 None => format!("Bearer {key}"),
                 Some("") => key,
                 Some(scheme) => format!("{scheme} {key}"),
@@ -86,11 +116,16 @@ impl Provider {
             insert_header(&mut headers, name, &value, true)?;
         }
 
+        #[cfg(feature = "proto-anthropic")]
+        if api == Api::Anthropic && !headers.contains_key("anthropic-version") {
+            insert_header(&mut headers, "anthropic-version", anthropic::VERSION, false)?;
+        }
+
         let client = build_client(&file, network, env)?;
         let base_url = match api {
-            Api::OpenAiChat => file.base_url.trim_end_matches('/'),
             #[cfg(feature = "proto-ollama")]
             Api::Ollama => ollama::native_base(&file.base_url),
+            _ => file.base_url.trim_end_matches('/'),
         }
         .to_owned();
         Ok(Self {
@@ -151,6 +186,16 @@ impl Provider {
                 }
                 Ok(models)
             }
+            #[cfg(feature = "proto-openai-responses")]
+            Api::Responses => Ok(openai_chat::parse_models(
+                &self.get_json(openai_chat::MODELS_PATH).await?,
+            )),
+            #[cfg(feature = "proto-anthropic")]
+            Api::Anthropic => Ok(openai_chat::parse_models(
+                &self
+                    .get_json(&anthropic::path(&self.base_url, "models"))
+                    .await?,
+            )),
             #[cfg(feature = "proto-ollama")]
             Api::Ollama => {
                 let names = ollama::parse_tags(&self.get_json(ollama::TAGS_PATH).await?);
@@ -208,22 +253,34 @@ impl Provider {
     ) {
         let (path, body, accept) = match self.api {
             Api::OpenAiChat => (
-                openai_chat::CHAT_PATH,
+                openai_chat::CHAT_PATH.to_owned(),
                 openai_chat::build_body(&req, self.dialect),
                 "text/event-stream",
             ),
             #[cfg(feature = "proto-ollama")]
             Api::Ollama => (
-                ollama::CHAT_PATH,
+                ollama::CHAT_PATH.to_owned(),
                 ollama::build_body(&req),
                 "application/x-ndjson",
+            ),
+            #[cfg(feature = "proto-anthropic")]
+            Api::Anthropic => (
+                anthropic::path(&self.base_url, "messages"),
+                anthropic::build_body(&req),
+                "text/event-stream",
+            ),
+            #[cfg(feature = "proto-openai-responses")]
+            Api::Responses => (
+                responses::RESPONSES_PATH.to_owned(),
+                responses::build_body(&req),
+                "text/event-stream",
             ),
         };
         let mut attempt = 0;
         let resp = loop {
             let sent = self
                 .client
-                .post(self.url(path))
+                .post(self.url(&path))
                 .headers(self.headers.clone())
                 .header(reqwest::header::ACCEPT, accept)
                 .json(&body)
@@ -250,7 +307,20 @@ impl Provider {
 
         // Once bytes flow we never retry: the user has already seen part of the answer.
         let mut wire = match self.api {
-            Api::OpenAiChat => Wire::Sse(SseDecoder::default(), ChunkParser::new(reasoning)),
+            Api::OpenAiChat => Wire::Sse(
+                SseDecoder::default(),
+                SseParser::Chat(ChunkParser::new(reasoning)),
+            ),
+            #[cfg(feature = "proto-anthropic")]
+            Api::Anthropic => Wire::Sse(
+                SseDecoder::default(),
+                SseParser::Anthropic(anthropic::EventParser::default()),
+            ),
+            #[cfg(feature = "proto-openai-responses")]
+            Api::Responses => Wire::Sse(
+                SseDecoder::default(),
+                SseParser::Responses(responses::EventParser::default()),
+            ),
             #[cfg(feature = "proto-ollama")]
             Api::Ollama => Wire::Lines(
                 ollama::LineDecoder::default(),
@@ -280,9 +350,40 @@ impl Provider {
     }
 }
 
+/// The parser behind an SSE stream, per protocol.
+enum SseParser {
+    Chat(ChunkParser),
+    #[cfg(feature = "proto-anthropic")]
+    Anthropic(anthropic::EventParser),
+    #[cfg(feature = "proto-openai-responses")]
+    Responses(responses::EventParser),
+}
+
+impl SseParser {
+    fn parse(&mut self, data: &str) -> Parsed {
+        match self {
+            Self::Chat(p) => p.parse(data),
+            #[cfg(feature = "proto-anthropic")]
+            Self::Anthropic(p) => p.parse(data),
+            #[cfg(feature = "proto-openai-responses")]
+            Self::Responses(p) => p.parse(data),
+        }
+    }
+
+    fn finish(&mut self) -> Vec<StreamEvent> {
+        match self {
+            Self::Chat(p) => p.finish(),
+            #[cfg(feature = "proto-anthropic")]
+            Self::Anthropic(p) => p.finish(),
+            #[cfg(feature = "proto-openai-responses")]
+            Self::Responses(p) => p.finish(),
+        }
+    }
+}
+
 /// Framing plus parsing for each wire format.
 enum Wire {
-    Sse(SseDecoder, ChunkParser),
+    Sse(SseDecoder, SseParser),
     #[cfg(feature = "proto-ollama")]
     Lines(ollama::LineDecoder, ollama::LineParser),
 }

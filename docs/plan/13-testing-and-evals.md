@@ -62,6 +62,13 @@ The compatibility table is a headline feature, not an internal report: it answer
 
 `quack debug record --model … --prompt …` saves the raw request/response SSE to the fixture directory, with secrets stripped. Every bug report about a parse failure should end up as a fixture.
 
+## As implemented (2026-10-18)
+
+- **Prefix stability**: `core/tests/prefix.rs`, for every shipped profile and with hashline edits (see [05](05-context-management.md)). Each request must extend the previous one: same system prompt, tools and parameters, earlier messages unchanged, and the newest one changed only by the plan reminder that rides on it. After `/compact` the history is new, but the system prompt and tools are not.
+- **`quack eval`** (`quack-exec/src/eval.rs`): `quack eval [-m p/m] [--profile id] [--tasks a,b] [--repeat n] [--suite dir] [--out file] [--keep]`. Each run copies the task's `repo/` to a scratch folder under the cache directory, uses a data directory and memory folder of its own, runs in `full-auto` (anything that still asks is denied), and stops at the task's `timeout_secs`. Results go to `evals/results/<date>/<model>-<profile>.json` and a Markdown table to stdout: pass, steps (model requests), tool calls and errors, parse failures (arguments that are not JSON, unknown tool names), failed edits, prompt/cached/completion tokens, compactions, time.
+- **Tasks**: 21 in `evals/tasks/` (navigate, single-edit, multi-file, fix-test, shell, create, long-context). Checks are file contents, files created or removed, the final answer, a tool having been called, and commands (`{python}` stands for python3 or python; a task whose `requires` are missing is skipped). Python is the only language the commands use, so the suite runs on every OS. Each task has a `solution/`; `quack-exec/tests/suite.rs` checks that every task fails as given and passes with its solution, and `quack-exec/tests/eval.rs` runs the runner against a mock server.
+- Not yet: `--submit-file`, `docs/compat.md` (needs real runs), LSP tasks, external suites.
+
 ## CI
 
 - PR: fmt, clippy (`-D warnings`), unit + snapshot + integration on Linux x64, macOS ARM64, Windows x64 and **Windows ARM64** (GitHub-hosted `windows-11-arm` runner), plus `cargo-deny`, invariant tests and the startup budget.

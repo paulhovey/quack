@@ -317,9 +317,24 @@ impl Client {
         let text = if size > MAX_DOCUMENT {
             None
         } else {
-            std::fs::read(path)
-                .ok()
-                .map(|b| String::from_utf8_lossy(&b).into_owned())
+            // A file just written can be briefly unreadable (an antivirus or an indexer
+            // holds it, mostly on Windows), so try again before giving up.
+            let mut delay = Duration::from_millis(25);
+            loop {
+                match std::fs::read(path) {
+                    Ok(b) => break Some(String::from_utf8_lossy(&b).into_owned()),
+                    Err(e) if delay <= Duration::from_millis(200) => {
+                        tracing::debug!(
+                            error = %e,
+                            "cannot read {} yet, retrying",
+                            path.display()
+                        );
+                        tokio::time::sleep(delay).await;
+                        delay *= 2;
+                    }
+                    Err(_) => break None,
+                }
+            }
         };
         let Some(text) = text else {
             let open = self
@@ -389,14 +404,18 @@ impl Client {
         Ok(text)
     }
 
-    /// Sync the file after an edit, save it, and wait for diagnostics to settle.
-    pub async fn changed(&self, path: &Path, settle: Duration, max_wait: Duration) {
+    /// Sync the file after an edit, save it, and wait for diagnostics to settle. `Err` when
+    /// the file could not be sent at all, so the caller can say why diagnostics are missing.
+    pub async fn changed(
+        &self,
+        path: &Path,
+        settle: Duration,
+        max_wait: Duration,
+    ) -> Result<(), String> {
         let started = Instant::now();
         let since = self.seq();
         let mut rx = self.changed.subscribe();
-        if self.sync(path).await.is_err() {
-            return;
-        }
+        self.sync(path).await?;
         let uri = pos::path_to_uri(path);
         let _ = self
             .notify(
@@ -408,7 +427,7 @@ impl Client {
             self.pull_after_change(path, max_wait).await;
             // A server that only answers pulls has nothing more to send.
             if !self.pushes() {
-                return;
+                return Ok(());
             }
         }
         let key = pos::key(path);
@@ -428,14 +447,14 @@ impl Client {
                 || now - started >= max_wait
                 || !self.alive()
             {
-                return;
+                return Ok(());
             }
             let wake = (quiet_since + settle).max(now + Duration::from_millis(20));
             let wake = wake.min(started + max_wait);
             tokio::select! {
                 r = rx.changed() => {
                     if r.is_err() {
-                        return;
+                        return Ok(());
                     }
                     quiet_since = Instant::now();
                 }

@@ -677,15 +677,20 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
             });
         }
     });
-    let checkpoint = match (&subject, &ctx.checkpoints) {
-        (Subject::Edit(p), Some(cp)) => match cp.before(ctx.turn.0, &call.id, p) {
-            Ok(seq) => Some((cp, seq, p)),
-            Err(e) => {
-                tracing::warn!(error = %e, path = %p.display(), "no undo point for this edit");
-                None
-            }
-        },
-        _ => None,
+    // An undo point for each file the call changes.
+    let checkpoints: Vec<_> = match &ctx.checkpoints {
+        Some(cp) => subject
+            .edited()
+            .iter()
+            .filter_map(|p| match cp.before(ctx.turn.0, &call.id, p) {
+                Ok(seq) => Some((cp, seq, p)),
+                Err(e) => {
+                    tracing::warn!(error = %e, path = %p.display(), "no undo point for this edit");
+                    None
+                }
+            })
+            .collect(),
+        None => Vec::new(),
     };
     // Diagnostics before an edit, to report only what the edit changed.
     let lsp = tctx.lsp.clone();
@@ -696,10 +701,10 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
     let mut out = tool.run(args, &tctx).await;
     drop(tctx);
     let _ = forward.await;
-    if let Some((cp, seq, p)) = checkpoint
-        && let Err(e) = cp.after(seq, p, out.ok)
-    {
-        tracing::warn!(error = %e, "could not record the edit for undo");
+    for (cp, seq, p) in checkpoints {
+        if let Err(e) = cp.after(seq, p, out.ok) {
+            tracing::warn!(error = %e, "could not record the edit for undo");
+        }
     }
     if out.ok
         && let Some(m) = &lsp

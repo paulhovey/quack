@@ -44,6 +44,9 @@ pub struct ModelSettings {
     /// Start with the model last switched to, when it is still available. A project's
     /// `model.default`, `QUACK_MODEL` and `-m` still win; `default` is the fallback.
     pub remember_last: bool,
+    /// A profile id for every model this session, e.g. `qwen-code`. Empty: each model's
+    /// own `profile` (normally `auto`).
+    pub profile: String,
 }
 
 impl Default for ModelSettings {
@@ -52,6 +55,7 @@ impl Default for ModelSettings {
             default: String::new(),
             small: String::new(),
             remember_last: true,
+            profile: String::new(),
         }
     }
 }
@@ -135,6 +139,9 @@ pub struct ToolSettings {
     /// `auto`, `bash`, `zsh`, `pwsh`, `powershell`, `cmd`, or a path.
     pub shell: String,
     pub default_timeout_secs: u64,
+    /// `read` without a line range shows the outline of source files larger than this
+    /// (in tokens), so the model reads only the part it needs. 0: always the whole file.
+    pub read_outline_tokens: u32,
 }
 
 impl Default for ToolSettings {
@@ -143,6 +150,7 @@ impl Default for ToolSettings {
             edit_format: EditFormat::Auto,
             shell: "auto".into(),
             default_timeout_secs: 120,
+            read_outline_tokens: 2000,
         }
     }
 }
@@ -150,12 +158,18 @@ impl Default for ToolSettings {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EditFormat {
+    /// The profile's choice, else `str_replace`.
     Auto,
+    /// `edit`: replace a unique snippet.
     StrReplace,
     /// Hash-anchored edits: `read` tags each line, and edits name lines by tag.
     Hashline,
+    /// `apply_patch`: the Codex patch format, several files per call.
     ApplyPatch,
+    /// No edit tool: files are rewritten whole with `write`.
     WholeFile,
+    /// `edit_blocks`: SEARCH/REPLACE blocks under each file's path.
+    SearchReplaceBlocks,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

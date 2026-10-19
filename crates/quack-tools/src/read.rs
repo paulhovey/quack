@@ -4,8 +4,9 @@ use futures::future::BoxFuture;
 use quack_protocol::ApprovalRequest;
 use serde_json::{Value, json};
 
+use crate::outline::outline;
 use crate::paths;
-use crate::registry::{Subject, Tool, ToolCtx, ToolKind, ToolOutput, arg_str, opt_u64};
+use crate::registry::{Subject, Tool, ToolCtx, ToolKind, ToolOutput, arg_str, opt_str, opt_u64};
 use crate::text::{TextFile, io_msg, looks_binary};
 
 const DEFAULT_LIMIT: usize = 2000;
@@ -25,7 +26,14 @@ impl Tool for Read {
     }
 
     fn description(&self, ctx: &ToolCtx) -> String {
-        let prefix = if ctx.hashline {
+        let outline = if ctx.outline_above > 0 && cfg!(feature = "lang-common") {
+            " A large source file read without a range comes back as its outline; then read \
+             the lines you need, or pass `symbol` (a function or type name, `Type::method` for \
+             one inside another) to read just that definition."
+        } else {
+            ""
+        };
+        let prefix = if ctx.hashline() {
             "`<line>:<tag>|`, the tags edit_hashline uses"
         } else {
             "their line numbers"
@@ -33,7 +41,7 @@ impl Tool for Read {
         format!(
             "Read a text file. Returns lines prefixed with {prefix}. \
              Reads up to {DEFAULT_LIMIT} lines by default; use `offset` (1-based line) and `limit` \
-             for large files. Read a file before editing it."
+             for large files.{outline} Read a file before editing it."
         )
     }
 
@@ -43,7 +51,8 @@ impl Tool for Read {
             "properties": {
                 "path": { "type": "string", "description": "File path, relative to the workspace root or absolute" },
                 "offset": { "type": "integer", "description": "First line to read, 1-based" },
-                "limit": { "type": "integer", "description": "Maximum number of lines" }
+                "limit": { "type": "integer", "description": "Maximum number of lines" },
+                "symbol": { "type": "string", "description": "Read only this definition, e.g. `parse` or `Parser::parse`" }
             },
             "required": ["path"]
         })
@@ -93,14 +102,39 @@ fn read(args: &Value, ctx: &ToolCtx) -> Result<ToolOutput, String> {
 
     let lines: Vec<&str> = file.text.lines().collect();
     let total = lines.len();
-    let offset =
-        usize::try_from(opt_u64(args, &["offset", "start_line"]).unwrap_or(1).max(1)).unwrap_or(1);
-    let limit = usize::try_from(
-        opt_u64(args, &["limit"])
-            .unwrap_or(DEFAULT_LIMIT as u64)
-            .max(1),
-    )
-    .unwrap_or(DEFAULT_LIMIT);
+    let ranged = opt_u64(args, &["offset", "start_line", "limit"]).is_some();
+    let (mut offset, mut limit) = (
+        usize::try_from(opt_u64(args, &["offset", "start_line"]).unwrap_or(1).max(1)).unwrap_or(1),
+        usize::try_from(
+            opt_u64(args, &["limit"])
+                .unwrap_or(DEFAULT_LIMIT as u64)
+                .max(1),
+        )
+        .unwrap_or(DEFAULT_LIMIT),
+    );
+    if let Some(symbol) = opt_str(args, &["symbol", "name"]) {
+        let o = outline(&path, &file.text)
+            .ok_or_else(|| format!("no outline for {shown}; read it with offset/limit"))?;
+        let s = o.find(symbol).ok_or_else(|| {
+            format!("no definition `{symbol}` in {shown}; `index` lists what is there")
+        })?;
+        (offset, limit) = (s.start, s.end - s.start + 1);
+    } else if !ranged
+        && ctx.outline_above > 0
+        && file.text.len() > ctx.outline_above
+        && let Some(o) = outline(&path, &file.text).filter(|o| !o.symbols.is_empty())
+    {
+        let tokens = file.text.len() * 2 / 7;
+        let mut out = o.render(&shown);
+        out.push_str(&format!(
+            "\n({shown} is about {tokens} tokens, so this is its outline. Read the lines you \
+             need with offset/limit, or one definition with `symbol`.)\n"
+        ));
+        return Ok(ToolOutput::ok(
+            out,
+            format!("outline, {} definitions", o.symbols.len()),
+        ));
+    }
     if total == 0 {
         return Ok(ToolOutput::ok(format!("({shown} is empty)"), "empty file"));
     }
@@ -114,7 +148,7 @@ fn read(args: &Value, ctx: &ToolCtx) -> Result<ToolOutput, String> {
     let mut out = String::new();
     for (i, line) in lines[offset - 1..end].iter().enumerate() {
         let n = offset + i;
-        if ctx.hashline {
+        if ctx.hashline() {
             // Long lines stay whole: an edit may need to name them.
             out.push_str(&format!("{n}:{}|{line}\n", crate::hashline::tag(line)));
             continue;

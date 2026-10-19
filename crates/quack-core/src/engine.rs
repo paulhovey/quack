@@ -8,8 +8,8 @@ use quack_config::{LayerKind, Loaded};
 use quack_lsp::LspManager;
 use quack_mcp::McpManager;
 use quack_protocol::{
-    EngineError, EngineErrorKind, Event, InputItem, Op, SessionId, SessionInfo, SessionSummary,
-    TurnId, WriteScope,
+    EngineError, EngineErrorKind, Event, InputItem, InstructionFile, Op, SessionId, SessionInfo,
+    SessionSummary, TurnId, WriteScope,
 };
 use quack_providers::Message;
 use quack_tools::Permissions;
@@ -760,6 +760,80 @@ impl Engine {
         }
     }
 
+    /// `/instructions`: the files in the system prompt, then the ones attached to tool
+    /// results (seen in the history when no turn holds it).
+    fn list_instructions(&self) {
+        let file = |(source, text): (String, String), in_prompt| InstructionFile {
+            tokens: quack_providers::tokens::estimate(&text),
+            source,
+            in_prompt,
+            text,
+        };
+        let mut files: Vec<InstructionFile> = Vec::new();
+        if let Some(c) = &self.convo {
+            files.extend(
+                quack_instructions::agents_md::blocks(&c.setup.vars.instructions)
+                    .into_iter()
+                    .map(|b| file(b, true)),
+            );
+            for m in c.history.iter().flatten() {
+                if let Message::Tool { content, .. } = m {
+                    for b in quack_instructions::agents_md::blocks(content) {
+                        if !files.iter().any(|f| f.source == b.0) {
+                            files.push(file(b, false));
+                        }
+                    }
+                }
+            }
+        }
+        self.emit(Event::Instructions { files });
+    }
+
+    /// A warning, for an `Op` handler that then carries on with the next op.
+    fn warn_continue(&self, message: &str) -> bool {
+        self.warn(message.to_owned());
+        true
+    }
+
+    /// `/profiles <id>`: rebuild the session's setup with that profile for the same model.
+    /// It goes into the command-line overrides, so a reload keeps it.
+    fn set_profile(&mut self, id: String) {
+        if self.running.is_some() {
+            return self
+                .warn("wait for the current turn to finish before switching profiles".into());
+        }
+        let Some((provider, model)) = self
+            .convo
+            .as_ref()
+            .map(|c| (c.setup.provider.id.clone(), c.setup.model.id.clone()))
+        else {
+            return self.warn("no model is ready yet".into());
+        };
+        let value = if id == "auto" { String::new() } else { id };
+        let mut config = (*self.config).clone();
+        config.settings.model.profile.clone_from(&value);
+        config
+            .opts
+            .overrides
+            .retain(|o| !o.starts_with("model.profile="));
+        config.opts.overrides.push(format!(
+            "model.profile={}",
+            serde_json::Value::String(value)
+        ));
+        let config = Arc::new(config);
+        self.config = config.clone();
+        self.config_tx.send_replace(config.clone());
+        if let Some(done) = self.switch_tx.clone() {
+            let tx = self.tx.clone();
+            let mcp = self.mcp.clone();
+            let lsp = self.lsp.clone();
+            tokio::spawn(async move {
+                let r = startup::switch(config, tx, mcp, lsp, provider, model).await;
+                let _ = done.send(r).await;
+            });
+        }
+    }
+
     fn on_switched(&mut self, result: Result<Setup, String>) {
         let setup = match result {
             Ok(s) => s,
@@ -905,6 +979,23 @@ impl Engine {
                     let _ = tx.send(Event::ModelCatalog { providers, current });
                 });
             }
+            Op::ListProfiles => {
+                let Some(setup) = self.convo.as_ref().map(|c| c.setup.clone()) else {
+                    return self.warn_continue("no model is ready yet; profiles are shown for one");
+                };
+                let config = self.config.clone();
+                let tx = self.tx.clone();
+                tokio::spawn(async move {
+                    let event =
+                        tokio::task::spawn_blocking(move || startup::profiles(&config, &setup))
+                            .await;
+                    if let Ok(event) = event {
+                        let _ = tx.send(event);
+                    }
+                });
+            }
+            Op::SetProfile { id } => self.set_profile(id),
+            Op::ListInstructions => self.list_instructions(),
             Op::SetModel { provider, model } => {
                 if self.running.is_some() {
                     self.warn("wait for the current turn to finish before switching models".into());
@@ -1363,7 +1454,15 @@ fn expand_skill(setup: &Setup, prompt: String) -> (String, Option<String>) {
         .split_once(char::is_whitespace)
         .map_or((rest, ""), |(n, a)| (n, a.trim()));
     let Some(skill) = setup.tool_ctx.skills.iter().find(|s| s.name == name) else {
-        return (prompt, None);
+        // A custom command: its prompt with the arguments filled in.
+        return match quack_instructions::commands::expand(&setup.commands, &prompt) {
+            Some(Ok(text)) => (text, None),
+            Some(Err(e)) => {
+                let message = format!("/{name}: {e}");
+                (prompt, Some(message))
+            }
+            None => (prompt, None),
+        };
     };
     match quack_tools::expand_skill(skill) {
         Ok(text) => {
@@ -1425,6 +1524,9 @@ fn op_name(op: &Op) -> &'static str {
         Op::Interrupt => "interrupt",
         Op::ApprovalResponse { .. } => "approval_response",
         Op::SetModel { .. } => "set_model",
+        Op::ListProfiles => "list_profiles",
+        Op::ListInstructions => "list_instructions",
+        Op::SetProfile { .. } => "set_profile",
         Op::ListModels => "list_models",
         Op::Compact { .. } => "compact",
         Op::Undo { .. } => "undo",

@@ -54,6 +54,8 @@ There is one engine and three in-process clients, connected by an Op/Event proto
   - Every event a turn emits goes through `TurnCtx::emit`, which also feeds the session stats (`stats.rs`).
   - Anything that should count toward `/stats` either is an event, or is recorded beside the event.
 - **Engine state and Op handling:** `quack-core/src/engine.rs`. Adding an `Op` also means adding it to `op_name` (an exhaustive match). Adding an `Event` needs no client changes, because clients match with a wildcard.
+- **Edit formats:** `[tools] edit_format` (or the profile's `[defaults] edit_format`) decides which edit tool exists: `edit`, `edit_hashline`, `apply_patch` (`quack-tools/src/patch.rs`), `edit_blocks` (`blocks.rs`), or none (`whole_file`). Each tool's `available()` checks `ToolCtx.edit_format`. A tool that changes several files returns `Subject::Edits`, and the engine gives each file an undo point; `Subject::edited()` lists them.
+- **Outlines:** `quack-tools/src/outline.rs` (tree-sitter, behind `lang-common`) serves the `index` tool, outlined `read`s and pruning rule 4. `cargo test -p <crate>` alone builds without `lang-common`; outline tests are gated on the feature, and engine tests check `outline::supported()` first. The workspace build enables it through `quack-cli`.
 - **Session log:** `quack-core/src/session.rs`. The header comment lists the record kinds (`message`, `tool`, `usage`, `prune`, `compaction`, `rewind`, ...). `replay` rebuilds history from them and skips kinds it doesn't know, so new kinds are backwards compatible. Anything that must survive `/resume` has to be written as a record.
 - **Context:** `quack-core/src/context.rs` handles fitting, pruning and compaction, `threshold()` and `report()` (the `/context` data). The algorithms are in `quack-context`.
 - **TUI:**
@@ -62,6 +64,12 @@ There is one engine and three in-process clients, connected by an Op/Event proto
   - `modal.rs`: every list-with-detail picker (`/models`, `/context`, `/stats`, `/help`, ...).
   - `charts.rs`: charts for a modal's details pane (`Visual`: figure tiles, bars, sparklines, meters, a line chart). A `ModalItem`'s `charts` places each one before a `detail` line; in `modal.rs`, the `Detail` builder does this for you. Charts that don't fit the pane are left out. Each is built with `ascii` already applied; the Trend line chart has no ASCII form, so give ASCII mode a sparkline instead.
   - `commands.rs`: the command catalogue and the help key list.
+
+### Profiles and evals
+
+- A profile is a folder in `defaults/profiles.d/` (`profile.toml` + `system.md`). Prompts must be original text; `source` says what the tool names and shapes follow. Family profiles ship with empty `[match]` lists until `quack eval` shows they beat `generic`.
+- `quack eval` (`quack-exec/src/eval.rs`) runs `evals/tasks/*`. **Every task calls the model**, so running it costs money on a paid key; prove runner changes with `quack-exec/tests/eval.rs` (mock server) instead.
+- A new task needs `task.toml`, `repo/` and `solution/` (files, `ANSWER`, `DELETE`). `cargo test -p quack-exec --test suite` checks that it fails as given and passes when solved. Commands use `{python}` and stay portable (no shell quoting tricks: put logic in a `check.py`).
 
 ### Adding a slash command
 
@@ -72,12 +80,12 @@ There is one engine and three in-process clients, connected by an Op/Event proto
 
 ## Hard invariants
 
-These are the project's core promises; tests and CI enforce the first three:
+These are the project's core promises; tests and CI enforce them:
 
 - **No built-ins**: no provider ids, base URLs or MCP commands are compiled into the binary. Everything is TOML under `defaults/`, loaded as a layer beneath system, user and project config. Startup must survive the deletion of any single default file (`removing_any_default_file_leaves_startup_clean` in `quack-core/tests/invariants.rs`).
 - **No implicit egress**: the binary contacts only what is configured. This is enforced by an in-process recording proxy test (`no_egress_beyond_the_configured_provider`) and by `scripts/no-egress.sh`. Never add a network call outside the configured providers and MCP servers.
 - **First frame under 50 ms**: the Linux CI budget, measured with the hidden `--trace-startup` flag.
-- **Prefix stability**: the system prompt and tool block stay byte-identical across turns except at epoch boundaries, so server KV caches stay warm. Nothing tests this yet: it is an open M2 exit criterion. Don't put anything that changes per turn (time, counters, the plan) into the system prompt. Per-request extras ride on the last message, the way the plan reminder does in `stream_step`. Resume fidelity (the request after a resume equals the live one byte for byte) is tested in `invariants.rs`.
+- **Prefix stability**: the system prompt and tool block stay byte-identical across turns except at epoch boundaries, so server KV caches stay warm. `crates/quack-core/tests/prefix.rs` checks it for every shipped profile: each request must extend the one before. Don't put anything that changes per turn (time, counters, the plan) into the system prompt. Per-request extras ride on the last message, the way the plan reminder does in `stream_step`. Resume fidelity (the request after a resume equals the live one byte for byte) is tested in `invariants.rs`.
 
 ## Conventions and gotchas
 
@@ -108,7 +116,7 @@ These are the project's core promises; tests and CI enforce the first three:
 
 ## Testing
 
-- **Engine integration tests** live in `crates/quack-core/tests/`, one file per area (`agent_loop.rs`, `compaction.rs`, `invariants.rs`, `rewind.rs`, `stats.rs`, `trust.rs`, ...). The mock LLM is a wiremock `MockServer` that the test starts. Files that use `mod common;` (`tests/common/mod.rs`, `#![allow(dead_code)]`) get:
+- **Engine integration tests** live in `crates/quack-core/tests/`, one file per area (`agent_loop.rs`, `compaction.rs`, `edit_formats.rs`, `invariants.rs`, `prefix.rs`, `profiles.rs`, `pruning.rs`, `rewind.rs`, `stats.rs`, `trust.rs`, ...). `prefix.rs` and `profiles.rs` use the real defaults bundle's profiles; a scripted `Respond` (`Script` in `prefix.rs`) answers a sequence of steps in order. The mock LLM is a wiremock `MockServer` that the test starts. Files that use `mod common;` (`tests/common/mod.rs`, `#![allow(dead_code)]`) get:
   - `workspace(root, base_url, models, cwd)`: isolated config, data and cache dirs with one `mock` provider and no defaults bundle. `models` is a TOML array such as `["tiny"]` or `[{ id = "tiny", cost = { input = 1.0, output = 2.0 } }]`.
   - `sse_text()`, `sse_call()`, `sse_raw()`: SSE reply builders. Put a `usage` chunk in `sse_raw` to test token accounting.
   - `turn()`: submit a user turn and wait for it.

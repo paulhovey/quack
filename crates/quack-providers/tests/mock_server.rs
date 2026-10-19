@@ -178,3 +178,89 @@ async fn ollama_native_discovers_and_streams() {
     assert_eq!(b.usage.map(|u| u.prompt_tokens), Some(11));
     assert!(matches!(b.into_message(), Message::Assistant { content, .. } if content == "Hello"));
 }
+
+#[cfg(feature = "proto-anthropic")]
+#[tokio::test]
+async fn anthropic_messages_streams_with_its_own_auth() {
+    let server = MockServer::start().await;
+    let events = [
+        r#"{"type":"message_start","message":{"usage":{"input_tokens":5,"cache_read_input_tokens":20}}}"#,
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#,
+        r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}"#,
+        r#"{"type":"message_stop"}"#,
+    ];
+    let body: String = events
+        .iter()
+        .map(|e| format!("event: x\ndata: {e}\n\n"))
+        .collect();
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(header("x-api-key", "sekrit"))
+        .and(header("anthropic-version", "2023-06-01"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"data":[{"id":"glm-5","type":"model"}]}"#),
+        )
+        .mount(&server)
+        .await;
+    // The base URL without `/v1`, the way Anthropic-compatible hosts document it.
+    let file: ProviderFile = toml::from_str(&format!(
+        "base_url = \"{}\"\napi = \"anthropic-messages\"\napi_key = {{ env = \"TEST_KEY\" }}\n",
+        server.uri()
+    ))
+    .expect("provider toml");
+    let env = |k: &str| (k == "TEST_KEY").then(|| OsString::from("sekrit"));
+    let p = Provider::new("anthropic", file, &NetworkSettings::default(), &env).expect("provider");
+    let models = p.list_models().await.expect("models");
+    assert_eq!(models[0].id, "glm-5");
+    let mut rx = p.stream(request(), ReasoningFormat::Auto, CancellationToken::new());
+    let mut b = ResponseBuilder::default();
+    while let Some(ev) = rx.recv().await {
+        b.push(&ev.expect("event"));
+    }
+    assert_eq!(
+        b.usage.map(|u| (u.prompt_tokens, u.cached_prompt_tokens)),
+        Some((25, Some(20)))
+    );
+    assert!(matches!(b.into_message(), Message::Assistant { content, .. } if content == "Hello"));
+}
+
+#[cfg(feature = "proto-openai-responses")]
+#[tokio::test]
+async fn openai_responses_streams() {
+    let server = MockServer::start().await;
+    let events = [
+        r#"{"type":"response.output_text.delta","output_index":0,"delta":"Hel"}"#,
+        r#"{"type":"response.output_text.delta","output_index":0,"delta":"lo"}"#,
+        r#"{"type":"response.completed","response":{"usage":{"input_tokens":9,"output_tokens":2}}}"#,
+    ];
+    let body: String = events.iter().map(|e| format!("data: {e}\n\n")).collect();
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(header("authorization", "Bearer sekrit"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body),
+        )
+        .mount(&server)
+        .await;
+    let p = provider(&server, "api = \"openai-responses\"\n");
+    let mut rx = p.stream(request(), ReasoningFormat::Auto, CancellationToken::new());
+    let mut b = ResponseBuilder::default();
+    while let Some(ev) = rx.recv().await {
+        b.push(&ev.expect("event"));
+    }
+    assert_eq!(b.usage.map(|u| u.prompt_tokens), Some(9));
+    assert!(matches!(b.into_message(), Message::Assistant { content, .. } if content == "Hello"));
+}

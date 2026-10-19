@@ -6,6 +6,7 @@
 
 #![allow(clippy::print_stdout)]
 
+pub mod eval;
 pub mod output;
 
 use std::io::Write;

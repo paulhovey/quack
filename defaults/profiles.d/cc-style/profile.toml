@@ -1,0 +1,58 @@
+#:schema ../../schemas/profile.json
+description = "Tools named and shaped like Claude Code's (Read, Edit, Bash, ...), for models trained with such harnesses (GLM, MiniMax, DeepSeek, MiMo)"
+source = "Original prompt text (quack project, Apache-2.0). Only the tool names and parameter shapes follow Claude Code conventions; no Claude Code text is used"
+
+# Not chosen automatically until the eval shows it beats `generic` for these families
+# (docs/plan/03-model-profiles.md#evaluating-profiles). Proposed:
+#   model = ["*glm-5*", "*glm-4.6*", "*minimax-m*", "*deepseek-v4*", "*mimo*"]
+#   priority = 40
+# Use it now with `profile = "cc-style"` on a model.
+[match]
+model = []
+
+[defaults]
+edit_format = "str_replace"
+
+[[tools]]
+name = "Read"
+maps_to = "read"
+description = "Reads a file. `file_path` may be absolute or relative to the workspace. By default the whole file is read; for long files pass `offset` (1-based line to start at) and `limit`. Lines come back numbered."
+[tools.params]
+file_path = { to = "path" }
+
+[[tools]]
+name = "Write"
+maps_to = "write"
+[tools.params]
+file_path = { to = "path" }
+
+[[tools]]
+name = "Edit"
+maps_to = "edit"
+description = "Performs an exact string replacement in a file. `old_string` must match the file exactly, including indentation, and be unique unless `replace_all` is true. Read the file before editing it."
+[tools.params]
+file_path = { to = "path" }
+
+[[tools]]
+name = "Bash"
+maps_to = "shell"
+
+[[tools]]
+name = "Glob"
+maps_to = "glob"
+
+[[tools]]
+name = "Grep"
+maps_to = "grep"
+[tools.params]
+"-i" = { to = "case_insensitive" }
+
+[[tools]]
+name = "LS"
+maps_to = "list_dir"
+
+[[tools]]
+name = "TodoWrite"
+maps_to = "todo"
+[tools.params]
+todos = { to = "items" }

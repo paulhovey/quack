@@ -128,6 +128,14 @@ Compaction prompts are profile-overridable templates (`compact.md` in a profile 
 - **Log:** `prune` records hold the replaced contents and `compaction` records hold the cut and the summary message. Replay applies them in order, and repairs dangling tool calls at each `resume` record, as the live session did. Resume therefore rebuilds the same history.
 - **Tested** with mock servers (threshold, overflow retry, `/compact`, resume after compaction) and locally with Qwen3.5-0.8B on llama.cpp with a 6k window: three turns, two compactions in one turn, and the facts from the first turn recalled after them.
 
+### As implemented (2026-10-18): index and pruning rules
+
+- **Outlines** come from tree-sitter with each grammar crate's own `tags.scm` (plus `impl` blocks for Rust), for Rust, Python, JavaScript, TypeScript/TSX and Go, behind `lang-common`. Definitions are nested by their line ranges. The queries are compiled in for now; `defaults/grammars/` overrides are still to do, and so are caching and incremental reparsing (files are parsed on demand, which is fast at these sizes).
+- **`index`**: a file's outline in the format above, or for a directory one line per source file with its top-level definitions, capped at about 3,000 tokens.
+- **`read`**: without a range, a source file over `[tools] read_outline_tokens` (2,000; 0 turns it off) returns its outline and a note to read a range or a `symbol`. `symbol = "Type::method"` (or `Type.method`) reads that definition's lines.
+- **Pruning rules** now: 1 superseded reads, 2 stale reads (the file changed on disk since the session last read or wrote it), 4 old whole-file reads replaced by the outline of the text that was read, 5 failed calls (an error, a non-zero exit, a timeout) followed by a successful call with the same tool and target (the same command, or the same file), and 3 large outputs. Rule 5 also takes failures down to 200 characters. A read that returned an outline, or one symbol, does not supersede earlier reads. Rule 6 (reasoning) is left out: reasoning goes back to the server only where it is required, so dropping it saves no request tokens and would break the cache there.
+- Tested by unit tests in `quack-context` and `core/tests/pruning.rs` (an old read becomes its outline).
+
 ## Code-execution sandbox (deferred)
 
 maki's `code_execution` tool lets the model chain tools inside an interpreter so intermediate data never enters context. This is high value but large in scope (a sandboxed interpreter embedded in the binary). It is deferred to post-M5, with candidates Lua (`mlua`), Rhai, or a Wasm Python. It is tracked here because it changes the context math significantly.

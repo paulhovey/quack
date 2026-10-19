@@ -115,6 +115,22 @@ These are the main source of failures with open models, so they get the most har
 - **Hashline as implemented (2026-10-18)**: `[tools] edit_format = "hashline"` turns it on for the session; `read` then shows `<line>:<tag>|<text>` (3 base-32 characters of FNV-1a over the line without trailing whitespace) and `edit_hashline` replaces `edit`. Edits are `replace` (start..end), `insert_after` (a tag, or 0 for the top) and `delete`, several per call against one read, applied bottom-up and refused if they overlap. A tag is matched at its line number, then at the nearest line with that hash within 50 lines; otherwise the edit is refused with a fresh tagged view. A bare hash works when it is unique. The result shows the changed area with fresh tags. Not chosen by default for any profile: the large gains reported elsewhere could not be traced to a primary benchmark.
 - **Format selection**: `config [tools].edit_format` overrides the model TOML, which overrides the profile default. `auto` uses the profile default.
 
+### As implemented (2026-10-18)
+
+`[tools] edit_format` (or the profile's `[defaults] edit_format` when it is `auto`) picks the one edit tool the model gets:
+
+| Format | Tool | Notes |
+|---|---|---|
+| `str_replace` (default) | `edit` | Exact, then fuzzy matching. `expected_replacements > 1` counts as `replace_all` |
+| `hashline` | `edit_hashline` | `read` tags lines |
+| `apply_patch` | `apply_patch` | Codex format: Add/Delete/Update/Move, `@@` anchors, `*** End of File`. Hunks are found exactly, then ignoring trailing whitespace, then indentation |
+| `search_replace_blocks` | `edit_blocks` | SEARCH/REPLACE blocks under each file's path; each SEARCH is matched like `old_string`; an empty SEARCH creates a file |
+| `whole_file` | none | `write` alone, described as rewriting the whole file |
+
+`write`'s description names whichever edit tool is offered. A call that changes several files is planned completely before anything is written, so a hunk that does not match leaves every file as it was. It is one permission subject (`Subject::Edits`): the strictest answer for any of its files, and "allow for the session" covers each file. Each file gets its own undo point under the call, so `/undo` restores all of them. Line endings and BOMs are kept. `core/tests/edit_formats.rs` covers the three new formats through the engine.
+
+`index` outlines a file or a directory (see [05](05-context-management.md#as-implemented-2026-10-18-index-and-pruning-rules)).
+
 ## Shell tool
 
 ### Command execution

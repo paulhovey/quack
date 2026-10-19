@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use futures::future::BoxFuture;
+use quack_config::settings::EditFormat;
 use quack_protocol::ApprovalRequest;
 use quack_shell::ShellKind;
 use serde_json::Value;
@@ -24,6 +25,8 @@ pub enum ToolKind {
 pub enum Subject {
     Read(PathBuf),
     Edit(PathBuf),
+    /// One call that changes several files (`apply_patch`, `edit_blocks`).
+    Edits(Vec<PathBuf>),
     Shell(String),
     /// A command run outside the OS sandbox while the sandbox is on (or when it is on but
     /// unavailable on this machine). Always asks, whatever the mode.
@@ -50,6 +53,17 @@ pub enum Subject {
 }
 
 /// Result of a tool call: what the model sees and what the UI shows.
+impl Subject {
+    /// The files a call changes.
+    pub fn edited(&self) -> &[PathBuf] {
+        match self {
+            Self::Edit(p) => std::slice::from_ref(p),
+            Self::Edits(ps) => ps,
+            _ => &[],
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolOutput {
     pub ok: bool,
@@ -138,8 +152,18 @@ pub struct ToolCtx {
     pub sandbox: SandboxState,
     /// The model's plan (`todo`), shown to it with every step.
     pub plan: Arc<crate::todo::Plan>,
+    /// Which edit tool the model gets (never `auto`: resolved at session start).
+    pub edit_format: EditFormat,
+    /// `read` without a range returns the outline of files longer than this many bytes,
+    /// when their language has one. 0: always the content.
+    pub outline_above: usize,
+}
+
+impl ToolCtx {
     /// Hash-anchored edits: `read` tags lines and `edit_hashline` replaces `edit`.
-    pub hashline: bool,
+    pub fn hashline(&self) -> bool {
+        self.edit_format == EditFormat::Hashline
+    }
 }
 
 /// Whether shell commands run in the OS sandbox.
@@ -190,9 +214,12 @@ impl Registry {
             Arc::new(crate::search::ListDir),
             Arc::new(crate::search::Glob),
             Arc::new(crate::search::Grep),
+            Arc::new(crate::index::Index),
             Arc::new(crate::write::Write),
             Arc::new(crate::edit::StrReplace),
             Arc::new(crate::hashline::Hashline),
+            Arc::new(crate::patch::ApplyPatch),
+            Arc::new(crate::blocks::EditBlocks),
             Arc::new(crate::shell::Shell),
             Arc::new(crate::memory::Memory),
             Arc::new(crate::skill::LoadSkill),

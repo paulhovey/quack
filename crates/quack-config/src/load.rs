@@ -94,7 +94,7 @@ pub enum ConfigError {
 }
 
 /// The result of loading settings. Item directories are loaded separately and async.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Loaded {
     pub dirs: Dirs,
     /// The directories as discovered, before the system layer moved the defaults bundle;

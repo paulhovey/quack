@@ -74,3 +74,10 @@ $RECYCLE.BIN/
 
 # Model downloads for the local-server CI jobs (scripts/local-server-ci.sh)
 .ci-models/
+
+# --- Skills ---
+.skills
+.agents/skills
+.claude/skills
+skills-lock.json
+evals/

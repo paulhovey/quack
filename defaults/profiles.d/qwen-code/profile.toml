@@ -1,0 +1,73 @@
+#:schema ../../schemas/profile.json
+description = "Qwen Code-shaped tools (read_file, edit, run_shell_command, ...) for Qwen coding models"
+source = "Original prompt text (quack project, Apache-2.0). Tool names and parameters follow QwenLM/qwen-code (Apache-2.0)"
+
+# Not chosen automatically until the eval shows it beats `generic` for Qwen models
+# (docs/plan/03-model-profiles.md#evaluating-profiles). Proposed:
+#   model = ["*qwen3-coder*", "*qwen3.5*", "*qwen3.6*", "*qwen3.8*"]
+#   priority = 50
+# Use it now with `profile = "qwen-code"` on a model.
+[match]
+model = []
+
+[defaults]
+edit_format = "str_replace"
+# Qwen's recommended sampling for its coder models.
+sampling = { temperature = 0.7, top_p = 0.8, top_k = 20, repetition_penalty = 1.05 }
+
+[[tools]]
+name = "read_file"
+maps_to = "read"
+description = "Reads a file from the workspace. For large files, read a part with `offset` (0-based line number) and `limit` (number of lines)."
+[tools.params]
+absolute_path = { to = "path", transform = "abs_to_workspace" }
+offset = { to = "offset", transform = "zero_to_one_based" }
+limit = { to = "limit" }
+
+[[tools]]
+name = "write_file"
+maps_to = "write"
+[tools.params]
+file_path = { to = "path" }
+content = { to = "content" }
+
+[[tools]]
+name = "edit"
+maps_to = "edit"
+description = "Replaces text in a file. `old_string` must match the file exactly, including whitespace and indentation, with enough surrounding lines (about 3) to be unique. Set `replace_all` to replace every occurrence. Read the file first."
+[tools.params]
+file_path = { to = "path" }
+old_string = { to = "old_string" }
+new_string = { to = "new_string" }
+
+[[tools]]
+name = "run_shell_command"
+maps_to = "shell"
+[tools.params]
+command = { to = "command" }
+
+[[tools]]
+name = "glob"
+maps_to = "glob"
+
+[[tools]]
+name = "grep_search"
+maps_to = "grep"
+[tools.params]
+pattern = { to = "pattern" }
+path = { to = "path" }
+include = { to = "glob" }
+
+[[tools]]
+name = "list_directory"
+maps_to = "list_dir"
+
+[[tools]]
+name = "todo_write"
+maps_to = "todo"
+[tools.params]
+todos = { to = "items" }
+
+[[tools]]
+name = "save_memory"
+maps_to = "memory"

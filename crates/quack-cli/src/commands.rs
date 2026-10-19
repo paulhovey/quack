@@ -284,3 +284,100 @@ pub(crate) fn read_secret(prompt: &str) -> std::io::Result<String> {
     eprintln!();
     result.map(|()| s.trim().to_owned())
 }
+
+/// `quack eval`: run the suite, print a table, write the JSON results.
+pub(crate) async fn eval(
+    loaded: &Loaded,
+    load: quack_config::LoadOptions,
+    args: crate::cli::EvalArgs,
+) -> i32 {
+    use quack_exec::eval;
+    let suite = loaded.dirs.cwd.join(&args.suite);
+    let tasks = match eval::load_tasks(&suite, &args.tasks) {
+        Ok(t) if t.is_empty() => {
+            eprintln!("error: no tasks in {}", suite.display());
+            return exit::CONFIG_ERROR;
+        }
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return exit::CONFIG_ERROR;
+        }
+    };
+    let opts = eval::EvalOptions {
+        load,
+        repeat: args.repeat.max(1),
+        keep: args.keep,
+        scratch: loaded
+            .dirs
+            .user_cache
+            .join("eval")
+            .join(std::process::id().to_string()),
+        env: Default::default(),
+    };
+    let mut results = Vec::new();
+    for task in &tasks {
+        for run in 0..opts.repeat {
+            eprint!("{} ({}/{})… ", task.id, run + 1, opts.repeat);
+            let r = eval::run_task(task, &opts, run).await;
+            eprintln!(
+                "{}",
+                match (&r.skipped, &r.error, r.passed) {
+                    (Some(why), _, _) => format!("skipped ({why})"),
+                    (None, Some(e), _) => format!("error: {e}"),
+                    (None, None, true) => format!("pass ({} steps, {:.0}s)", r.steps, r.seconds),
+                    (None, None, false) => format!("FAIL: {}", r.failed_checks.join("; ")),
+                }
+            );
+            results.push(r);
+        }
+    }
+    if !opts.keep {
+        let _ = std::fs::remove_dir_all(&opts.scratch);
+    }
+    let first = |f: fn(&eval::RunResult) -> &str| {
+        results
+            .iter()
+            .map(f)
+            .find(|s| !s.is_empty())
+            .unwrap_or("unknown")
+            .to_owned()
+    };
+    let report = eval::Report {
+        harness: concat!("quack ", env!("CARGO_PKG_VERSION")).into(),
+        date: eval::today(),
+        model: first(|r| r.model.as_str()),
+        profile: first(|r| r.profile.as_str()),
+        results,
+    };
+    println!("{}", eval::table(&report));
+    let out = args.out.unwrap_or_else(|| {
+        let name =
+            format!("{}-{}.json", report.model, report.profile).replace(['/', '\\', ':'], "_");
+        suite
+            .parent()
+            .unwrap_or(&suite)
+            .join("results")
+            .join(&report.date)
+            .join(name)
+    });
+    let written = out
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| {
+            std::fs::write(
+                &out,
+                serde_json::to_string_pretty(&report).unwrap_or_default() + "\n",
+            )
+        });
+    match written {
+        Ok(()) => {
+            println!("results: {}", out.display());
+            exit::OK
+        }
+        Err(e) => {
+            eprintln!("error: writing {}: {e}", out.display());
+            exit::AGENT_ERROR
+        }
+    }
+}

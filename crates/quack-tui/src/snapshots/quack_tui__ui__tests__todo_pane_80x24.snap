@@ -1,0 +1,28 @@
+---
+source: crates/quack-tui/src/ui.rs
+expression: s
+---
+" quack 0.1.0 · ~/src/project                                             ⎇ main "
+" ✓ config       2 config files · 1 providers · 3ms                              "
+" – project      no .quack/ in this workspace                                    "
+" ? provider     no model selected · set [model].default or use /models          "
+" ✓ profile      empty (compiled-in)                                             "
+" ⠋ tokenizer    selecting tokenizer                                             "
+" · instructions                                                                 "
+" · skills                                                                       "
+" · compat                                                                       "
+" · memory                                                                       "
+" · mcp                                                                          "
+" ✗ lsp          rust-analyzer: not found on PATH                                "
+"                                                                                "
+"                                                                                "
+"   no model yet · /setup adds a provider                                        "
+"   / commands  shift+tab modes  /plan plan first                                "
+"  plan  ▰▱▱ 1/3  ▶ cache the token table                                        "
+"   ✓ read the parser                                                            "
+"   ▶ cache the token table                                                      "
+"   · run the benchmarks                                                         "
+"╭──────────────────────────────────────────────────────────────────────────────╮"
+"│›                                                                             │"
+"╰──────────────────────────────────────────────────────────────────────────────╯"
+"  ask  no model                                               ⠋ starting  /help "

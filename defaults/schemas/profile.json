@@ -4,6 +4,18 @@
       "additionalProperties": false,
       "description": "Defaults that a provider's model entry can override.",
       "properties": {
+        "edit_format": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EditFormat"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The edit tool this family was trained with; `[tools] edit_format` overrides it."
+        },
         "reasoning_format": {
           "anyOf": [
             {
@@ -27,6 +39,40 @@
         }
       },
       "type": "object"
+    },
+    "EditFormat": {
+      "oneOf": [
+        {
+          "const": "auto",
+          "description": "The profile's choice, else `str_replace`.",
+          "type": "string"
+        },
+        {
+          "const": "str_replace",
+          "description": "`edit`: replace a unique snippet.",
+          "type": "string"
+        },
+        {
+          "const": "hashline",
+          "description": "Hash-anchored edits: `read` tags each line, and edits name lines by tag.",
+          "type": "string"
+        },
+        {
+          "const": "apply_patch",
+          "description": "`apply_patch`: the Codex patch format, several files per call.",
+          "type": "string"
+        },
+        {
+          "const": "whole_file",
+          "description": "No edit tool: files are rewritten whole with `write`.",
+          "type": "string"
+        },
+        {
+          "const": "search_replace_blocks",
+          "description": "`edit_blocks`: SEARCH/REPLACE blocks under each file's path.",
+          "type": "string"
+        }
+      ]
     },
     "Match": {
       "additionalProperties": false,
@@ -52,6 +98,10 @@
     "ParamMapping": {
       "additionalProperties": false,
       "properties": {
+        "default": {
+          "default": null,
+          "description": "Sent when the model leaves the parameter out."
+        },
         "to": {
           "description": "Internal parameter name.",
           "type": "string"
@@ -154,11 +204,17 @@
       "properties": {
         "description": {
           "default": null,
-          "description": "Description shown to the model; default: the internal tool's own.",
+          "description": "Description shown to the model, or a `.md` file in the profile directory holding\nit; default: the internal tool's own.",
           "type": [
             "string",
             "null"
           ]
+        },
+        "fixed": {
+          "additionalProperties": true,
+          "default": {},
+          "description": "Internal parameters always sent with this value and hidden from the model.",
+          "type": "object"
         },
         "maps_to": {
           "default": null,
@@ -190,14 +246,28 @@
       "description": "The closed set of parameter transforms.",
       "oneOf": [
         {
-          "enum": [
-            "zero_to_one_based"
-          ],
+          "const": "abs_to_workspace",
+          "description": "Paths are accepted absolute or relative already; kept for profile compatibility.",
           "type": "string"
         },
         {
-          "const": "abs_to_workspace",
-          "description": "Paths are accepted absolute or relative already; kept for profile compatibility.",
+          "const": "zero_to_one_based",
+          "description": "The model counts lines from 0; internal tools count from 1.",
+          "type": "string"
+        },
+        {
+          "const": "one_to_zero_based",
+          "description": "The model counts from 1 where the internal tool counts from 0.",
+          "type": "string"
+        },
+        {
+          "const": "join_lines",
+          "description": "The model sends an array of lines; the internal tool takes one string.",
+          "type": "string"
+        },
+        {
+          "const": "argv",
+          "description": "The model sends a command as an argument list (`[\"bash\", \"-lc\", \"make\"]`); the\ninternal tool takes one command line.",
           "type": "string"
         }
       ]
@@ -209,6 +279,7 @@
     "defaults": {
       "$ref": "#/$defs/Defaults",
       "default": {
+        "edit_format": null,
         "reasoning_format": null,
         "sampling": {
           "min_p": null,
@@ -225,6 +296,11 @@
     },
     "enabled": {
       "default": true,
+      "type": "boolean"
+    },
+    "exclusive": {
+      "default": false,
+      "description": "Offer only the tools listed in `[[tools]]` (MCP tools are still added).",
       "type": "boolean"
     },
     "id": {
@@ -254,7 +330,7 @@
     },
     "tools": {
       "default": [],
-      "description": "Model-facing tool surface. Empty: all internal tools under their internal names.",
+      "description": "Model-facing tool surface: renames, descriptions and parameter mappings. Internal\ntools not listed keep their internal names.",
       "items": {
         "$ref": "#/$defs/ToolMapping"
       },

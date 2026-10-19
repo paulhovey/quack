@@ -1,0 +1,55 @@
+#:schema ../../schemas/profile.json
+description = "Kimi CLI-shaped tools (ReadFile, StrReplaceFile, Shell, ...) for Kimi coding models"
+source = "Original prompt text (quack project, Apache-2.0). Tool names follow MoonshotAI/kimi-cli (Apache-2.0); parameters are simplified to flat fields"
+
+# Not chosen automatically until the eval shows it beats `generic` for Kimi models
+# (docs/plan/03-model-profiles.md#evaluating-profiles). Proposed:
+#   model = ["*kimi-k3*", "*kimi-k2*"]
+#   priority = 50
+# Use it now with `profile = "kimi-code"` on a model.
+[match]
+model = []
+
+[defaults]
+edit_format = "str_replace"
+# Moonshot's recommended temperature for Kimi K2.
+sampling = { temperature = 0.6 }
+
+[[tools]]
+name = "ReadFile"
+maps_to = "read"
+[tools.params]
+path = { to = "path" }
+line_offset = { to = "offset" }
+n_lines = { to = "limit" }
+
+[[tools]]
+name = "WriteFile"
+maps_to = "write"
+
+[[tools]]
+name = "StrReplaceFile"
+maps_to = "edit"
+[tools.params]
+old = { to = "old_string" }
+new = { to = "new_string" }
+
+[[tools]]
+name = "Shell"
+maps_to = "shell"
+
+[[tools]]
+name = "Glob"
+maps_to = "glob"
+[tools.params]
+directory = { to = "path" }
+
+[[tools]]
+name = "Grep"
+maps_to = "grep"
+
+[[tools]]
+name = "SetTodoList"
+maps_to = "todo"
+[tools.params]
+todos = { to = "items" }

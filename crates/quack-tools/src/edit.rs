@@ -4,11 +4,12 @@
 //! re-indented) → blank lines ignored. A non-exact match is reported to the model.
 
 use futures::future::BoxFuture;
+use quack_config::settings::EditFormat;
 use quack_protocol::ApprovalRequest;
 use serde_json::{Value, json};
 
 use crate::paths;
-use crate::registry::{Subject, Tool, ToolCtx, ToolKind, ToolOutput, arg_str, opt_bool};
+use crate::registry::{Subject, Tool, ToolCtx, ToolKind, ToolOutput, arg_str, opt_bool, opt_u64};
 use crate::text::{TextFile, diff_stats, io_msg, unified_diff};
 
 const PATH: &[&str] = &["path", "file_path", "filename", "file"];
@@ -32,7 +33,9 @@ fn plan(args: &Value, ctx: &ToolCtx) -> Result<Plan, String> {
     let shown = paths::display(&ctx.root, &path);
     let old = arg_str(args, OLD)?.replace("\r\n", "\n");
     let new = arg_str(args, NEW)?.replace("\r\n", "\n");
-    let all = opt_bool(args, &["replace_all", "all"]);
+    // Some harnesses count the replacements instead (`expected_replacements: 3`).
+    let all = opt_bool(args, &["replace_all", "all"])
+        || opt_u64(args, &["expected_replacements", "count"]).is_some_and(|n| n > 1);
 
     if !path.exists() {
         if old.is_empty() {
@@ -269,7 +272,7 @@ impl Tool for StrReplace {
     }
 
     fn available(&self, ctx: &ToolCtx) -> bool {
-        !ctx.hashline
+        matches!(ctx.edit_format, EditFormat::StrReplace | EditFormat::Auto)
     }
 
     fn description(&self, _ctx: &ToolCtx) -> String {

@@ -89,7 +89,7 @@ All configuration UIs share one modal widget, so they look and behave the same:
 | `/models` | `/model` | Models modal (above). Switch for session, set default (`[model].default`), set `small` model, refresh discovery, set unknown context window |
 | `/providers` | | Provider list: state, protocol, base URL, auth status. Actions: enable/disable, test connection, set API key (keyring/env/cmd wizard), edit file, **add provider** (pick a local engine or hosted service from setup's list, or start blank; writes a new `providers.d/<id>.toml`) |
 | `/setup` | | Find model servers on this machine (loopback ports only) and add one: one row per server and model, Enter writes `providers.d/<id>.toml` to the user layer and switches to the model. Hosted services and other addresses go through `quack setup` ([14](14-packaging-and-distribution.md#first-run-experience)) |
-| `/profiles` | `/profile` | Profile list with match rules. Actions: switch for session, pin for model (writes `profile =` into the model entry), preview the rendered prompt and its token cost |
+| `/profiles` | `/profile` | Each profile rendered for the current model: system prompt, tool names, edit format, and which one `auto` picks. Enter switches the session (`/profiles <id>`, `/profiles auto`), Ctrl-S saves `[model] profile`. Built 2026-10-18; pinning per model and the token cost are still to do |
 | `/resume` | `/sessions` | Session browser for this project (Tab switches to all projects): title, age, turns, model, preview pane with the transcript head. Actions: resume, fork, rename, export, delete (with confirmation) |
 | `/new` | `/clear` | Start a fresh session (the current one stays saved) |
 | `/rewind` | (Esc Esc) | Pick an earlier user message. Choose conversation / files / both |
@@ -106,12 +106,12 @@ All configuration UIs share one modal widget, so they look and behave the same:
 | `/mcp` | | MCP servers: state, tool count, token cost, deferred flag, logs. Actions: restart, enable/disable (session or persistent), view tools, add server (template or blank) |
 | `/lsp` | | LSP servers: state, indexing progress, diagnostics count; restart, enable/disable |
 | `/skills` | | Skill list by layer; view SKILL.md; enable/disable; invoke |
-| `/commands` | | Custom commands by layer; view; create a new one in `$EDITOR` |
+| `/commands` | | Custom commands from each layer's `commands/` folder: name, arguments, description, file (built 2026-10-18). Typing `/<name> args` runs one |
 | `/memory` | | Memory browser: global/project tabs, view, edit, delete, open folder |
 | `/hooks` | | Hooks list (read-only for system layer), last run results |
-| `/instructions` | | Loaded AGENTS.md chain, with sizes; open in editor; `/init` to generate one |
+| `/instructions` | | The AGENTS.md files in the system prompt, then those attached to tool results so far, each with its size and text (built 2026-10-18). Opening in an editor is still to do; `/init` generates one |
 | `/init` | | Generate AGENTS.md for this repo |
-| `/todo` | | Toggle the todo side pane |
+| `/todo` | | Expand the plan line above the input into the whole checklist, and back (built 2026-10-18; above the input rather than a side pane, so it works at any width) |
 | `/tasks` | | Sub-agent views (M5) |
 | `/theme` | | Theme picker with live preview |
 | `/keys` | | Keybinding viewer/editor |

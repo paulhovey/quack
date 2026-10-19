@@ -158,6 +158,22 @@ pub(crate) fn memory_store(config: &Loaded) -> MemoryStore {
 
 /// Skill folders, lowest precedence first: system, user, `~/.agents/skills`, the project
 /// (`.quack/skills` when trusted, `.agents/skills`), then `[skills] compat_paths`.
+/// Custom slash commands from each layer's `commands/` folder (the project's only when
+/// trusted).
+pub(crate) fn commands(
+    config: &Loaded,
+) -> (
+    Vec<quack_instructions::commands::CustomCommand>,
+    Vec<String>,
+) {
+    let roots: Vec<(String, std::path::PathBuf)> = config
+        .item_layers()
+        .into_iter()
+        .map(|(kind, dir)| (kind.to_string(), dir.join("commands")))
+        .collect();
+    quack_instructions::commands::discover(&roots)
+}
+
 pub(crate) fn skills(config: &Loaded) -> skills::Found {
     let d = &config.dirs;
     let mut roots: Vec<(String, std::path::PathBuf)> = vec![

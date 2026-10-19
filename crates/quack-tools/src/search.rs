@@ -19,7 +19,7 @@ const MAX_GREP_LINE: usize = 300;
 const MAX_GREP_FILE: u64 = 5 * 1024 * 1024;
 const PATH: &[&str] = &["path", "dir", "directory"];
 
-fn walker(root: &Path, max_depth: Option<usize>) -> ignore::Walk {
+pub(crate) fn walker(root: &Path, max_depth: Option<usize>) -> ignore::Walk {
     ignore::WalkBuilder::new(root)
         .hidden(false)
         .max_depth(max_depth)
@@ -33,7 +33,9 @@ fn base(args: &Value, ctx: &ToolCtx) -> PathBuf {
 }
 
 /// Run blocking filesystem work off the async runtime.
-async fn blocking(f: impl FnOnce() -> Result<ToolOutput, String> + Send + 'static) -> ToolOutput {
+pub(crate) async fn blocking(
+    f: impl FnOnce() -> Result<ToolOutput, String> + Send + 'static,
+) -> ToolOutput {
     tokio::task::spawn_blocking(f)
         .await
         .unwrap_or_else(|e| Err(format!("tool panicked: {e}")))

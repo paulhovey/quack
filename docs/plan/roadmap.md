@@ -130,9 +130,21 @@ Left out on purpose: a hosted marketplace, telemetry-backed features and cloud e
 - Mistral Large 4 through Mistral's API: a Mistral dialect in `openai-chat` (strict fields, `none`/`high` effort, reasoning sent back as `thinking` parts, 9-character tool-call ids, `prompt_cache_key`); not yet run live ([02](02-providers.md#mistral-large-4-2026-10-18))
 - Default providers are data again: 5 local servers and 13 hosted services in `defaults/providers.d`, each unused until it runs or has a key, and hosted ones never auto-selected. The binary names no server, so deleting the files removes them completely. `[policy.providers] hosts` and `[policy.mcp] hosts` limit what can be contacted at all, and `doctor` lists the reachable hosts ([02](02-providers.md#servers-not-engines-2026-10-18))
 
+Round 2 (2026-10-18), tested against mock servers only; nothing here has been run against a live model yet:
+- **Prefix stability** is tested (`core/tests/prefix.rs`): for every shipped profile, and with hashline edits, a session with writes, reads, a plan, memory, plan mode, edits, commands and a compaction. Each request extends the one before it, and the system prompt and tools stay the same through compaction.
+- **Edit formats**: `apply_patch` (Codex format, several files per call), `search_replace_blocks` (`edit_blocks`), `whole_file` (only `write`), next to `str_replace` and `hashline`. `[tools] edit_format = "auto"` takes the profile's `edit_format`. Multi-file calls are checked whole before writing, ask once for all their files, and get an undo point per file ([04](04-agent-loop-and-tools.md#as-implemented-2026-10-18))
+- **Profiles**: `qwen-code`, `cc-style`, `kimi-code` and `codex`, shipped with empty `[match]` lists (opt-in) until the eval shows each beats `generic`. Profiles gained `exclusive`, `fixed` parameters, parameter `default`s, descriptions from `.md` files, and the `one_to_zero_based`, `join_lines` and `argv` transforms. Unlisted internal tools are now offered under their own names. `--profile` and `[model] profile` choose one for the session ([03](03-model-profiles.md#as-implemented-2026-10-18))
+- **`quack eval` v1** with 21 tasks in `evals/tasks/`, each with a reference solution that a test applies ([13](13-testing-and-evals.md#as-implemented-2026-10-18)). `docs/compat.md` waits for real runs
+- **`index` tool** and outlined reads (tree-sitter, `lang-common`: Rust, Python, JavaScript, TypeScript, Go; 8 new crates, all MIT/Apache-2.0) ([05](05-context-management.md#as-implemented-2026-10-18-index-and-pruning-rules))
+- **Pruning rules 2, 4 and 5**: stale reads, old whole-file reads kept as outlines, failed attempts that a later call fixed. Rule 6 (reasoning) is left out: reasoning is only sent back where the server needs it, so dropping it saves nothing and would break the cache
+- **Adapters**: `anthropic-messages` (with cache breakpoints) and `openai-responses` (stateless) ([02](02-providers.md#anthropic-messages-and-openai-responses-2026-10-18))
+- **Text tool-call parsers**: `glm`, `deepseek` (V3 and V3.1 forms), `kimi`, and `json-block` (only when chosen), written from the published chat templates, not yet from recorded fixtures
+- **Slash commands**: `/profiles` (each profile rendered for the current model; switch for the session or save as default), `/instructions` (the AGENTS.md files the model has, with sizes), custom commands from `commands/` folders with `/commands`, and `/todo` (the whole plan above the input)
+- Not done: the `hf-file`, `tiktoken` and `server` tokenizers. The estimate corrected by the server's reported usage already covers budgeting; the first two would add heavy dependencies
+
 **Exit criteria**
 - [ ] A 50-step task completes inside a 32k window with a current ~30B Qwen coding model on llama.cpp
-- [ ] Prefix-stability invariant passes for all default profiles
+- [x] Prefix-stability invariant passes for all default profiles (`core/tests/prefix.rs`)
 - [ ] Eval shows profile matching ≥ `generic` for each targeted family, otherwise the profile isn't shipped
 - [ ] Additional hosted services (Together, DeepInfra) work through provider files alone, with no code changes
 

@@ -34,6 +34,7 @@ impl Profile {
                 prompt: Default::default(),
                 defaults: Default::default(),
                 tools: Vec::new(),
+                exclusive: false,
             },
             dir: None,
             system_template: "{{ instructions }}".into(),
@@ -49,8 +50,21 @@ pub fn load_profiles(loaded: &Loaded) -> (Vec<Profile>, Vec<String>) {
     let mut warnings = Vec::new();
     for item in load_dir_items::<ProfileFile>(&loaded.item_layers(), "profiles.d", "profile.toml") {
         match item.state {
-            ItemState::Loaded(file) => {
+            ItemState::Loaded(mut file) => {
                 let dir = item.path.parent().map(PathBuf::from).unwrap_or_default();
+                // A description naming a `.md` file is read from the profile directory.
+                for t in &mut file.tools {
+                    let Some(d) = t.description.as_deref().filter(|d| d.ends_with(".md")) else {
+                        continue;
+                    };
+                    match std::fs::read_to_string(dir.join(d)) {
+                        Ok(text) => t.description = Some(text.trim().to_owned()),
+                        Err(e) => warnings.push(format!(
+                            "profile `{}`: cannot read {d} for tool `{}`: {e}",
+                            item.id, t.name
+                        )),
+                    }
+                }
                 let prompt = dir.join(&file.prompt.system);
                 let system_template = match std::fs::read_to_string(&prompt) {
                     Ok(t) => t.trim_start_matches('\u{feff}').to_owned(),

@@ -11,9 +11,17 @@ publish.workspace = true
 
 [dependencies]
 quack-protocol.workspace = true
+quack-config.workspace = true
 quack-core.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+wiremock.workspace = true
 
 [lints]
 workspace = true

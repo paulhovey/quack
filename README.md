@@ -55,10 +55,15 @@ Everything below works today. Planned work is listed separately at the end.
   `ui.show_reasoning` to `expanded` or `hidden` to change how it starts.
 - Thinking models keep their reasoning across tool calls (sent back as the server
   expects), which DeepSeek requires and MiniMax, Kimi and GLM rely on.
-- Messy tool calls are repaired: Hermes and Qwen3-XML calls printed as text become real calls
-  (and the raw markup never shows), loose arguments are parsed, duplicate call ids are fixed.
+- Messy tool calls are repaired: calls printed as text in the Hermes, Qwen3-XML, GLM,
+  DeepSeek or Kimi formats become real calls (and the raw markup never shows), loose
+  arguments are parsed, duplicate call ids are fixed. Fenced JSON calls are taken too when
+  a model's `tool_calling.text_format = "json-block"`.
 - Loop guards: repetition is caught, and an empty reply gets one nudge.
 - A native Ollama adapter that sets the context window per request.
+- Besides OpenAI-compatible chat: the Anthropic Messages API (`api = "anthropic-messages"`,
+  which several open-model hosts also serve) and the OpenAI Responses API
+  (`api = "openai-responses"`).
 - Mistral's API differences are handled.
 - `/models` lists every model of every provider; switch mid-conversation without losing
   history or approvals. `/providers` shows which are usable and why the others are not.
@@ -66,20 +71,44 @@ Everything below works today. Planned work is listed separately at the end.
   folder), falling back to `model.default` when it is unavailable. A project's
   `model.default`, `QUACK_MODEL` and `-m` still win; `model.remember_last = false` turns
   it off.
-- Model profiles adapt prompts and tools per model family, using Jinja-style templates.
+- Model profiles adapt prompts and tools per model family, using Jinja-style templates:
+  tool names, parameter names, descriptions, the edit format and sampling. Besides
+  `generic`, the bundle has `qwen-code`, `cc-style` (GLM, MiniMax, DeepSeek, MiMo),
+  `kimi-code` and `codex` (gpt-oss). They are used only when chosen (`profile = "qwen-code"`
+  on a model, `--profile`, `[model] profile`, or `/profiles`) until the eval shows they beat
+  `generic`. `/profiles` previews each profile's rendered prompt and tool names for the
+  current model, switches the session to one (Enter), or saves it as the default (Ctrl-S).
+- `quack eval` runs a task suite (`evals/tasks`, 21 small tasks: finding things, single and
+  multi-file edits, fixing failing tests, shell, long files) with a model and profile, and
+  reports pass rate, steps, tool errors, unparsable calls, failed edits, tokens and time.
 - Speed in the status bar: tokens per second and time to first token.
 
 ### Tools
 
-- `read`, `write`, `glob`, `grep`, `list_dir`, `shell` and `lsp`.
+- `read`, `write`, `glob`, `grep`, `list_dir`, `shell`, `lsp` and `index`.
+- `index` outlines a file (functions, types, methods with their line ranges, nested) or a
+  whole folder, for Rust, Python, JavaScript, TypeScript and Go (tree-sitter). `read` of a
+  large source file without a range returns that outline instead of the whole file, and
+  `read` with `symbol = "Type::method"` reads one definition. `[tools] read_outline_tokens`
+  sets the size (2,000 tokens; 0 turns it off).
 - A `todo` plan: the model keeps a checklist for multi-step work, and the current plan is
-  shown to it again at every step, so it stays on track through long tasks.
+  shown to it again at every step, so it stays on track through long tasks. A line above
+  the input shows progress and the step in hand; `/todo` expands it into the whole list.
 - A forgiving `edit`: exact match first, then ignoring trailing spaces, indentation and blank
   lines. CRLF line endings and BOMs are kept, and a file changed since the agent read it is
   not overwritten.
-- Hash-anchored edits (`[tools] edit_format = "hashline"`): `read` tags each line with a
-  short content hash, and edits name lines by tag instead of retyping old text. Tags follow
-  lines that moved, and a stale tag is refused with a fresh view of that area.
+- Edit formats, set by `[tools] edit_format` or by the model's profile:
+  - `str_replace` (the default): the `edit` tool above.
+  - `hashline`: `read` tags each line with a short content hash, and edits name lines by
+    tag instead of retyping old text. Tags follow lines that moved, and a stale tag is
+    refused with a fresh view of that area.
+  - `apply_patch`: the Codex patch format, adding, deleting, moving and changing several
+    files in one call.
+  - `search_replace_blocks`: SEARCH/REPLACE blocks under each file's path (`edit_blocks`).
+  - `whole_file`: no edit tool; files are rewritten with `write`.
+
+  Multi-file changes are checked whole before anything is written, and `/undo` puts back
+  every file a call changed.
 - The shell runs bash, zsh or PowerShell. Timeouts kill the whole process tree, and long
   output is trimmed to its start and end.
 
@@ -133,8 +162,10 @@ Everything below works today. Planned work is listed separately at the end.
 
 ### Context
 
-- Built to stay useful in small windows: superseded reads and large old tool outputs are
-  pruned.
+- Built to stay useful in small windows. Before compacting, old tool results are pruned:
+  reads superseded by a later read or edit, reads of files changed on disk since, old
+  whole-file reads (only their outline is kept), failed attempts that a later call fixed,
+  and large old outputs (cut to their start and end).
 - Automatic compaction at a threshold or when the server reports the window is full, and
   `/compact [focus]` on demand. If the model cannot summarize, a plain list is kept.
 - `/context` shows where the tokens go as one band, each part in its own fill, with the
@@ -161,6 +192,7 @@ Everything below works today. Planned work is listed separately at the end.
 
 - AGENTS.md from the system and user folders, the repo chain down to the current folder,
   nested folders as the agent reaches them, and `@` imports.
+- `/instructions` shows which of these files the model has, how big each is, and its text.
 - Other agents' files are read where there is no AGENTS.md: CLAUDE.md, GEMINI.md,
   `.cursorrules`, `.windsurfrules`, `.github/copilot-instructions.md`, CONVENTIONS.md, and
   the global `~/.claude/CLAUDE.md` and `~/.gemini/GEMINI.md`. The list is a data file you
@@ -168,6 +200,11 @@ Everything below works today. Planned work is listed separately at the end.
 - `/init` writes AGENTS.md: it merges those files into it when there are any (and suggests
   pointing them at AGENTS.md), updates an existing one, or writes one from the repo.
 - SKILL.md skills, loaded only when needed. `/skills` lists them and `/<skill-name>` runs one.
+- Custom slash commands: a markdown prompt in `commands/` (in your config folder, or
+  `.quack/commands` in a trusted project) becomes a command: `commands/review.md` is
+  `/review`, `commands/git/pr.md` is `/git:pr`. `{{ args }}` (or `$ARGUMENTS`) is replaced
+  with what you type after the name, and front matter can set a `description` and `args`
+  hint. They appear in the `/` popup; `/commands` lists them.
 - Memory: markdown notes for each project and globally, with optional approval before a note
   is saved. `/memory` shows them.
 
@@ -282,6 +319,7 @@ QUACK_DEFAULTS_DIR=defaults cargo run       # use the defaults bundle from this 
 | `crates/` | 17 crates; see [docs/plan/00-architecture.md](docs/plan/00-architecture.md) |
 | `defaults/` | The defaults bundle (providers, profiles, schemas, …), installed beside the binary except with `--plucked` |
 | `scripts/` | Install scripts, release packaging, CI helpers |
+| `evals/` | The `quack eval` task suite and its results |
 | `docs/plan/` | The implementation plan, one document per area |
 
 ## License

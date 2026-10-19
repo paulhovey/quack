@@ -253,7 +253,7 @@ impl Tool for Hashline {
     }
 
     fn available(&self, ctx: &ToolCtx) -> bool {
-        ctx.hashline
+        ctx.hashline()
     }
 
     fn description(&self, _ctx: &ToolCtx) -> String {
@@ -355,7 +355,8 @@ mod tests {
             lsp: None,
             sandbox: Default::default(),
             plan: Default::default(),
-            hashline: true,
+            edit_format: quack_config::settings::EditFormat::Hashline,
+            outline_above: 0,
         }
     }
 

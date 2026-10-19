@@ -343,9 +343,12 @@ impl LspManager {
                 ));
             }
         };
-        client
+        if let Err(e) = client
             .changed(path, Duration::from_millis(d.settle_ms), max_wait)
-            .await;
+            .await
+        {
+            return Some(format!("diagnostics unavailable: {e}"));
+        }
         let limits = Limits {
             min_severity: Severity::parse(&d.min_severity),
             max_items: d.max_items.max(1),

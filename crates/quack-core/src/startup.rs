@@ -4,13 +4,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use quack_config::provider::ModelEntry;
-use quack_config::settings::MemoryWrites;
+use quack_config::settings::{EditFormat, MemoryWrites};
 use quack_config::{
     Item, ItemState, LayerKind, Loaded, ProjectStatus, ProviderFile, glob_match, load_providers,
 };
+use quack_instructions::commands::CustomCommand;
 use quack_instructions::skills;
 use quack_profiles::{InternalTool, Profile, PromptVars, ToolSurface, load_profiles, select};
-use quack_protocol::{Event, LoadState, SkillInfo, Subsystem};
+use quack_protocol::{CommandInfo, Event, LoadState, ProfileInfo, SkillInfo, Subsystem};
 use quack_providers::{DiscoveredModel, Provider};
 use quack_shell::ShellKind;
 use quack_store::memory::Scope;
@@ -47,12 +48,17 @@ pub(crate) struct Setup {
     pub instruction_dirs: Vec<std::path::PathBuf>,
     /// MCP servers; their tools join each request as they become ready.
     pub mcp: Arc<crate::mcp::Mcp>,
+    /// The values the system prompt was rendered with, to preview other profiles.
+    pub vars: PromptVars,
+    /// Custom slash commands: `/<name> args` turns into the command's prompt.
+    pub commands: Arc<Vec<CustomCommand>>,
 }
 
 /// Files read from the workspace and config folders that shape the prompt.
 pub(crate) struct Files {
     pub instructions: quack_instructions::agents_md::Loaded,
     pub skills: skills::Found,
+    pub commands: Vec<CustomCommand>,
     pub mcp: Arc<crate::mcp::Mcp>,
     pub lsp: Arc<quack_lsp::LspManager>,
 }
@@ -160,7 +166,9 @@ pub(crate) async fn run(
         )
     });
     let cfg_for_skills = config.clone();
-    let skills = tokio::task::spawn_blocking(move || env::skills(&cfg_for_skills));
+    let skills = tokio::task::spawn_blocking(move || {
+        (env::skills(&cfg_for_skills), env::commands(&cfg_for_skills))
+    });
 
     // Config + providers.
     let cfg = reporter(Subsystem::Config);
@@ -206,8 +214,9 @@ pub(crate) async fn run(
         }
     });
 
-    let skills = skills.await.unwrap_or_default();
+    let (skills, (commands, bad_commands)) = skills.await.unwrap_or_default();
     report_skills(&tx, &skills);
+    report_commands(&tx, &commands, &bad_commands);
 
     let kept = match keep {
         Some((pid, mid)) => match named(&config, &providers, &pid, &mid, &prov, &tx).await {
@@ -261,6 +270,7 @@ pub(crate) async fn run(
         Files {
             instructions,
             skills,
+            commands,
             mcp,
             lsp,
         },
@@ -324,10 +334,15 @@ pub(crate) async fn switch(
         detail: format!("{model_ref} ({ctx})"),
     });
     let cfg = config.clone();
-    let (instructions, skills) =
-        tokio::task::spawn_blocking(move || (env::instructions(&cfg), env::skills(&cfg)))
-            .await
-            .unwrap_or_default();
+    let (instructions, skills, (commands, _)) = tokio::task::spawn_blocking(move || {
+        (
+            env::instructions(&cfg),
+            env::skills(&cfg),
+            env::commands(&cfg),
+        )
+    })
+    .await
+    .unwrap_or_default();
     build_setup(
         &config,
         provider,
@@ -336,6 +351,7 @@ pub(crate) async fn switch(
         Files {
             instructions,
             skills,
+            commands,
             mcp,
             lsp,
         },
@@ -606,6 +622,7 @@ async fn build_setup(
     Files {
         instructions,
         skills: found,
+        commands,
         mcp,
         lsp,
     }: Files,
@@ -624,7 +641,11 @@ async fn build_setup(
     }
     let mut names = vec![model.id.as_str()];
     names.extend(model.alias.as_deref());
-    let profile = match select(&profiles, &model.profile, &names) {
+    let requested = match config.settings.model.profile.as_str() {
+        "" => model.profile.as_str(),
+        forced => forced,
+    };
+    let profile = match select(&profiles, requested, &names) {
         Ok(p) => p,
         Err(e) => {
             rep.send(LoadState::Failed { error: e });
@@ -638,7 +659,7 @@ async fn build_setup(
         std::env::var("SHELL").ok().as_deref(),
     );
     let timeout = Duration::from_secs(config.settings.tools.default_timeout_secs.max(1));
-    let tool_ctx = ToolCtx {
+    let mut tool_ctx = ToolCtx {
         root: root.clone(),
         shell: shell.clone(),
         default_timeout: timeout,
@@ -651,23 +672,11 @@ async fn build_setup(
         lsp: Some(lsp),
         sandbox: crate::sandbox::state(config),
         plan: Default::default(),
-        hashline: config.settings.tools.edit_format == quack_config::settings::EditFormat::Hashline,
+        edit_format: EditFormat::StrReplace,
+        // About 3.5 bytes per token.
+        outline_above: config.settings.tools.read_outline_tokens as usize * 7 / 2,
     };
     let registry = Arc::new(Registry::builtin());
-    let internal: Vec<InternalTool> = registry
-        .iter()
-        .filter(|t| t.available(&tool_ctx))
-        .map(|t| InternalTool {
-            name: t.name().to_owned(),
-            description: t.description(&tool_ctx),
-            schema: t.schema(),
-        })
-        .collect();
-    let (surface, surface_warnings) = ToolSurface::build(&profile, &internal);
-    for w in surface_warnings {
-        warn(tx, w);
-    }
-
     let vars = PromptVars {
         os: std::env::consts::OS.into(),
         shell: shell.label().into(),
@@ -687,14 +696,27 @@ async fn build_setup(
             // About 3.5 bytes per token.
             m.index_text(config.settings.memory.index_max_tokens as usize * 7 / 2)
         }),
+        ..PromptVars::default()
     };
-    let system = match profile.render_system(&vars) {
+    let shaped = shape(
+        &profile,
+        config.settings.tools.edit_format,
+        &registry,
+        &tool_ctx,
+        &vars,
+    );
+    for w in shaped.warnings {
+        warn(tx, w);
+    }
+    let system = match shaped.system {
         Ok(s) => s,
         Err(e) => {
             rep.send(LoadState::Failed { error: e });
             return None;
         }
     };
+    let surface = shaped.surface;
+    tool_ctx.edit_format = shaped.edit_format;
     let mut settings = config.settings.permissions.clone();
     if let Some(cap) = config.settings.policy.max_permission_mode {
         settings.mode = settings.mode.min(cap);
@@ -739,7 +761,136 @@ async fn build_setup(
         context: config.settings.context.clone(),
         instruction_dirs: instructions.dirs,
         mcp,
+        vars,
+        commands: Arc::new(commands),
     })
+}
+
+/// `/profiles`: every installed profile, previewed for the session's model.
+pub(crate) fn profiles(config: &Loaded, setup: &Setup) -> Event {
+    let (installed, _) = load_profiles(config);
+    let mut names = vec![setup.model.id.as_str()];
+    names.extend(setup.model.alias.as_deref());
+    let auto = select(&installed, &setup.model.profile, &names)
+        .map(|p| p.id)
+        .unwrap_or_default();
+    let profiles = installed
+        .iter()
+        .map(|p| {
+            let shaped = shape(
+                p,
+                config.settings.tools.edit_format,
+                &setup.registry,
+                &setup.tool_ctx,
+                &setup.vars,
+            );
+            ProfileInfo {
+                id: p.id.clone(),
+                description: p.file.description.clone(),
+                source: p.file.source.clone(),
+                matches: p.id == auto,
+                edit_format: serde_json::to_value(shaped.edit_format)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_owned))
+                    .unwrap_or_default(),
+                tools: shaped
+                    .surface
+                    .tools
+                    .iter()
+                    .map(|t| t.name.clone())
+                    .collect(),
+                system: shaped
+                    .system
+                    .unwrap_or_else(|e| format!("(does not render: {e})")),
+            }
+        })
+        .collect();
+    Event::Profiles {
+        active: setup.profile.id.clone(),
+        forced: !config.settings.model.profile.is_empty(),
+        profiles,
+    }
+}
+
+/// What a profile makes of a session: its edit format, tools and system prompt.
+pub(crate) struct Shaped {
+    pub edit_format: EditFormat,
+    pub surface: ToolSurface,
+    pub warnings: Vec<String>,
+    pub system: Result<String, String>,
+}
+
+/// Apply `profile` to the session's tools and prompt variables. Used at startup and to
+/// preview other profiles in `/profiles`.
+pub(crate) fn shape(
+    profile: &Profile,
+    setting: EditFormat,
+    registry: &Registry,
+    base: &ToolCtx,
+    vars: &PromptVars,
+) -> Shaped {
+    let mut ctx = base.clone();
+    ctx.edit_format = edit_format(setting, profile);
+    let internal: Vec<InternalTool> = registry
+        .iter()
+        .filter(|t| t.available(&ctx))
+        .map(|t| InternalTool {
+            name: t.name().to_owned(),
+            description: t.description(&ctx),
+            schema: t.schema(),
+        })
+        .collect();
+    let known: Vec<&str> = registry.iter().map(|t| t.name()).collect();
+    let (surface, warnings) = ToolSurface::build(profile, &internal, &known);
+    let mut vars = vars.clone();
+    vars.write_tool = surface.name_of("write").unwrap_or("write").to_owned();
+    vars.edit_tool = surface
+        .name_of(match ctx.edit_format {
+            EditFormat::Hashline => "edit_hashline",
+            EditFormat::ApplyPatch => "apply_patch",
+            EditFormat::SearchReplaceBlocks => "edit_blocks",
+            EditFormat::WholeFile => "write",
+            EditFormat::StrReplace | EditFormat::Auto => "edit",
+        })
+        .unwrap_or("write")
+        .to_owned();
+    Shaped {
+        edit_format: ctx.edit_format,
+        system: profile.render_system(&vars),
+        surface,
+        warnings,
+    }
+}
+
+/// `[tools] edit_format`, else the profile's, else `str_replace`.
+fn edit_format(setting: EditFormat, profile: &Profile) -> EditFormat {
+    match setting {
+        EditFormat::Auto => profile
+            .file
+            .defaults
+            .edit_format
+            .filter(|f| *f != EditFormat::Auto)
+            .unwrap_or(EditFormat::StrReplace),
+        chosen => chosen,
+    }
+}
+
+fn report_commands(tx: &broadcast::Sender<Event>, commands: &[CustomCommand], failed: &[String]) {
+    for f in failed {
+        warn(tx, format!("command skipped: {f}"));
+    }
+    let _ = tx.send(Event::Commands {
+        commands: commands
+            .iter()
+            .map(|c| CommandInfo {
+                name: c.name.clone(),
+                description: c.description.clone(),
+                args: c.args.clone(),
+                source: c.source.clone(),
+                path: c.path.display().to_string(),
+            })
+            .collect(),
+    });
 }
 
 fn report_skills(tx: &broadcast::Sender<Event>, found: &skills::Found) {

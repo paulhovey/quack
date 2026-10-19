@@ -426,7 +426,7 @@ async fn diagnostics(
             let client = client(mgr, path).await?;
             client
                 .changed(path, Duration::from_millis(500), Duration::from_secs(5))
-                .await;
+                .await?;
             list.extend(
                 client
                     .diagnostics(path)

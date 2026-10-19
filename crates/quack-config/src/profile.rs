@@ -16,6 +16,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::provider::{ReasoningFormat, Sampling};
+use crate::settings::EditFormat;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -35,9 +36,13 @@ pub struct ProfileFile {
     pub prompt: Prompt,
     #[serde(default)]
     pub defaults: Defaults,
-    /// Model-facing tool surface. Empty: all internal tools under their internal names.
+    /// Model-facing tool surface: renames, descriptions and parameter mappings. Internal
+    /// tools not listed keep their internal names.
     #[serde(default)]
     pub tools: Vec<ToolMapping>,
+    /// Offer only the tools listed in `[[tools]]` (MCP tools are still added).
+    #[serde(default)]
+    pub exclusive: bool,
 }
 
 fn yes() -> bool {
@@ -75,6 +80,8 @@ impl Default for Prompt {
 pub struct Defaults {
     pub sampling: Sampling,
     pub reasoning_format: Option<ReasoningFormat>,
+    /// The edit tool this family was trained with; `[tools] edit_format` overrides it.
+    pub edit_format: Option<EditFormat>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -85,12 +92,16 @@ pub struct ToolMapping {
     /// Internal tool, e.g. `read`, `edit`, `shell`. Defaults to `name`.
     #[serde(default)]
     pub maps_to: Option<String>,
-    /// Description shown to the model; default: the internal tool's own.
+    /// Description shown to the model, or a `.md` file in the profile directory holding
+    /// it; default: the internal tool's own.
     #[serde(default)]
     pub description: Option<String>,
     /// Model-facing parameter name → mapping onto the internal parameter.
     #[serde(default)]
     pub params: BTreeMap<String, ParamMapping>,
+    /// Internal parameters always sent with this value and hidden from the model.
+    #[serde(default)]
+    pub fixed: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -100,6 +111,9 @@ pub struct ParamMapping {
     pub to: String,
     #[serde(default)]
     pub transform: Option<Transform>,
+    /// Sent when the model leaves the parameter out.
+    #[serde(default)]
+    pub default: Option<serde_json::Value>,
 }
 
 /// The closed set of parameter transforms.
@@ -108,5 +122,13 @@ pub struct ParamMapping {
 pub enum Transform {
     /// Paths are accepted absolute or relative already; kept for profile compatibility.
     AbsToWorkspace,
+    /// The model counts lines from 0; internal tools count from 1.
     ZeroToOneBased,
+    /// The model counts from 1 where the internal tool counts from 0.
+    OneToZeroBased,
+    /// The model sends an array of lines; the internal tool takes one string.
+    JoinLines,
+    /// The model sends a command as an argument list (`["bash", "-lc", "make"]`); the
+    /// internal tool takes one command line.
+    Argv,
 }

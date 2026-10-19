@@ -134,7 +134,7 @@ impl Theme {
     /// The colour for a tool, by the first word of its summary.
     pub fn tool(&self, name: &str) -> Style {
         match name {
-            "read" | "ls" | "glob" | "grep" | "find" | "lsp" => self.accent,
+            "read" | "ls" | "glob" | "grep" | "find" | "lsp" | "index" => self.accent,
             "edit" | "write" | "edit_hashline" | "patch" | "apply_patch" => self.warn,
             "shell" | "bash" | "$" | "run" => self.magenta,
             "plan" | "todo" => self.ok,

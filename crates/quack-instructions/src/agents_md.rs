@@ -149,6 +149,18 @@ fn block(file: &Path, root: &Path, body: &str, room: usize) -> (String, bool) {
     )
 }
 
+/// The `<instructions source="…">` blocks in `text`: `(source, body)`, in order.
+pub fn blocks(text: &str) -> Vec<(String, String)> {
+    text.split("<instructions source=\"")
+        .skip(1)
+        .filter_map(|part| {
+            let (src, rest) = part.split_once("\">\n")?;
+            let body = rest.split("\n</instructions>").next().unwrap_or(rest);
+            Some((src.to_owned(), body.to_owned()))
+        })
+        .collect()
+}
+
 /// Instruction files below the workspace root, attached to the first tool result that
 /// touches their directory, so monorepo instructions only cost context when relevant.
 #[derive(Debug)]
@@ -320,5 +332,17 @@ mod tests {
         let again = Nested::new(root, rules(), [root.to_path_buf()]);
         again.mark_shown(&first);
         assert_eq!(again.attach(&root.join("pkg/deep/x.rs")), None);
+    }
+
+    #[test]
+    fn blocks_split_back_out() {
+        let text = "intro\n<instructions source=\"AGENTS.md\">\nbe brief\n</instructions>\n\n<instructions source=\"web/AGENTS.md\">\nuse pnpm\nalways\n</instructions>";
+        assert_eq!(
+            blocks(text),
+            [
+                ("AGENTS.md".to_owned(), "be brief".to_owned()),
+                ("web/AGENTS.md".to_owned(), "use pnpm\nalways".to_owned())
+            ]
+        );
     }
 }

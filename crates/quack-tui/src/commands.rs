@@ -57,9 +57,9 @@ pub(crate) const COMMANDS: &[Command] = &[
     c(
         "profiles",
         &["profile"],
-        "",
-        "Model profiles: switch, pin, preview the rendered prompt",
-        Some("M2"),
+        "[id]",
+        "Model profiles: preview each one's prompt and tools; switch, or `auto`",
+        None,
     ),
     c(
         "resume",
@@ -174,7 +174,13 @@ pub(crate) const COMMANDS: &[Command] = &[
         "Installed skills; run one with /<name> [request]",
         None,
     ),
-    c("commands", &[], "", "Custom commands by layer", Some("M2")),
+    c(
+        "commands",
+        &[],
+        "",
+        "Custom commands from the commands/ folders",
+        None,
+    ),
     c(
         "memory",
         &[],
@@ -187,8 +193,8 @@ pub(crate) const COMMANDS: &[Command] = &[
         "instructions",
         &[],
         "",
-        "Loaded AGENTS.md chain with sizes",
-        Some("M2"),
+        "The AGENTS.md files the model has, with their sizes",
+        None,
     ),
     c(
         "init",
@@ -197,7 +203,13 @@ pub(crate) const COMMANDS: &[Command] = &[
         "Write AGENTS.md, merging CLAUDE.md and other agents' files into it",
         None,
     ),
-    c("todo", &[], "", "Toggle the todo pane", Some("M2")),
+    c(
+        "todo",
+        &[],
+        "",
+        "Show the model's whole plan above the input, or just its summary",
+        None,
+    ),
     c("tasks", &[], "", "Sub-agent views", Some("M5")),
     c(
         "theme",

@@ -24,6 +24,10 @@ pub struct PromptVars {
     pub memory_index: String,
     /// One line per installed skill, already capped.
     pub skills: String,
+    /// The names the model sees for the session's edit tool (the `[tools] edit_format`
+    /// in use) and for `write`. The same name when files are only rewritten whole.
+    pub edit_tool: String,
+    pub write_tool: String,
 }
 
 impl Profile {

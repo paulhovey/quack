@@ -1,0 +1,44 @@
+#:schema ../../schemas/profile.json
+description = "Codex-shaped tools (shell with an argument list, apply_patch, update_plan) for gpt-oss"
+source = "Original prompt text (quack project, Apache-2.0). Tool names, the shell argument list and the apply_patch format follow openai/codex (Apache-2.0)"
+
+# Codex-trained models read files with shell commands; only these tools are offered.
+exclusive = true
+
+# Not chosen automatically until the eval shows it beats `generic` for gpt-oss
+# (docs/plan/03-model-profiles.md#evaluating-profiles). Proposed:
+#   model = ["*gpt-oss*"]
+#   priority = 50
+# Use it now with `profile = "codex"` on a model.
+[match]
+model = []
+
+[defaults]
+edit_format = "apply_patch"
+# OpenAI's recommended sampling for gpt-oss.
+sampling = { temperature = 1.0, top_p = 1.0 }
+
+[[tools]]
+name = "shell"
+maps_to = "shell"
+description = "Runs a shell command and returns its output. `command` is the argument list, for example [\"bash\", \"-lc\", \"rg -n parse src\"]."
+[tools.params]
+command = { to = "command", transform = "argv" }
+
+[[tools]]
+name = "apply_patch"
+maps_to = "apply_patch"
+
+[[tools]]
+name = "update_plan"
+maps_to = "todo"
+[tools.params]
+plan = { to = "items" }
+
+[[tools]]
+name = "memory"
+maps_to = "memory"
+
+[[tools]]
+name = "skill"
+maps_to = "skill"

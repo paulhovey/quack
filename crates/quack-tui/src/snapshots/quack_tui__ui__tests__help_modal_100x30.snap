@@ -1,6 +1,5 @@
 ---
 source: crates/quack-tui/src/ui.rs
-assertion_line: 1108
 expression: "render(&app, 100, 30)"
 ---
 " quack 0.1.0 · ~/src/project                                                                 ⎇ main "
@@ -12,7 +11,7 @@ expression: "render(&app, 100, 30)"
 " · in││▌ /models                             ┃│ /models [provider/model]                     ││     "
 " · sk││  /providers                          ┃│                                              ││     "
 " · co││  /setup                              ┃│ Pick a model for this session; with an       ││     "
-" · me││  /profiles                        M2 ┃│ argument, switch directly                    ││     "
+" · me││  /profiles                           ┃│ argument, switch directly                    ││     "
 " · mc││  /resume                             ┃│                                              ││     "
 " ✗ ls││  /new                                ┃│ aliases   /model                             ││     "
 "     ││  /rewind                             ││ status    available                          ││     "

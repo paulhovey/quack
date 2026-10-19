@@ -59,17 +59,33 @@
     "EditFormat": {
       "oneOf": [
         {
-          "enum": [
-            "auto",
-            "str_replace",
-            "apply_patch",
-            "whole_file"
-          ],
+          "const": "auto",
+          "description": "The profile's choice, else `str_replace`.",
+          "type": "string"
+        },
+        {
+          "const": "str_replace",
+          "description": "`edit`: replace a unique snippet.",
           "type": "string"
         },
         {
           "const": "hashline",
           "description": "Hash-anchored edits: `read` tags each line, and edits name lines by tag.",
+          "type": "string"
+        },
+        {
+          "const": "apply_patch",
+          "description": "`apply_patch`: the Codex patch format, several files per call.",
+          "type": "string"
+        },
+        {
+          "const": "whole_file",
+          "description": "No edit tool: files are rewritten whole with `write`.",
+          "type": "string"
+        },
+        {
+          "const": "search_replace_blocks",
+          "description": "`edit_blocks`: SEARCH/REPLACE blocks under each file's path.",
           "type": "string"
         }
       ]
@@ -197,6 +213,11 @@
         "default": {
           "default": "",
           "description": "`<provider-id>/<model-id>` or `<provider-id>/<alias>`. Empty: pick with `/models`.",
+          "type": "string"
+        },
+        "profile": {
+          "default": "",
+          "description": "A profile id for every model this session, e.g. `qwen-code`. Empty: each model's\nown `profile` (normally `auto`).",
           "type": "string"
         },
         "remember_last": {
@@ -460,6 +481,13 @@
           "$ref": "#/$defs/EditFormat",
           "default": "auto"
         },
+        "read_outline_tokens": {
+          "default": 2000,
+          "description": "`read` without a line range shows the outline of source files larger than this\n(in tokens), so the model reads only the part it needs. 0: always the whole file.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
         "shell": {
           "default": "auto",
           "description": "`auto`, `bash`, `zsh`, `pwsh`, `powershell`, `cmd`, or a path.",
@@ -563,6 +591,7 @@
       "$ref": "#/$defs/ModelSettings",
       "default": {
         "default": "",
+        "profile": "",
         "remember_last": true,
         "small": ""
       }
@@ -642,6 +671,7 @@
       "default": {
         "default_timeout_secs": 120,
         "edit_format": "auto",
+        "read_outline_tokens": 2000,
         "shell": "auto"
       }
     },

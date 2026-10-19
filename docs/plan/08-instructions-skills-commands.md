@@ -77,7 +77,7 @@ At load time, frontmatter is validated (`name` matches the directory, `descripti
 - **`/<name> [request]`** works in the TUI (also in the slash popup) and in `exec`. The engine replaces it with the skill block plus the request. The session title keeps what the user typed.
 - **`/skills`** lists them, with where each came from.
 - **Other agents' instruction files (2026-10-18):** read by default rather than offered first. The names come from `[instructions]` in `compat.toml` (defaults bundle, system, user or trusted project folder; the highest present wins) and are tried after `[instructions] files` in each folder, so a folder with AGENTS.md uses only that, and duplicates are never loaded. The user's global file falls back to `~/.claude/CLAUDE.md` / `~/.gemini/GEMINI.md` when there is no AGENTS.md in the config folder. Files that are links to, copies of, or just `@AGENTS.md` pointers to the root AGENTS.md don't count. When the root has others, a startup notice offers `/init`, which runs a turn asking the model to merge them into AGENTS.md (without touching the originals, then suggesting a one-line `@AGENTS.md` in each); with no others it updates or writes AGENTS.md. `[instructions] other_agents = false` turns this off. Folder rules (`.cursor/rules/`) are not read yet.
-- **Not done yet:** the detection prompt for other harnesses' skill and command folders, and custom commands.
+- **Not done yet:** the detection prompt for other harnesses' skill and command folders.
 
 ## Other harnesses' files
 
@@ -135,6 +135,8 @@ Review the output of `git diff --staged`. Focus: {{args | default("correctness")
 - Paths are the same layers as skills (system/user/project).
 - MCP prompts appear as `/mcp:<server>:<prompt>` ([09](09-mcp.md)).
 - Built-in commands (`/models`, `/resume`, `/compact`, …) are code. A custom command with the same name is rejected, with a warning naming the file.
+
+As implemented (2026-10-18): `commands/` in each item layer (defaults, system, user, and the project when trusted), later layers replacing earlier ones by name; subfolders join with `:`. Front matter is optional (`description`, `args`; Claude Code's `argument-hint` is read as `args`); without it the first line of the prompt is the description. `{{ args }}`, `{{ args | default("…") }}` and `$ARGUMENTS` take the typed arguments; a prompt with no placeholder gets them appended. The engine expands `/<name> args` when the turn starts (after skills, which win a name clash), so headless runs use them too. The TUI lists them in the `/` popup and `/commands`, and warns about a file whose name a built-in command takes. `model` and `allowed_tools` are not read yet. Tested in `quack-instructions` and `core/tests/instructions.rs`.
 
 ## Bundles
 

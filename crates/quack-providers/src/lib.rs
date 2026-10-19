@@ -2,15 +2,20 @@
 //! See docs/plan/02-providers.md.
 //!
 //! `openai-chat` is the baseline adapter and is always built: every build needs at least
-//! one, and it covers nearly every open-model server. `ollama` speaks Ollama's native API.
-//! The other `proto-*` adapters land later.
+//! one, and it covers nearly every open-model server. `ollama` speaks Ollama's native API,
+//! `anthropic-messages` the Anthropic Messages API and `openai-responses` the OpenAI
+//! Responses API, each behind its `proto-*` feature.
 
+#[cfg(feature = "proto-anthropic")]
+mod anthropic;
 mod error;
 #[cfg(feature = "proto-ollama")]
 mod ollama;
 mod openai_chat;
 mod provider;
 mod reasoning;
+#[cfg(feature = "proto-openai-responses")]
+mod responses;
 mod sse;
 pub mod tokens;
 pub mod toolparse;
