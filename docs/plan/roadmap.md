@@ -178,7 +178,7 @@ Landed early (2026-10-18): `quack-lsp` (lazy start, document sync, push and pull
 - Offline policy end-to-end, egress allowlist, `web_fetch` (opt-in, SSRF-protected)
 - `[policy]` locks, audit log, `quack doctor` enterprise checks
 - mTLS, custom CA, proxy validation; multi-`base_urls` failover
-- Packaging: cargo-dist, MSI (+ signing), deb/rpm, Homebrew, defaults bundle as a separate package, SBOM, `docs/enterprise.md`, air-gapped build recipe
+- Packaging: release archives and install scripts in two flavours, `quack` (with defaults) and `quack-plucked` (landed early); still to do: MSI (+ signing), deb/rpm, Homebrew, SBOM, `docs/enterprise.md`, air-gapped build recipe
 - Dynamic tree-sitter grammars (`libloading`)
 - MCP OAuth for remote servers
 

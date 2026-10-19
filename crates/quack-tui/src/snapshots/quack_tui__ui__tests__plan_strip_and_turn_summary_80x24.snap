@@ -1,0 +1,29 @@
+---
+source: crates/quack-tui/src/ui.rs
+assertion_line: 1242
+expression: "render(&app, 80, 24)"
+---
+" quack 0.1.0 · ~/src/project                                             ⎇ main "
+" › make the parser faster                                                       "
+"                                                                                "
+" ✓ plan 1/3 done · profile the hot loop                                         "
+"     ✓ read the parser                                                          "
+"     ▶ profile the hot loop                                                     "
+"     · cache token lookups                                                      "
+" ✗ shell cargo bench · exit 101                                                 "
+"     error: no bench target                                                     "
+"                                                                                "
+" 🦆 There is no bench target yet; adding one.                                   " Hidden by multi-width symbols: [(2, " ")]
+"                                                                                "
+"   ── 14s · 2 tools · 1.2k tokens out · 48 t/s ────────                         "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"  plan  ▰▱▱ 1/3  ▶ profile the hot loop                                         "
+"╭──────────────────────────────────────────────────────────────────────────────╮"
+"│›                                                                             │"
+"╰──────────────────────────────────────────────────────────────────────────────╯"
+"  auto-edit  charm/qwen3.8-flash · ▰▰▰▰▱▱ 70k/104k · 48 t/s               /help "

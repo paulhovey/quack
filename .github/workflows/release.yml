@@ -1,0 +1,63 @@
+name: Release
+
+# Push a tag such as v0.2.0 to build every target and publish a GitHub release with:
+#   quack-<target>.{tar.gz,zip}          binary + defaults bundle (the normal install)
+#   quack-plucked-<target>.{tar.gz,zip}  binary only
+#   install.sh, install.ps1, SHA256SUMS
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest, musl: true }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm, musl: true }
+          - { target: x86_64-apple-darwin, os: macos-latest }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+          - { target: aarch64-pc-windows-msvc, os: windows-11-arm }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get install -y --no-install-recommends musl-tools
+        if: matrix.musl
+      # rust-toolchain.toml pins the version; this installs it and the target.
+      - run: rustup target add ${{ matrix.target }}
+      - run: cargo build --release --locked -p quack-cli --target ${{ matrix.target }}
+      - run: scripts/package.sh ${{ matrix.target }}
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: dist/*
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+      - run: cp scripts/install.sh scripts/install.ps1 dist/
+      - run: cd dist && sha256sum * > SHA256SUMS
+      - run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes dist/*
+        env:
+          GH_TOKEN: ${{ github.token }}

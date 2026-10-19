@@ -213,6 +213,38 @@ Not available yet:
 
 See the [roadmap](docs/plan/roadmap.md).
 
+## Install
+
+Linux and macOS:
+
+```sh
+curl -fsSL https://github.com/paulhovey/quack/releases/latest/download/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://github.com/paulhovey/quack/releases/latest/download/install.ps1 | iex
+```
+
+This installs the binary and the defaults: provider files for local servers and hosted
+services, model profiles, language servers and MCP examples. Then run `quack setup`.
+
+For organisations that ship their own files, `quack-plucked` is the duck without its
+feathers: the binary alone. Add `--plucked` (`sh -s -- --plucked`, or `-Plucked` on Windows).
+It never touches an existing defaults folder, so it is also how to update just the binary.
+
+Other options: `--prefix` (default `~/.local`, or `%LOCALAPPDATA%\Programs\quack`),
+`--version v0.2.0`, `--archive FILE` for offline installs, `--from-source` to build this
+checkout, and `--uninstall`. Prebuilt archives for each platform are on the
+[releases page](https://github.com/paulhovey/quack/releases).
+
+To try a checkout without installing a release:
+
+```sh
+scripts/install.sh --from-source     # builds with cargo, installs into ~/.local
+```
+
 ## Build and run
 
 ```sh
@@ -231,7 +263,8 @@ QUACK_DEFAULTS_DIR=defaults cargo run       # use the defaults bundle from this 
 | Path | What |
 |---|---|
 | `crates/` | 17 crates; see [docs/plan/00-architecture.md](docs/plan/00-architecture.md) |
-| `defaults/` | The separately shipped defaults bundle (providers, profiles, schemas, …) |
+| `defaults/` | The defaults bundle (providers, profiles, schemas, …), installed beside the binary except with `--plucked` |
+| `scripts/` | Install scripts, release packaging, CI helpers |
 | `docs/plan/` | The implementation plan, one document per area |
 
 ## License

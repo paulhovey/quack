@@ -2,12 +2,20 @@
 
 ## Principle
 
-The **binary** and the **defaults** are separate artifacts:
+The **binary** and the **defaults** stay separate on disk (nothing is compiled in), but the
+normal install ships both. Most people install `quack` and get everything; organisations
+that ship their own files install or update with `quack-plucked`, which never touches the
+defaults.
 
-| Artifact | Contains | Who removes what |
+| Part | Contains | Who removes what |
 |---|---|---|
-| `quack` binary | Engine, adapters (per features), grammars (per features), two themes, empty fallback profile, minimal deny-list floor | Recompile with fewer features |
-| `quack-defaults` bundle | `providers.d/`, `profiles.d/`, `mcp.d/` (examples, disabled), `lsp.d/`, `themes/`, `grammars/` queries, `schemas/`, `compat.toml` (other-harness detection list), `tokenizers/` (optional) | Delete files |
+| binary | Engine, adapters (per features), grammars (per features), two themes, empty fallback profile, minimal deny-list floor | Recompile with fewer features |
+| defaults bundle | `providers.d/`, `profiles.d/`, `mcp.d/` (examples, disabled), `lsp.d/`, `themes/`, `grammars/` queries, `schemas/`, `compat.toml` (other-harness detection list), `tokenizers/` (optional) | Delete files, or install with `--plucked` |
+
+| Release flavour | Contains |
+|---|---|
+| `quack` (default) | binary + defaults bundle |
+| `quack-plucked` (`--plucked`) | binary only; an existing defaults folder is left as it is |
 
 ## Where defaults live after install
 
@@ -16,10 +24,11 @@ Defaults are installed into a **read-only shared data directory**, which is load
 | OS | Defaults dir |
 |---|---|
 | Linux (package) | `/usr/share/quack/defaults/` |
-| Linux/macOS (tarball / user install) | `<user data>/defaults/` |
+| Linux/macOS (tarball / install script) | `<prefix>/share/quack/defaults/` beside `<prefix>/bin/quack` (default prefix `~/.local`) |
 | macOS (Homebrew) | `$(brew --prefix)/share/quack/defaults/` |
 | Windows (MSI) | `%ProgramFiles%\quack\defaults\` |
-| Windows (zip / user install) | `%LOCALAPPDATA%\quack\defaults\` |
+| Windows (zip / install script) | `defaults\` beside `quack.exe` (default `%LOCALAPPDATA%\Programs\quack\`) |
+| Fallback | `<user data>/defaults/` |
 | Override | `QUACK_DEFAULTS_DIR`, or `[defaults] dir = ""` in system config, or `dir = "none"` to disable |
 
 So the full precedence becomes: **compiled settings defaults → defaults bundle → system → user → project → env → CLI**.
@@ -59,16 +68,47 @@ When no provider is configured:
 
 ## Release artifacts
 
-Built with **cargo-dist** (`dist`):
+### As implemented (2026-10-18)
+
+Pushing a `v*` tag runs `.github/workflows/release.yml`. It builds each target, packs it with
+`scripts/package.sh`, and publishes a GitHub release. cargo-dist was dropped: it has no
+notion of two flavours of one binary, and the hand-written workflow is about 60 lines.
+
+| Target | Archives |
+|---|---|
+| `x86_64`/`aarch64-unknown-linux-musl` (static) | `quack-<target>.tar.gz`, `quack-plucked-<target>.tar.gz` |
+| `x86_64`/`aarch64-apple-darwin` | same |
+| `x86_64`/`aarch64-pc-windows-msvc` | `quack-<target>.zip`, `quack-plucked-<target>.zip` |
+| All | `install.sh`, `install.ps1`, `SHA256SUMS` |
+
+Asset names carry no version, so `releases/latest/download/<name>` always works; the
+version is the release tag. Unix archives are a prefix (`bin/quack`,
+`share/quack/defaults/`), Windows archives are flat (`quack.exe`, `defaults\`), matching
+where the binary looks for its bundle.
+
+The install scripts (`scripts/install.sh` for Linux and macOS, `scripts/install.ps1` for
+Windows) download the archive for this machine, check it against `SHA256SUMS`, and install
+the binary and the defaults:
+
+- `--plucked` (`-Plucked`): the binary only. An existing defaults folder is left
+  alone; a fresh plucked install has none.
+- `--prefix`, `--version`, `--archive FILE` (offline installs), `--from-source [DIR]` (build
+  a checkout with cargo), `--uninstall` (keeps config, sessions and memory).
+- The binary is replaced by renaming, so a running quack is never left with a half-written
+  file (Windows renames the running exe out of the way).
+- A full install replaces the defaults folder as a whole, so files removed upstream go away
+  and files the user deleted come back. Turning a default off for good is done in the user
+  layer (`enabled = false`), or by updating with `--plucked`.
+- Windows adds the install folder to the user `PATH`; Unix prints a hint if `bin` is not on it.
+
+### Still to do
 
 | Platform | Artifacts |
 |---|---|
-| Linux x86_64 / aarch64 | static **musl** tarball, `.deb`, `.rpm` |
-| macOS x86_64 / aarch64 | tarball, Homebrew tap, notarized |
-| Windows x86_64 / aarch64 | zip, **MSI** (per-machine and per-user), signed (Authenticode) |
-| All | `quack-defaults-<ver>.{tar.gz,zip}`, `SHA256SUMS`, signatures, **SBOM** (CycloneDX via `cargo-cyclonedx`) |
-
-Shell and PowerShell installer scripts install the binary, and the defaults *only if asked* (`--with-defaults`).
+| Linux | `.deb`, `.rpm`: `quack` (binary + `/usr/share/quack/defaults`) and `quack-plucked`, which conflict with each other |
+| macOS | Homebrew tap (`quack`, `quack-plucked`), notarization |
+| Windows | **MSI** (per-machine and per-user), signed (Authenticode) |
+| All | signatures, **SBOM** (CycloneDX via `cargo-cyclonedx`) |
 
 **No self-updater** is built in. `quack version --check` exists but is **opt-in** and blocked by `offline`. Updates come through package managers or the enterprise's own distribution.
 
@@ -99,5 +139,6 @@ cargo build --release --locked --offline \
 
 ## Open questions
 
-- Should we publish to crates.io (`cargo install quack`)? Proposed: yes for the binary. Defaults then come from the separate bundle or `quack setup --download-defaults`, which is opt-in and blocked offline.
-- Package-manager defaults packages: `quack` and `quack-defaults` as separate `.deb`/`.rpm`/brew formulae? Proposed: yes. This mirrors the separation exactly.
+- Should we publish to crates.io (`cargo install quack`)? That gives a plucked binary. Defaults
+  would then come from `install.sh` or `quack setup --download-defaults` (opt-in, blocked
+  offline).

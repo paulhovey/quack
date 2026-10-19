@@ -1,9 +1,9 @@
 # Defaults bundle
 
-Default data files that ship **separately** from the binary as the
-`quack-defaults` bundle (docs/plan/14-packaging-and-distribution.md). Nothing
-here is compiled in. Delete any file, or the whole bundle, and the binary still starts
-cleanly with the empty profile.
+Default data files that are installed next to the binary by the normal `quack` release,
+and left out of `quack-plucked` (docs/plan/14-packaging-and-distribution.md). Nothing here is
+compiled in. Delete any file, or the whole bundle, and the binary still starts cleanly with
+the empty profile.
 
 The bundle loads as a layer beneath the system layer. Its location is resolved at runtime,
 and `QUACK_DEFAULTS_DIR` overrides it. To run from a checkout:
