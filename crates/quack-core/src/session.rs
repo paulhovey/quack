@@ -3,8 +3,10 @@
 //! Record types: `session_start`, `resume`, `message` (one chat message, exactly as sent),
 //! `tool` (UI summary of a tool call), `usage` (with `cost` when priced), `prune` (tool results replaced),
 //! `compaction` (history before `cut` replaced by `message`), `rewind` (history cut back
-//! to its first `to` messages), `approval` and `questions` (what the user answered; replay
-//! skips them, since the tool results carry the answers).
+//! to its first `to` messages), `handoff` (a planner's messages after the first `to`
+//! dropped; the brief that replaces them follows as a `message`; the transcript keeps
+//! them), `approval` and `questions` (what the user answered; replay skips them, since
+//! the tool results carry the answers), `model_switch` (also skipped).
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -153,6 +155,17 @@ pub(crate) fn replay(records: &[Record]) -> (Vec<Message>, Vec<ReplayItem>, u32)
                 marks.retain(|(i, _)| *i < to);
                 turns = turns.saturating_sub(u32::try_from(dropped).unwrap_or(u32::MAX));
                 history.truncate(to);
+            }
+            "handoff" => {
+                if let Some(to) = r
+                    .data
+                    .get("to")
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|t| usize::try_from(t).ok())
+                {
+                    marks.retain(|(i, _)| *i < to);
+                    history.truncate(to);
+                }
             }
             // The live session repaired its history when it resumed; do the same at the
             // same point so later prune and compaction records line up.

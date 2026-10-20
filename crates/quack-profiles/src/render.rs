@@ -32,15 +32,26 @@ pub struct PromptVars {
 
 impl Profile {
     pub fn render_system(&self, vars: &PromptVars) -> Result<String, String> {
+        self.render("system.md", &self.system_template, vars)
+    }
+
+    /// The per-session context for the first user message; empty without `context.md`.
+    pub fn render_context(&self, vars: &PromptVars) -> Result<String, String> {
+        self.context_template
+            .as_deref()
+            .map_or(Ok(String::new()), |t| self.render("context.md", t, vars))
+    }
+
+    fn render(&self, name: &str, template: &str, vars: &PromptVars) -> Result<String, String> {
         let mut env = minijinja::Environment::new();
-        env.add_template("system", &self.system_template)
-            .map_err(|e| format!("profile `{}`: template error: {e}", self.id))?;
+        env.add_template(name, template)
+            .map_err(|e| format!("profile `{}`: {name}: template error: {e}", self.id))?;
         let tmpl = env
-            .get_template("system")
+            .get_template(name)
             .map_err(|e| format!("profile `{}`: {e}", self.id))?;
         let out = tmpl
             .render(minijinja::value::Serde(vars))
-            .map_err(|e| format!("profile `{}`: render error: {e}", self.id))?;
+            .map_err(|e| format!("profile `{}`: {name}: render error: {e}", self.id))?;
         Ok(out.trim().to_owned())
     }
 }
@@ -64,5 +75,11 @@ mod tests {
             Ok("You run on linux with bash.".into())
         );
         assert_eq!(Profile::empty().render_system(&vars), Ok(String::new()));
+        assert_eq!(p.render_context(&vars), Ok(String::new()), "no context.md");
+        p.context_template = Some("<context>{{ os }}</context>\n".into());
+        assert_eq!(
+            p.render_context(&vars),
+            Ok("<context>linux</context>".into())
+        );
     }
 }

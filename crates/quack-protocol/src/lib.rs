@@ -79,6 +79,12 @@ pub enum Op {
     SetPermissionMode {
         mode: String,
     },
+    /// Leave plan mode for `mode` and carry out the plan. When a `[model] planner` wrote
+    /// it, the session's model gets the requests, the user's answers and the plan in one
+    /// message instead of the planner's transcript.
+    AcceptPlan {
+        mode: String,
+    },
     /// Run the environment checks; answered with `Event::DoctorReport`.
     RunDoctor,
     /// Ask for the MCP servers' state; answered with `Event::McpServers`.

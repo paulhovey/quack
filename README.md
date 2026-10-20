@@ -76,11 +76,18 @@ Everything below works today. Planned work is listed separately at the end.
   `generic`, the bundle has `qwen-code`, `cc-style` (GLM, MiniMax, DeepSeek, MiMo),
   `kimi-code` and `codex` (gpt-oss). They are used only when chosen (`profile = "qwen-code"`
   on a model, `--profile`, `[model] profile`, or `/profiles`) until the eval shows they beat
-  `generic`. `/profiles` previews each profile's rendered prompt and tool names for the
+  `generic`. The per-session part of the prompt (workspace, date, AGENTS.md, memory) goes
+  at the start of the first user message (`context.md`), so the system prompt and tools are
+  the same in every project and hosted servers' prompt caches reuse them. `/profiles` previews each profile's rendered prompt and tool names for the
   current model, switches the session to one (Enter), or saves it as the default (Ctrl-S).
 - `quack eval` runs a task suite (`evals/tasks`, 21 small tasks: finding things, single and
   multi-file edits, fixing failing tests, shell, long files) with a model and profile, and
   reports pass rate, steps, tool errors, unparsable calls, failed edits, tokens and time.
+  `--suite evals/hard` runs 14 longer tasks with hidden tests, most on one shared shop
+  project, meant to separate models and profiles that all pass the small suite. Each
+  failed run is labelled with why (`no-change`, `wrong-files`, `edit-failed`, `untested`,
+  `wrong-fix`, ...), and `scripts/eval-compare.py` compares two setups task by task with
+  confidence intervals. `--planner <provider/model>` plans each task with that model first.
 - Speed in the status bar: tokens per second and time to first token.
 
 ### Tools
@@ -148,7 +155,10 @@ Everything below works today. Planned work is listed separately at the end.
   you about the few big decisions (with options and its recommendation; pick one, type your
   own answer, or skip), and proposes the plan as a checklist. A bar then offers to carry it
   out, carry it out with edits allowed, or keep planning; just type to ask for changes.
-  Nothing changes until you accept.
+  Nothing changes until you accept. With `[model] planner = "<provider>/<model>"`, plan
+  mode runs on that model (say, a large one) and your usual model carries the plan out.
+  Accepting hands it one message (your requests, your answers, the plan) instead of the
+  planner's transcript, so its prompt cache still holds.
 - `ask_user`: the agent can ask you questions in any mode, the same way. Headless runs skip
   them and the agent says what it assumed.
 - OS sandbox for shell commands, on by default: commands write only in the workspace and

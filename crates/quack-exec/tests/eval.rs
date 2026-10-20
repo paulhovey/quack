@@ -113,6 +113,7 @@ async fn runs_checks_and_reports() {
         load: LoadOptions::default(),
         repeat: 1,
         keep: false,
+        planner: None,
         scratch: tmp.path().join("scratch"),
         env,
     };
@@ -144,8 +145,10 @@ async fn runs_checks_and_reports() {
     let report = Report {
         harness: "test".into(),
         date: "2026-10-18".into(),
+        suite: "tasks".into(),
         model: "mock/tiny".into(),
         profile: "empty".into(),
+        planner: None,
         sampling: Report::sampling_of(&edit.sampling),
         results,
     };
@@ -156,4 +159,157 @@ async fn runs_checks_and_reports() {
         "{text}"
     );
     assert!(load_tasks(&suite, &["nope".into()]).is_err());
+}
+
+#[tokio::test]
+async fn a_planner_plans_and_the_model_carries_it_out() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(body_string_contains(r#""model":"big""#))
+        .respond_with(sse(
+            json!({"choices":[{"delta":{"content":"1. Change six to seven in a.txt."},"finish_reason":"stop"}]}),
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(body_string_contains("[Plan handoff]"))
+        .and(body_string_contains("\"role\":\"tool\""))
+        .respond_with(sse(
+            json!({"choices":[{"delta":{"content":"Done, it is 7."},"finish_reason":"stop"}]}),
+        ))
+        .mount(&server)
+        .await;
+    let args = json!({"path":"a.txt","old_string":"six","new_string":"seven"}).to_string();
+    Mock::given(method("POST"))
+        .and(body_string_contains("[Plan handoff]"))
+        .respond_with(sse(json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"edit","arguments":args}}]},"finish_reason":"tool_calls"}]})))
+        .mount(&server)
+        .await;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let suite = tmp.path().join("tasks");
+    task(
+        &suite,
+        "edit-one",
+        "category = \"single-edit\"\nprompt = \"Change six to seven in a.txt.\"\n\
+         [[check]]\nfile = \"a.txt\"\nequals = \"seven\"\n",
+        &[("a.txt", "six\n")],
+    );
+    let user = tmp.path().join("user");
+    std::fs::create_dir_all(user.join("providers.d")).expect("mkdir");
+    std::fs::write(
+        user.join("providers.d").join("mock.toml"),
+        format!(
+            "base_url = \"{}/v1\"\nmodels = [\"tiny\", \"big\"]\n",
+            server.uri()
+        ),
+    )
+    .expect("provider");
+    let mut env: HashMap<String, OsString> = HashMap::new();
+    env.insert("QUACK_CONFIG_DIR".into(), user.into_os_string());
+    for (k, sub) in [("QUACK_SYSTEM_DIR", "system"), ("QUACK_CACHE_DIR", "cache")] {
+        env.insert(k.into(), tmp.path().join(sub).into_os_string());
+    }
+    env.insert("QUACK_DEFAULTS_DIR".into(), "none".into());
+    let mut load = LoadOptions::default();
+    load.overrides.push("model.default=\"mock/tiny\"".into());
+    let opts = EvalOptions {
+        load,
+        repeat: 1,
+        keep: false,
+        planner: Some("mock/big".into()),
+        scratch: tmp.path().join("scratch"),
+        env,
+    };
+    let tasks = load_tasks(&suite, &[]).expect("tasks");
+    let r = run_task(&tasks[0], &opts, 0).await;
+    assert!(r.passed, "{r:?}");
+    assert_eq!(
+        (r.steps, r.tool_calls),
+        (3, 1),
+        "one planning step, two to carry it out"
+    );
+    assert_eq!(
+        r.model, "mock/tiny",
+        "the result names the model that did the work"
+    );
+}
+
+#[tokio::test]
+async fn a_shared_base_hidden_checks_and_failure_labels() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(body_string_contains("\"role\":\"tool\""))
+        .respond_with(sse(
+            json!({"choices":[{"delta":{"content":"Fixed."},"finish_reason":"stop"}]}),
+        ))
+        .mount(&server)
+        .await;
+    // The model edits the overlay's file, but the bug is in the base's.
+    let args = json!({"path":"app.txt","old_string":"v1","new_string":"v2"}).to_string();
+    Mock::given(method("POST"))
+        .respond_with(sse(json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"edit","arguments":args}}]},"finish_reason":"tool_calls"}]})))
+        .mount(&server)
+        .await;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let suite = tmp.path().join("hard");
+    let base = suite.join("_projects").join("shop");
+    std::fs::create_dir_all(&base).expect("mkdir");
+    std::fs::write(base.join("lib.txt"), "bug\n").expect("base");
+    std::fs::write(base.join("app.txt"), "v0\n").expect("base");
+    task(
+        &suite,
+        "fix-lib",
+        "category = \"fix-test\"\nprompt = \"Fix the bug.\"\nbase = \"../_projects/shop\"\n\
+         [[check]]\nfile = \"lib.txt\"\nequals = \"fixed\"\n\
+         [[check]]\nfile = \"revealed.txt\"\nequals = \"yes\"\n",
+        // The overlay replaces one of the base's files.
+        &[("app.txt", "v1\n")],
+    );
+    let dir = suite.join("fix-lib");
+    std::fs::create_dir_all(dir.join("hidden")).expect("mkdir");
+    std::fs::write(dir.join("hidden").join("revealed.txt"), "yes\n").expect("hidden");
+    std::fs::create_dir_all(dir.join("solution")).expect("mkdir");
+    std::fs::write(dir.join("solution").join("lib.txt"), "fixed\n").expect("solution");
+
+    let user = tmp.path().join("user");
+    std::fs::create_dir_all(user.join("providers.d")).expect("mkdir");
+    std::fs::write(
+        user.join("providers.d").join("mock.toml"),
+        format!("base_url = \"{}/v1\"\nmodels = [\"tiny\"]\n", server.uri()),
+    )
+    .expect("provider");
+    let mut env: HashMap<String, OsString> = HashMap::new();
+    env.insert("QUACK_CONFIG_DIR".into(), user.into_os_string());
+    for (k, sub) in [("QUACK_SYSTEM_DIR", "system"), ("QUACK_CACHE_DIR", "cache")] {
+        env.insert(k.into(), tmp.path().join(sub).into_os_string());
+    }
+    env.insert("QUACK_DEFAULTS_DIR".into(), "none".into());
+    let opts = EvalOptions {
+        load: LoadOptions::default(),
+        repeat: 1,
+        keep: false,
+        planner: None,
+        scratch: tmp.path().join("scratch"),
+        env,
+    };
+    let tasks = load_tasks(&suite, &[]).expect("tasks");
+    assert_eq!(tasks.len(), 1, "the projects folder is not a task");
+    assert_eq!(tasks[0].solution_paths(), ["lib.txt"]);
+    let r = run_task(&tasks[0], &opts, 0).await;
+    assert!(!r.passed, "{r:?}");
+    assert_eq!(
+        r.changed,
+        ["app.txt"],
+        "hidden files are not the model's changes"
+    );
+    assert_eq!(
+        r.failed_checks,
+        ["lib.txt is not \"fixed\""],
+        "the hidden file is there for the checks"
+    );
+    assert_eq!(r.failure.map(|f| f.label()), Some("wrong-files"));
+    let json = serde_json::to_value(&r).expect("json");
+    assert_eq!(json["failure"], "wrong-files");
 }

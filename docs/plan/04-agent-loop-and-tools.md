@@ -39,6 +39,13 @@ As implemented (M2, 2026-10-18; questions and the review bar 2026-10-19):
 
 `[model] planner = "<provider/model>"` (optional) lets a larger model write the plan and the default model carry it out, or the reverse (a hosted model edits from a plan written by an on-prem one). The planner gets only read-only tools. This builds on the existing `small` role; nothing changes when `planner` is unset.
 
+As implemented (2026-10-19): each model has its own server-side prompt cache, so the two must not take turns on one conversation, since every switch would re-send everything uncached. There is one handoff instead:
+- Entering plan mode builds the planner's setup (its own profile, prompt and tools) and keeps the session's own setup aside. Turns wait for it. The planner reads the whole conversation once, uncached, and then caches its own steps. The todo list is shared, so the checklist it writes carries over. `/models` and `/profiles` switches keep the todo list too.
+- `Op::AcceptPlan { mode }` (the review bar and `/plan accept`) leaves plan mode and puts the session's model back. The messages added since the planner's first turn are replaced by one brief (`quack-core/src/handoff.rs`): the user's requests (without the plan-mode request), their `ask_user` answers, and the planner's last reply. The brief is sent as the next turn. The session model's next request extends its own earlier request with the brief, so its cache holds, and it never sees the planner's tool names or arguments. `/plan off` and Shift-Tab go back without a brief, and the planner's messages stay in the history.
+- The session log gets a `handoff` record (`to`: the history length to cut back to). The brief follows as an ordinary `message`, so a resume rebuilds the same history. The transcript keeps the planning. `model_switch` records carry a `role`.
+- Starting a new or saved session goes back to the session's model. `/reload` keeps it and plans with the planner again if plan mode is still on. If the planner cannot load, the session's own model plans, with a warning.
+- `quack eval --planner <provider/model>` runs each task in plan mode on the planner and then accepts the plan, so the split can be compared with either model alone (the result file and `scripts/eval-table.py` carry a `planner` column). Tested with the mock server in `core/tests/planner.rs` and `exec/tests/eval.rs`; not yet measured live.
+
 ### Loop guards
 
 - `max_steps_per_turn` (default 100), configurable. When reached, the loop pauses and asks the user whether to continue.

@@ -1,0 +1,9 @@
+{
+  "coupons": [
+    { "code": "WELCOME10", "kind": "percent", "value": "10" },
+    { "code": "FLAT5", "kind": "fixed", "value": "5.00", "min_subtotal": "25.00" },
+    { "code": "SUMMER40", "kind": "percent", "value": "40", "category": "home" },
+    { "code": "STATIONERY15", "kind": "percent", "value": "15", "category": "stationery" },
+    { "code": "TEA2", "kind": "bogo", "value": "TEA-01" }
+  ]
+}

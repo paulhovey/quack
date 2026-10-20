@@ -1,0 +1,9 @@
+[package]
+name = "calc"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+# Not part of any enclosing workspace.
+[workspace]

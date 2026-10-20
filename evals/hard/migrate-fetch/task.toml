@@ -1,0 +1,6 @@
+category = "refactor"
+prompt = "Change `weather.net.fetch` to take its settings as one object: `fetch(url, *, options=None)`, where `options` is a new frozen dataclass `FetchOptions(timeout=10.0, retries=2, headers={})` in weather/net.py (None means the defaults). Remove the old `timeout` and `retries` parameters, and update every caller in the project so that each keeps exactly the timeout and retries it uses today."
+requires = ["python"]
+
+[[check]]
+command = "{python} -m unittest discover -s tests -t ."

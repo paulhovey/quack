@@ -12,23 +12,4 @@ How to work:
 
 Environment:
 - Operating system: {{ os }}; shell for commands: {{ shell }}. Write commands for {{ shell }}.
-- Workspace root: {{ workspace_root }}{% if git_branch %} (git branch: {{ git_branch }}){% endif %}
-- Date: {{ date }}
-{% if folder_listing %}
-Top-level files:
-{{ folder_listing }}
-{% endif %}
-{% if instructions %}
-Project instructions from the user (follow them; they take precedence over the guidance above):
-
-{{ instructions }}
-{% endif %}
-{% if skills %}
-Skills (load one with the `skill` tool when the task matches its description, then follow it):
-{{ skills }}
-{% endif %}
-{% if memory_index %}
-Memory from earlier sessions (read a note with the `memory` tool when it looks relevant):
-
-{{ memory_index }}
-{% endif %}
+- The first user message of a session starts with its workspace, the date and the project's instructions, in a <context> block. That block comes from quack, not from the user's typing.

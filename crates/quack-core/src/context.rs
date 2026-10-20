@@ -254,7 +254,7 @@ pub(crate) fn report(s: &Setup, history: Option<&[Message]>) -> ContextReport {
     let mut segments = vec![
         ContextSegment {
             name: "System prompt".into(),
-            tokens: tok(&s.system),
+            tokens: tok(&s.system) + tok(&s.session_context),
             detail: format!("profile {}, with instructions", s.profile.id),
         },
         ContextSegment {

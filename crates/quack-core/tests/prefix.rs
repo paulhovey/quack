@@ -318,3 +318,56 @@ async fn hashline_edits_keep_the_prefix_too() {
         .await;
     }
 }
+
+/// The system prompt and tools don't depend on the workspace: what does (the path, the
+/// files, AGENTS.md) rides at the start of the first user message, so a server's prompt
+/// cache reuses the system prompt and tool block across sessions and projects.
+#[tokio::test]
+async fn system_prompt_and_tools_are_the_same_in_every_workspace() {
+    for profile in profiles() {
+        let mut bodies = Vec::new();
+        for project in ["alpha", "beta"] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/v1/chat/completions"))
+                .respond_with(text("ok"))
+                .mount(&server)
+                .await;
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let ws = tmp.path().join("ws");
+            std::fs::create_dir_all(&ws).expect("mkdir");
+            std::fs::write(ws.join("AGENTS.md"), format!("Use tabs in {project}.\n")).expect("md");
+            std::fs::write(ws.join(format!("{project}.py")), "x = 1\n").expect("file");
+            let loaded = configure(tmp.path(), &server.uri(), &profile, "");
+            let mut engine = Engine::spawn(Arc::new(loaded));
+            turn(&mut engine, "hello").await;
+            engine.shutdown().await;
+            let requests = server.received_requests().await.unwrap_or_default();
+            let body: Value = requests
+                .iter()
+                .find_map(|r| serde_json::from_slice(&r.body).ok())
+                .expect("a chat request");
+            bodies.push((project, body));
+        }
+        let [(_, a), (_, b)] = &bodies[..] else {
+            unreachable!()
+        };
+        assert_eq!(a["messages"][0]["role"], "system", "{profile}");
+        assert_eq!(
+            a["messages"][0], b["messages"][0],
+            "{profile}: the system prompt changed with the workspace"
+        );
+        assert_eq!(a["tools"], b["tools"], "{profile}: the tools changed");
+        for (project, body) in &bodies {
+            let first = body["messages"][1]["content"].as_str().expect("user");
+            assert!(first.starts_with("<context>"), "{profile}: {first}");
+            assert!(first.ends_with("</context>\n\nhello"), "{profile}: {first}");
+            assert!(
+                first.contains(&format!("Use tabs in {project}.")),
+                "{profile}"
+            );
+            assert!(first.contains(&format!("{project}.py")), "{profile}");
+            assert!(!first.contains("{{") && !first.contains("{%"), "{profile}");
+        }
+    }
+}

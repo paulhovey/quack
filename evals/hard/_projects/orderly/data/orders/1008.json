@@ -1,0 +1,25 @@
+{
+  "coupons": [
+    "WELCOME10"
+  ],
+  "customer": "gus@example.com",
+  "format": 1,
+  "grand_total": "23.17",
+  "id": "1008",
+  "lines": [
+    {
+      "qty": 1,
+      "sku": "BOOK-02",
+      "unit_price": "18.75"
+    },
+    {
+      "qty": 1,
+      "sku": "TEA-01",
+      "unit_price": "6.25"
+    }
+  ],
+  "placed_on": "2026-10-16",
+  "region": "US-NY",
+  "shipped_on": null,
+  "state": "placed"
+}

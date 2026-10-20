@@ -1,0 +1,10 @@
+category = "feature"
+prompt = """Let the shop ship part of an order. `Shop.ship(order_id, day=None, skus=None)` ships the order's lines with those SKUs, or every line not shipped yet when `skus` is None. An order with some but not all lines shipped is in a new state, `partially_shipped`; it becomes `shipped` once every line has gone. Each call emits one `order_shipped` event, whose data gets a new `lines` entry: the order lines that call shipped. Only those lines come off the shelf, and each shipment sends its own shipped email. Shipping a SKU the order doesn't have, or one already shipped, raises ValueError. A partially shipped order can't be cancelled.
+
+The order files must remember which lines have shipped: give those lines `"shipped": true` and leave the key out for the others, so files saved before this change load as they are."""
+requires = ["python"]
+base = "../_projects/orderly"
+timeout_secs = 900
+
+[[check]]
+command = "{python} -m unittest discover -s tests -t ."

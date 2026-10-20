@@ -15,24 +15,4 @@ You are a coding agent working in the user's terminal. You help with software en
 
 ## Environment
 - OS: {{ os }}; shell: {{ shell }}
-- Workspace: {{ workspace_root }}{% if git_branch %} (git branch: {{ git_branch }}){% endif %}
-- Date: {{ date }}
-{% if folder_listing %}
-Workspace top level:
-{{ folder_listing }}
-{% endif %}
-{% if instructions %}
-## Project instructions
-From the user; they take precedence over the guidance above.
-
-{{ instructions }}
-{% endif %}
-{% if skills %}
-## Skills
-Load a skill with the `skill` tool when the task matches it.
-{{ skills }}
-{% endif %}
-{% if memory_index %}
-## Memory
-{{ memory_index }}
-{% endif %}
+- The first user message begins with a <context> block giving the workspace, the date and the project's instructions.

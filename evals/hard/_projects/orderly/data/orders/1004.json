@@ -1,0 +1,25 @@
+{
+  "coupons": [
+    "TEA2"
+  ],
+  "customer": "di@example.com",
+  "format": 1,
+  "grand_total": "26.01",
+  "id": "1004",
+  "lines": [
+    {
+      "qty": 4,
+      "sku": "TEA-01",
+      "unit_price": "6.25"
+    },
+    {
+      "qty": 1,
+      "sku": "MUG-02",
+      "unit_price": "12.00"
+    }
+  ],
+  "placed_on": "2026-10-16",
+  "region": "DE",
+  "shipped_on": null,
+  "state": "placed"
+}

@@ -18,6 +18,7 @@ use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use crate::handoff;
 use crate::hooks::{Hooks, Sink, Target};
 use crate::session::{self, Resume, SharedLog};
 use crate::startup::{self, Setup, StartupOutcome};
@@ -81,6 +82,8 @@ enum Queued {
     Compact(Option<String>),
     /// `/reload`, or a trust decision.
     Reload,
+    /// `/plan accept`, into this mode.
+    Accept(String),
 }
 
 /// The conversation once a model is ready.
@@ -92,6 +95,17 @@ struct Conversation {
     nested: Arc<Nested>,
     /// `None` while a turn task owns it.
     history: Option<Vec<Message>>,
+    /// The session's own setup, while plan mode uses the `[model] planner`'s.
+    editor: Option<Arc<Setup>>,
+    /// History length at the planner's first turn: its messages come after it.
+    plan_start: Option<usize>,
+}
+
+/// Which slot a model switch fills: the session's model, or the planner in plan mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Role {
+    Session,
+    Planner,
 }
 
 /// Nested instruction tracking for a session: the startup chain, plus any nested file
@@ -116,6 +130,8 @@ pub struct Engine {
     config_tx: watch::Sender<Arc<Loaded>>,
     /// A reload is reading files or rebuilding the session; turns wait for it.
     reloading: bool,
+    /// The planner's setup is being built; turns wait for it.
+    switching: bool,
     tx: broadcast::Sender<Event>,
     session: SessionInfo,
     started: bool,
@@ -131,7 +147,7 @@ pub struct Engine {
     log: Option<SharedLog>,
     turns: u32,
     title: Option<String>,
-    switch_tx: Option<mpsc::Sender<Result<Setup, String>>>,
+    switch_tx: Option<mpsc::Sender<(Role, Result<Setup, String>)>>,
     /// A mode set before startup finished, applied once a model is ready.
     pending_mode: Option<String>,
     /// Told to the model at the start of the next turn, e.g. that the user undid an edit.
@@ -170,6 +186,7 @@ impl Engine {
             config,
             config_tx,
             reloading: false,
+            switching: false,
             tx: tx.clone(),
             session,
             started: false,
@@ -227,7 +244,7 @@ impl Engine {
             None,
         ));
         let (done_tx, mut done_rx) = mpsc::channel::<(TurnId, Vec<Message>)>(8);
-        let (switch_tx, mut switch_rx) = mpsc::channel::<Result<Setup, String>>(2);
+        let (switch_tx, mut switch_rx) = mpsc::channel::<(Role, Result<Setup, String>)>(2);
         self.switch_tx = Some(switch_tx);
         let (reload_tx, mut reload_rx) = mpsc::channel::<Reload>(2);
 
@@ -239,7 +256,13 @@ impl Engine {
                     self.emit(Event::StartupComplete);
                     self.next_queued(&done_tx, &reload_tx);
                 }
-                Some(result) = switch_rx.recv() => self.on_switched(result),
+                Some((role, result)) = switch_rx.recv() => {
+                    match role {
+                        Role::Session => self.on_switched(result),
+                        Role::Planner => self.on_planner(result),
+                    }
+                    self.next_queued(&done_tx, &reload_tx);
+                }
                 Some(step) = reload_rx.recv() => {
                     match step {
                         Reload::Read(result) => self.on_reread(result, &reload_tx).await,
@@ -383,6 +406,8 @@ impl Engine {
             nested: nested(&self.config, &setup, &history),
             setup: Arc::new(setup),
             history: Some(history),
+            editor: None,
+            plan_start: None,
         });
         match self.pending_mode.take() {
             Some(mode) => self.set_mode(&mode),
@@ -444,6 +469,8 @@ impl Engine {
 
     /// Replace the conversation with a saved session or an empty one, keeping the model.
     fn switch_session(&mut self, target: Option<SessionId>) {
+        // The new session starts outside plan mode, on the session's own model.
+        self.restore_editor();
         let Some(model) = self.convo.as_ref().map(|c| c.setup.model_ref.clone()) else {
             return self.warn("no model is ready; sessions open once one is".into());
         };
@@ -518,6 +545,7 @@ impl Engine {
                 }
             },
         };
+        let was_plan = c.perms.lock().is_ok_and(|p| p.plan);
         if let Ok(mut p) = c.perms.lock() {
             match parsed {
                 None => p.plan = true,
@@ -539,6 +567,13 @@ impl Engine {
                     p.plan = false;
                 }
             }
+        }
+        match (was_plan, parsed.is_none()) {
+            (false, true) => self.start_planner(),
+            (true, false) => {
+                self.restore_editor();
+            }
+            _ => {}
         }
         self.emit_mode();
     }
@@ -816,14 +851,20 @@ impl Engine {
             Ok(None) => {}
             Err(e) => self.warn(format!("cannot save the default model: {e}")),
         }
+        self.switch_to(Role::Session, added.id, model);
+    }
+
+    /// Build the setup for `provider/model` in the background; `on_switched` (or
+    /// `on_planner`) gets it.
+    fn switch_to(&self, role: Role, provider: String, model: String) {
         if let Some(done) = self.switch_tx.clone() {
             let config = self.config.clone();
             let tx = self.tx.clone();
             let mcp = self.mcp.clone();
             let lsp = self.lsp.clone();
             tokio::spawn(async move {
-                let r = startup::switch(config, tx, mcp, lsp, added.id, model).await;
-                let _ = done.send(r).await;
+                let r = startup::switch(config, tx, mcp, lsp, provider, model).await;
+                let _ = done.send((role, r)).await;
             });
         }
     }
@@ -890,20 +931,12 @@ impl Engine {
         ));
         let config = Arc::new(config);
         self.config = config.clone();
-        self.config_tx.send_replace(config.clone());
-        if let Some(done) = self.switch_tx.clone() {
-            let tx = self.tx.clone();
-            let mcp = self.mcp.clone();
-            let lsp = self.lsp.clone();
-            tokio::spawn(async move {
-                let r = startup::switch(config, tx, mcp, lsp, provider, model).await;
-                let _ = done.send(r).await;
-            });
-        }
+        self.config_tx.send_replace(config);
+        self.switch_to(Role::Session, provider, model);
     }
 
     fn on_switched(&mut self, result: Result<Setup, String>) {
-        let setup = match result {
+        let mut setup = match result {
             Ok(s) => s,
             Err(e) => {
                 self.emit(Event::Error {
@@ -929,14 +962,19 @@ impl Engine {
             serde_json::json!({ "to": setup.model_ref, "profile": setup.profile.id }),
         );
         match &mut self.convo {
-            // Keep the history and the session's approvals.
-            Some(c) => c.setup = Arc::new(setup),
+            // Keep the history, the plan and the session's approvals.
+            Some(c) => {
+                setup.tool_ctx.plan = c.setup.tool_ctx.plan.clone();
+                c.setup = Arc::new(setup);
+            }
             None => {
                 self.convo = Some(Conversation {
                     perms: Arc::new(Mutex::new(setup.permissions.clone())),
                     nested: nested(&self.config, &setup, &[]),
                     setup: Arc::new(setup),
                     history: Some(Vec::new()),
+                    editor: None,
+                    plan_start: None,
                 });
                 self.problem = None;
             }
@@ -944,6 +982,122 @@ impl Engine {
         self.emit(Event::SessionConfigured {
             session: self.session.clone(),
         });
+    }
+
+    /// Plan mode began: plan with the `[model] planner`, when one is set and it is not
+    /// the model in use already.
+    fn start_planner(&mut self) {
+        let planner = self.config.settings.model.planner.clone();
+        let Some(c) = &self.convo else { return };
+        if planner.is_empty() || c.editor.is_some() || planner == c.setup.model_ref {
+            return;
+        }
+        let Some((provider, model)) = planner.split_once('/') else {
+            return self.warn(format!(
+                "model.planner `{planner}` is not <provider>/<model>; planning with {}",
+                c.setup.model_ref
+            ));
+        };
+        self.switching = true;
+        self.switch_to(Role::Planner, provider.to_owned(), model.to_owned());
+    }
+
+    /// The planner's setup is ready. The session's own setup waits in `editor` until plan
+    /// mode ends; the todo list is shared, so the plan carries over.
+    fn on_planner(&mut self, result: Result<Setup, String>) {
+        self.switching = false;
+        let mut setup = match result {
+            Ok(s) => s,
+            Err(e) => {
+                return self.warn(format!(
+                    "cannot plan with {}: {e}; planning with the session's model",
+                    self.config.settings.model.planner
+                ));
+            }
+        };
+        let Some(c) = &mut self.convo else { return };
+        // Plan mode ended while the planner was loading.
+        if c.editor.is_some() || !c.perms.lock().is_ok_and(|p| p.plan) {
+            return;
+        }
+        setup.tool_ctx.plan = c.setup.tool_ctx.plan.clone();
+        c.editor = Some(std::mem::replace(&mut c.setup, Arc::new(setup)));
+        c.plan_start = None;
+        self.announce_model("planner");
+    }
+
+    /// Plan mode ended: go back to the session's own model. Returns where the planner's
+    /// messages start in the history, when it wrote any.
+    fn restore_editor(&mut self) -> Option<usize> {
+        let c = self.convo.as_mut()?;
+        let editor = c.editor.take()?;
+        c.setup = editor;
+        let start = c.plan_start.take();
+        self.announce_model("session");
+        start
+    }
+
+    /// Tell the clients and the log which model the conversation now uses.
+    fn announce_model(&mut self, role: &str) {
+        let Some(setup) = self.convo.as_ref().map(|c| c.setup.clone()) else {
+            return;
+        };
+        self.session.model = Some(setup.model_ref.clone());
+        self.session.profile = setup.profile.id.clone();
+        session::record(
+            self.log.as_ref(),
+            "model_switch",
+            serde_json::json!({ "to": setup.model_ref, "profile": setup.profile.id, "role": role }),
+        );
+        self.emit(Event::SessionConfigured {
+            session: self.session.clone(),
+        });
+    }
+
+    /// `/plan accept`: leave plan mode for `mode` and carry out the plan. After a planner,
+    /// its messages give way to one brief, so the session's model reads only that on top of
+    /// the history it already has cached.
+    fn accept_plan(&mut self, mode: &str, done: mpsc::Sender<(TurnId, Vec<Message>)>) {
+        if serde_json::from_value::<PermissionMode>(serde_json::Value::from(mode)).is_err() {
+            return self.warn(format!(
+                "cannot carry out the plan in `{mode}`; use read-only, ask, auto-edit, full-auto or yolo"
+            ));
+        }
+        let Some(c) = &mut self.convo else {
+            return self.warn("no model is ready yet".into());
+        };
+        if !c.perms.lock().is_ok_and(|p| p.plan) {
+            return self.warn("not in plan mode; /plan starts it".into());
+        }
+        let brief = match (&c.editor, c.plan_start, c.history.as_mut()) {
+            (Some(_), Some(start), Some(history)) => {
+                let planner = &c.setup;
+                let start = start.min(history.len());
+                let note = planner
+                    .profile
+                    .plan_prompt
+                    .as_deref()
+                    .unwrap_or(PLAN_PROMPT);
+                let ask = planner.surface.name_of("ask_user");
+                let text = handoff::brief(&history[start..], note, ask, &planner.model_ref);
+                history.truncate(start);
+                Some((start, planner.model_ref.clone(), text))
+            }
+            _ => None,
+        };
+        self.set_mode(mode);
+        let text = match brief {
+            Some((start, planner, text)) => {
+                session::record(
+                    self.log.as_ref(),
+                    "handoff",
+                    serde_json::json!({ "to": start, "from": planner }),
+                );
+                text
+            }
+            None => "Carry out the plan above.".to_owned(),
+        };
+        self.start_turn(vec![InputItem::text(text)], done);
     }
 
     fn warn(&self, message: String) {
@@ -1001,6 +1155,11 @@ impl Engine {
                 if self.reloading {
                     self.emit(Event::TurnQueued {
                         waiting_for: "the config reload".into(),
+                    });
+                    self.queued.push_back(Queued::Turn(items));
+                } else if self.switching {
+                    self.emit(Event::TurnQueued {
+                        waiting_for: "the planner model".into(),
                     });
                     self.queued.push_back(Queued::Turn(items));
                 } else if !self.started {
@@ -1089,15 +1248,8 @@ impl Engine {
             Op::SetModel { provider, model } => {
                 if self.running.is_some() {
                     self.warn("wait for the current turn to finish before switching models".into());
-                } else if let Some(done) = self.switch_tx.clone() {
-                    let config = self.config.clone();
-                    let tx = self.tx.clone();
-                    let mcp = self.mcp.clone();
-                    let lsp = self.lsp.clone();
-                    tokio::spawn(async move {
-                        let r = startup::switch(config, tx, mcp, lsp, provider.0, model.0).await;
-                        let _ = done.send(r).await;
-                    });
+                } else {
+                    self.switch_to(Role::Session, provider.0, model.0);
                 }
             }
             // A client may send these the moment it sees `TurnComplete`, before the turn
@@ -1186,6 +1338,10 @@ impl Engine {
             } => self.add_provider(&id, &base_url, api.as_deref(), model),
             Op::SetPermissionMode { mode } if !self.started => self.pending_mode = Some(mode),
             Op::SetPermissionMode { mode } => self.set_mode(&mode),
+            Op::AcceptPlan { mode } => {
+                self.queued.push_back(Queued::Accept(mode));
+                self.next_queued(done, reload);
+            }
             Op::DeleteMemory { scope, name } => {
                 let store = crate::env::memory_store(&self.config);
                 let result = Scope::parse(&scope)
@@ -1288,12 +1444,13 @@ impl Engine {
         done: &mpsc::Sender<(TurnId, Vec<Message>)>,
         reload: &mpsc::Sender<Reload>,
     ) {
-        while self.started && self.running.is_none() && !self.reloading {
+        while self.started && self.running.is_none() && !self.reloading && !self.switching {
             match self.queued.pop_front() {
                 Some(Queued::Turn(items)) => self.start_turn(items, done.clone()),
                 Some(Queued::Switch(target)) => self.switch_session(target),
                 Some(Queued::Compact(focus)) => self.start_compact(focus, done.clone()),
                 Some(Queued::Reload) => self.begin_reload(reload.clone()),
+                Some(Queued::Accept(mode)) => self.accept_plan(&mode, done.clone()),
                 None => break,
             }
         }
@@ -1342,10 +1499,11 @@ impl Engine {
         self.start_lsp().await;
         self.load_hooks().await;
         self.emit(Event::ConfigReloaded);
-        let keep = self
-            .convo
-            .as_ref()
-            .map(|c| (c.setup.provider.id.clone(), c.setup.model.id.clone()));
+        // The session's own model, also while the planner is in use.
+        let keep = self.convo.as_ref().map(|c| {
+            let s = c.editor.as_ref().unwrap_or(&c.setup);
+            (s.provider.id.clone(), s.model.id.clone())
+        });
         let tx = self.tx.clone();
         let mcp = self.mcp.clone();
         let lsp = self.lsp.clone();
@@ -1393,6 +1551,8 @@ impl Engine {
             nested: nested(&self.config, &setup, &history),
             setup: Arc::new(setup),
             history: Some(history),
+            editor: None,
+            plan_start: None,
         });
         session::record(
             self.log.as_ref(),
@@ -1403,6 +1563,13 @@ impl Engine {
             session: self.session.clone(),
         });
         self.emit_mode();
+        if self
+            .convo
+            .as_ref()
+            .is_some_and(|c| c.perms.lock().is_ok_and(|p| p.plan))
+        {
+            self.start_planner();
+        }
     }
 
     /// Run `/compact` like a turn: it owns the history until it is done and Esc stops it.
@@ -1481,6 +1648,9 @@ impl Engine {
         let Some(history) = convo.history.take() else {
             return;
         };
+        if convo.editor.is_some() {
+            convo.plan_start.get_or_insert(history.len());
+        }
         let setup = convo.setup.clone();
         let perms = convo.perms.clone();
         let nested = convo.nested.clone();
@@ -1660,6 +1830,7 @@ fn op_name(op: &Op) -> &'static str {
         Op::RestartMcp { .. } => "restart_mcp",
         Op::AddProvider { .. } => "add_provider",
         Op::SetPermissionMode { .. } => "set_permission_mode",
+        Op::AcceptPlan { .. } => "accept_plan",
         Op::DeleteMemory { .. } => "delete_memory",
         Op::SetTitle { .. } => "set_title",
         Op::SaveSetting { .. } => "save_setting",

@@ -30,7 +30,7 @@ cargo run -q -p quack-cli -- config schema --dir defaults/schemas   # after chan
   - `scripts/no-egress.sh` runs in a loopback-only network namespace with `strace -e connect` (Linux).
   - `scripts/first-frame.sh <ms>` checks the startup budget.
   - `scripts/local-server-ci.sh` and `scripts/local-server-turn.sh` run a real llama.cpp or Ollama turn on CPU.
-  - `scripts/eval-matrix.sh` and `scripts/eval-table.py` run and compare `quack eval` across models and profiles (see "Evaluating new models").
+  - `scripts/eval-matrix.sh`, `scripts/eval-table.py` and `scripts/eval-compare.py` run and compare `quack eval` across models and profiles (see "Evaluating new models").
 
 ## Architecture
 
@@ -57,6 +57,7 @@ There is one engine and three in-process clients, connected by an Op/Event proto
 - **Engine state and Op handling:** `quack-core/src/engine.rs`. Adding an `Op` also means adding it to `op_name` (an exhaustive match). Adding an `Event` needs no client changes, because clients match with a wildcard.
 - **Edit formats:** `[tools] edit_format` (or the profile's `[defaults] edit_format`) decides which edit tool exists: `edit`, `edit_hashline`, `apply_patch` (`quack-tools/src/patch.rs`), `edit_blocks` (`blocks.rs`), or none (`whole_file`). Each tool's `available()` checks `ToolCtx.edit_format`. A tool that changes several files returns `Subject::Edits`, and the engine gives each file an undo point; `Subject::edited()` lists them.
 - **Outlines:** `quack-tools/src/outline.rs` (tree-sitter, behind `lang-common`) serves the `index` tool, outlined `read`s and pruning rule 4. `cargo test -p <crate>` alone builds without `lang-common`; outline tests are gated on the feature, and engine tests check `outline::supported()` first. The workspace build enables it through `quack-cli`.
+- **Planner split:** with `[model] planner`, plan mode swaps `Conversation.setup` for the planner's, keeping the session's in `editor`. `accept_plan` in `engine.rs` replaces the planner's messages with one brief (`handoff.rs`) and logs a `handoff` record. Never let two models take turns on one history: each switch re-sends it all uncached.
 - **Session log:** `quack-core/src/session.rs`. The header comment lists the record kinds (`message`, `tool`, `usage`, `prune`, `compaction`, `rewind`, ...). `replay` rebuilds history from them and skips kinds it doesn't know, so new kinds are backwards compatible. Anything that must survive `/resume` has to be written as a record.
 - **Context:** `quack-core/src/context.rs` handles fitting, pruning and compaction, `threshold()` and `report()` (the `/context` data). The algorithms are in `quack-context`.
 - **TUI:**
@@ -70,7 +71,9 @@ There is one engine and three in-process clients, connected by an Op/Event proto
 
 - A profile is a folder in `defaults/profiles.d/` (`profile.toml` + `system.md`). Prompts must be original text; `source` says what the tool names and shapes follow. Family profiles ship with empty `[match]` lists until `quack eval` shows they beat `generic`.
 - `quack eval` (`quack-exec/src/eval.rs`) runs `evals/tasks/*`. **Every task calls the model**, so running it costs money on a paid key; prove runner changes with `quack-exec/tests/eval.rs` (mock server) instead.
-- A new task needs `task.toml`, `repo/` and `solution/` (files, `ANSWER`, `DELETE`). `cargo test -p quack-exec --test suite` checks that it fails as given and passes when solved. Commands use `{python}` and stay portable (no shell quoting tricks: put logic in a `check.py`).
+- Two suites: `evals/tasks` (quick; every model passes it, so it compares cost and catches regressions) and `evals/hard` (`--suite evals/hard`; 10–30 steps a task, meant to separate setups). Hard tasks keep tests in `hidden/`, copied in only after the run, and most share `evals/hard/_projects/orderly` through `base`, with `repo/` holding only what the task changes. Their `solution/` files are copies of orderly files, so after changing orderly rerun the suite test.
+- Every failed run gets a `failure` label (`Failure` in `eval.rs`), worked out from the files it changed compared with those `solution/` changes. Keep `solution/` to the files a fix needs, or the labels go wrong.
+- A new task needs `task.toml`, `repo/` (or `base`) and `solution/` (files, `ANSWER`, `DELETE`). `cargo test -p quack-exec --test suite` checks that it fails as given and passes when solved, in both suites. Commands use `{python}` and stay portable (no shell quoting tricks: put logic in a `check.py`).
 - Check behaviour, not exact text. A `contains` check over several lines fails a correct fix that adds a comment (this happened to `big-file-edit`); import the module in a `check.py` instead.
 
 ### Evaluating new models (live calls: costs money, so say so first)
@@ -79,16 +82,37 @@ There is one engine and three in-process clients, connected by an Op/Event proto
 2. **Smoke-test one cheap task** to prove the key, the model id and the cost column: `QUACK_DEFAULTS_DIR=defaults target/debug/quack eval -m charm-hyper/<model> --profile generic --tasks fix-typo --out /tmp/smoke.json`.
 3. **Run the matrix**: each model with `generic` and its family profile (Qwen → `qwen-code`; GLM, DeepSeek, MiniMax, MiMo → `cc-style`; Kimi → `kimi-code`; gpt-oss → `codex`):
    `scripts/eval-matrix.sh charm-hyper/glm-5.3:generic,cc-style charm-hyper/kimi-k3:generic,kimi-code ...`
-   Models run in parallel; `EVAL_ARGS="--repeat 3"` or `--tasks a,b` pass through. It ends with `scripts/eval-table.py evals/results/<date>`, which prints one row per model and profile.
-4. **Read the signals, not the pass rate**, which saturates on this suite:
+   Models run in parallel; `EVAL_ARGS="--suite evals/hard"` (the suite that separates setups; several times the cost of `tasks`), `"--repeat 3"`, `--tasks a,b` or `--planner charm-hyper/kimi-k3` (plan with that model, carry out with the `-m` one; compare it against both models alone) pass through. It ends with `scripts/eval-table.py evals/results/<date>`, which prints one row per model and profile.
+4. **Read the signals.** The pass rate saturates on `evals/tasks`; on `evals/hard` it should not:
+   - **failure labels** (`eval-table.py` lists them per setup): `bad-calls` and `edit-failed` point at the profile or edit tool, `untested` at the prompt's advice to run tests, `wrong-files`/`missed-files` at search and navigation, `wrong-fix` at the model.
    - **parse failures**: the profile's tool names or argument shapes don't suit the model. Any non-zero count is a profile bug.
    - **edit failures**: the edit tool's description or format confuses the model.
    - **steps and prompt tokens**: each step re-sends the whole context, so they decide the cost.
    - **cached %**: a low share means the request prefix is changing somewhere it shouldn't.
    - **tool errors** count shell commands that exit non-zero (a `grep` with no match, `pytest` finding no tests), so they run high for shell-first profiles like `codex`. Look at a session before reading much into them.
 5. **Look at a run before blaming the model.** Rerun the task with `--keep`. The session log is in `~/.cache/quack/eval/<pid>/<task>-<run>/data/sessions/*/*/events.jsonl`. Fix false negatives in the check first.
-6. **Turning a profile on**: a family profile gets `[match]` globs only when it beats `generic` at `--repeat 3`, with no parse failures and fewer edit failures or steps at the same pass rate. One run per task is noise (±5–10% on steps).
+6. **Turning a profile on**: a family profile gets `[match]` globs only when it beats `generic` at `--repeat 3`, with no parse failures and fewer edit failures or steps at the same pass rate. One run per task is noise (±5–10% on steps). Decide with `scripts/eval-compare.py generic.json,generic-2.json family.json,...`: it pairs the setups task by task, and only a difference whose 95% interval leaves out zero counts as "clear".
 7. **Record the result**: a dated line in `docs/plan/roadmap.md` (models, profiles, total cost, the decision). The baseline is 2026-10-19: 8 models × 2 profiles on Charm Hyper, all 21/21, $2.42 in total, and no family profile clearly ahead of `generic`.
+
+### Calibrating and tuning (live calls: costs money, so say so first and give the estimate)
+
+`evals/hard` has not been run live yet, so its difficulty is a guess. Calibrate the suite once before trusting any comparison on it, and again after adding or changing tasks.
+
+1. **Calibrate the suite.** Run one cheap and one strong model with `generic`: `EVAL_ARGS="--suite evals/hard" scripts/eval-matrix.sh charm-hyper/deepseek-v4.1-flash:generic charm-hyper/kimi-k3:generic`. Expect about $1–2 per model per pass, so roughly $3 for both; check the cost column after the first few tasks. For each task, look at the result:
+   - **Both models pass:** the task is too easy and tells you nothing. Make it harder (move the symptom further from the cause, or add a second file that must change), or replace it.
+   - **Both fail:** read one session (`--keep`, step 5 above) before blaming the models. A false negative in a hidden test or check is the usual cause. If the task really is too hard, cut it down.
+   - **They split:** keep it. Aim for the strong model at about 60–80% and the cheap one clearly lower.
+
+   Then rerun `cargo test -p quack-exec --test suite`, update the task table and the calibration notes in `evals/hard/README.md`, and add a dated line to the roadmap.
+2. **Tuning for a new model.** Change one setting at a time, in this order, because each is cheaper to change and more likely to matter than the next. For every comparison, write the decision rule down first (for example: "switch to hashline if the pass rate isn't clearly worse and edit failures are clearly lower"). Then run both sides with `--suite evals/hard --repeat 3` and decide with `scripts/eval-compare.py`. With no clear difference, keep the simpler or current setting.
+   1. **Profile:** `generic` against the family profile (step 3 above). Read the failure labels first. `bad-calls` or parse failures mean the tool shapes are wrong for the model, and you fix that in the profile before measuring anything else.
+   2. **Edit format:** try this when `edit-failed` or edit failures stand out. Use `-c tools.edit_format=<str_replace|hashline|apply_patch|search_replace_blocks|whole_file>`. Once the comparison says so, the profile's `[defaults] edit_format` changes to match.
+   3. **Prompt advice:** change `system.md`/`context.md` when `untested` stands out (the model doesn't run the tests) or `wrong-files`/`missed-files` stands out (it doesn't search). Keep `prefix.rs` passing.
+   4. **Reasoning effort and sampling:** set `reasoning.effort` or `sampling` on the model's entry in its provider file, in a user-layer copy, not in `defaults/`, until the comparison decides.
+   5. **Planner:** use `--planner <strong model>` with `-m <cheap model>`, and compare it against both models alone. It pays off only if it gets close to the strong model's pass rate for clearly less cost.
+3. **Keep variants apart.** Results are named `hard-<model>-<profile>.json`, so a `-c` or provider-file variant would overwrite the baseline. Run variants with `quack eval` directly and pass `--out evals/results/<date>/hard-<model>-<profile>-<variant>.json`. Pass repeats as `--repeat 3` instead of rerunning, so one file holds all the runs.
+4. **Budget.** A `--repeat 3` comparison costs about 6 hard-suite passes, roughly $6–12 for one model on today's Charm prices. Measure step 2.1 for every new model. Do steps 2.2–2.5 only when the failure labels point at them, and test changes on `--tasks a,b` (the tasks that showed the problem) before running the whole suite.
+5. **Apply the result.** Turn the winning profile on with `[match]` globs (step 6 above), set its `[defaults]`, and record what you tried, the cost and the decision in the roadmap, including comparisons that showed no clear difference, so nobody pays to run them again.
 
 ### Adding a slash command
 
@@ -104,7 +128,7 @@ These are the project's core promises; tests and CI enforce them:
 - **No built-ins**: no provider ids, base URLs or MCP commands are compiled into the binary. Everything is TOML under `defaults/`, loaded as a layer beneath system, user and project config. Startup must survive the deletion of any single default file (`removing_any_default_file_leaves_startup_clean` in `quack-core/tests/invariants.rs`).
 - **No implicit egress**: the binary contacts only what is configured. This is enforced by an in-process recording proxy test (`no_egress_beyond_the_configured_provider`) and by `scripts/no-egress.sh`. Never add a network call outside the configured providers and MCP servers.
 - **First frame under 50 ms**: the Linux CI budget, measured with the hidden `--trace-startup` flag.
-- **Prefix stability**: the system prompt and tool block stay byte-identical across turns except at epoch boundaries, so server KV caches stay warm. `crates/quack-core/tests/prefix.rs` checks it for every shipped profile: each request must extend the one before. Don't put anything that changes per turn (time, counters, the plan) into the system prompt. Per-request extras ride on the last message, the way the plan reminder does in `stream_step`. Resume fidelity (the request after a resume equals the live one byte for byte) is tested in `invariants.rs`.
+- **Prefix stability**: the system prompt and tool block stay byte-identical across turns except at epoch boundaries, so server KV caches stay warm. `crates/quack-core/tests/prefix.rs` checks it for every shipped profile: each request must extend the one before. Don't put anything that changes per turn (time, counters, the plan) into the system prompt, and nothing that changes per session or project either (workspace, date, AGENTS.md, memory): that belongs in the profile's `context.md`, which goes at the start of the first user message, so the system prompt and tools are cached across sessions too. Per-request extras ride on the last message, the way the plan reminder does in `stream_step`. Resume fidelity (the request after a resume equals the live one byte for byte) is tested in `invariants.rs`.
 
 ## Conventions and gotchas
 

@@ -39,7 +39,7 @@ profiles.d/
 └── qwen-code/
     ├── profile.toml
     ├── system.md               # minijinja template
-    ├── env.md                  # optional: environment block template
+    ├── context.md              # optional: per-session context for the first user message
     └── tools/
         ├── read_file.md        # tool description shown to the model
         ├── edit.md
@@ -137,7 +137,7 @@ Parameter schemas shown to the model are generated from the internal tool's sche
 
 ### Templates
 
-The system prompt and env templates use `minijinja` and these variables:
+The system prompt and context templates use `minijinja` and these variables:
 
 | Variable | Notes |
 |---|---|
@@ -185,9 +185,10 @@ Profiles are judged by measurement, not opinion. The eval suite ([13](13-testing
 - **Tool surface**: `[[tools]]` renames tools and parameters and may replace descriptions (inline, or a `.md` file in the profile directory). Internal tools a profile does not list are still offered under their internal names, unless the profile sets `exclusive = true` (the `codex` profile does: shell, apply_patch, update_plan, memory, skill). A mapping onto a tool that is merely off this session (`lsp` without servers, `skill` without skills, another edit format's tool) is skipped without a warning.
 - **Parameters**: `transform` is `abs_to_workspace`, `zero_to_one_based`, `one_to_zero_based`, `join_lines` (an array of lines becomes one string; shown to the model as an array) or `argv` (an argument list becomes one command line; `["bash", "-lc", script]` gives the script). `default` fills a parameter the model left out and makes it optional in the schema; `[tools.fixed]` sends internal parameters with a fixed value and hides them.
 - **Defaults**: `[defaults] edit_format` picks the edit tool when `[tools] edit_format = "auto"` (the default). The shipped profiles set **no sampling**: a profile covers a whole model family, and in the first eval (qwen3.8-flash on `qwen-code`, 2026-10-19) Qwen's coder-model values (temperature 0.7, top_k 20, ...) cost extra steps and a failed edit compared with the server's defaults. Sampling belongs on a model entry (`models = [{ id = ..., sampling = { ... } }]`), which overrides a profile's. `[defaults] sampling` stays available for user profiles.
+- **`context.md`** (2026-10-19): the per-session part of the prompt, which is the workspace root, git branch, date, top-level files, AGENTS.md instructions, skills and memory index. It is rendered once at session start and put at the start of the first user message of every request, in a `<context>` block (`turn::with_session_context`). The history and the session log keep what the user typed. `system.md` keeps only what is the same in every project on a machine: the guidance, the tool names, the OS and the shell. Chat templates render the tool definitions after the system prompt, so a workspace path in the system prompt used to end the server's cached prefix early (about 256 of 1,907 tokens cached on a new session's first request in the 2026-10-19 eval), and the tools were sent at full price every session. Now the system prompt and tools are byte-identical across sessions and projects (`core/tests/prefix.rs`, `system_prompt_and_tools_are_the_same_in_every_workspace`). A profile without `context.md` renders everything in `system.md`, as before; this replaces the proposed `env.md` and `env_placement`.
 - **Template variables**: `edit_tool` and `write_tool` give the names the model sees for the session's edit tool and for `write` (the same name under `whole_file`), so a prompt stays right whatever the edit format.
 - **`/profiles`**: every installed profile rendered for the current model (system prompt, tool names, edit format), with the one `auto` would pick marked. Enter switches the session (`Op::SetProfile`; the same model, rebuilt like a model switch, and kept through `/reload`), `auto` goes back to each model's own choice, Ctrl-S saves `[model] profile`.
-- Not built yet: `env_placement`, `system_role`, `[messages]` shaping, `result_format`, `extends`, `quack profile render`.
+- Not built yet: `system_role`, `[messages]` shaping, `result_format`, `extends`, `quack profile render`.
 - **Tests**: `core/tests/profiles.rs` starts every shipped profile, checks that it loads without warnings, names its source, offers its tools with their parameters and renders without leftover template syntax; it also runs a Codex `shell` call given as an argument list. `core/tests/prefix.rs` runs a whole session for each.
 
 ## Open questions

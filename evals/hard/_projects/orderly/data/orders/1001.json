@@ -1,0 +1,20 @@
+{
+  "coupons": [
+    "WELCOME10"
+  ],
+  "customer": "ada@example.com",
+  "format": 1,
+  "grand_total": "18.36",
+  "id": "1001",
+  "lines": [
+    {
+      "qty": 2,
+      "sku": "MUG-01",
+      "unit_price": "8.50"
+    }
+  ],
+  "placed_on": "2026-10-15",
+  "region": "UK",
+  "shipped_on": "2026-10-16",
+  "state": "shipped"
+}

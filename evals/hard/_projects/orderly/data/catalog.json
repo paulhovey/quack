@@ -1,0 +1,16 @@
+{
+  "products": [
+    { "sku": "MUG-01", "name": "Enamel mug", "category": "kitchen", "price": "8.50" },
+    { "sku": "MUG-02", "name": "Espresso cups, set of 2", "category": "kitchen", "price": "12.00" },
+    { "sku": "TEA-01", "name": "Breakfast tea, 250g", "category": "pantry", "price": "6.25", "taxable": false },
+    { "sku": "TEA-02", "name": "Green tea, 100g", "category": "pantry", "price": "7.40", "taxable": false },
+    { "sku": "BAG-01", "name": "Canvas tote", "category": "accessories", "price": "15.00" },
+    { "sku": "BAG-02", "name": "Waxed backpack", "category": "accessories", "price": "89.00" },
+    { "sku": "BOOK-01", "name": "Pocket notebook", "category": "stationery", "price": "4.99" },
+    { "sku": "BOOK-02", "name": "Dot-grid journal", "category": "stationery", "price": "18.75" },
+    { "sku": "PEN-01", "name": "Brass pen", "category": "stationery", "price": "32.00" },
+    { "sku": "LAMP-01", "name": "Desk lamp", "category": "home", "price": "54.90" },
+    { "sku": "RUG-01", "name": "Wool rug, 120x180", "category": "home", "price": "129.00" },
+    { "sku": "CANDLE-01", "name": "Soy candle", "category": "home", "price": "11.30" }
+  ]
+}

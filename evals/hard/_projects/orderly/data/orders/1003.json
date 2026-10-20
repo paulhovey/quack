@@ -1,0 +1,30 @@
+{
+  "coupons": [
+    "WELCOME10"
+  ],
+  "customer": "cy@example.com",
+  "format": 1,
+  "grand_total": "52.18",
+  "id": "1003",
+  "lines": [
+    {
+      "qty": 1,
+      "sku": "BOOK-01",
+      "unit_price": "4.99"
+    },
+    {
+      "qty": 1,
+      "sku": "BOOK-02",
+      "unit_price": "18.75"
+    },
+    {
+      "qty": 1,
+      "sku": "PEN-01",
+      "unit_price": "32.00"
+    }
+  ],
+  "placed_on": "2026-10-16",
+  "region": "US-NY",
+  "shipped_on": null,
+  "state": "paid"
+}

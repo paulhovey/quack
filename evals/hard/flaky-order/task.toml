@@ -1,0 +1,9 @@
+category = "fix-flaky"
+prompt = "`test_the_project_plan` in tests/test_plan.py fails on most runs but passes on some, with no change to the code. Find out why and make the scheduler behave the same on every run. Fix the code, not the tests."
+requires = ["python"]
+
+[[check]]
+command = "{python} check_flaky.py"
+[[check]]
+file = "tests/test_plan.py"
+contains = "order, [\"fetch\", \"unit\", \"docs\", \"lint\", \"typecheck\", \"package\", \"publish\"]"

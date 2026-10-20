@@ -355,6 +355,7 @@ fn raw_estimate(s: &Setup, history: &[Message]) -> u32 {
         .map(|t| t.description.len() + t.name.len() + t.parameters.to_string().len())
         .sum();
     tokens::estimate(&s.system)
+        .saturating_add(tokens::estimate(&s.session_context))
         .saturating_add(tokens::estimate(&history))
         .saturating_add(u32::try_from(tools * 2 / 7).unwrap_or(u32::MAX))
 }
@@ -423,6 +424,22 @@ pub(crate) fn reasoning_format(s: &Setup) -> quack_config::provider::ReasoningFo
         .unwrap_or(s.model.reasoning.format)
 }
 
+/// Put the session context (`context.md`: workspace, date, instructions) at the start of
+/// the first user message. Keeping it out of the system prompt keeps the system prompt and
+/// the tool block, which chat templates render after it, the same in every session and
+/// project, so the server's prompt cache reuses them. The history keeps what the user typed.
+pub(crate) fn with_session_context(s: &Setup, messages: &mut [Message]) {
+    if s.session_context.is_empty() {
+        return;
+    }
+    if let Some(Message::User { content }) = messages
+        .iter_mut()
+        .find(|m| matches!(m, Message::User { .. }))
+    {
+        *content = format!("{}\n\n{content}", s.session_context);
+    }
+}
+
 /// One model call. Streams deltas to clients and returns the assembled message.
 async fn stream_step(
     ctx: &TurnCtx,
@@ -436,6 +453,7 @@ async fn stream_step(
         });
     }
     messages.extend_from_slice(history);
+    with_session_context(s, &mut messages);
     // The plan rides on the last message of this request only, so the history (and the
     // cached prefix before it) stays the same.
     if let Some(plan) = s.tool_ctx.plan.reminder()

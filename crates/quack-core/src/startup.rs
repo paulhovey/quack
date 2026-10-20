@@ -34,6 +34,9 @@ pub(crate) struct Setup {
     pub profile: Profile,
     /// Rendered once; byte-stable for the session.
     pub system: String,
+    /// The profile's `context.md`, rendered once: put at the start of the first user
+    /// message of each request (`turn::with_session_context`). Empty without one.
+    pub session_context: String,
     pub surface: ToolSurface,
     pub registry: Arc<Registry>,
     /// Template for per-call contexts (cancel and output are replaced per call).
@@ -712,9 +715,9 @@ async fn build_setup(
     for w in shaped.warnings {
         warn(tx, w);
     }
-    let system = match shaped.system {
-        Ok(s) => s,
-        Err(e) => {
+    let (system, session_context) = match (shaped.system, shaped.context) {
+        (Ok(s), Ok(c)) => (s, c),
+        (Err(e), _) | (_, Err(e)) => {
             rep.send(LoadState::Failed { error: e });
             return None;
         }
@@ -756,6 +759,7 @@ async fn build_setup(
         model_ref,
         profile,
         system,
+        session_context,
         surface,
         registry,
         tool_ctx,
@@ -803,9 +807,13 @@ pub(crate) fn profiles(config: &Loaded, setup: &Setup) -> Event {
                     .iter()
                     .map(|t| t.name.clone())
                     .collect(),
-                system: shaped
-                    .system
-                    .unwrap_or_else(|e| format!("(does not render: {e})")),
+                system: match (shaped.system, shaped.context) {
+                    (Ok(s), Ok(c)) if c.is_empty() => s,
+                    (Ok(s), Ok(c)) => {
+                        format!("{s}\n\n── At the start of the first user message ──\n\n{c}")
+                    }
+                    (Err(e), _) | (_, Err(e)) => format!("(does not render: {e})"),
+                },
             }
         })
         .collect();
@@ -822,6 +830,8 @@ pub(crate) struct Shaped {
     pub surface: ToolSurface,
     pub warnings: Vec<String>,
     pub system: Result<String, String>,
+    /// For the first user message (`context.md`).
+    pub context: Result<String, String>,
 }
 
 /// Apply `profile` to the session's tools and prompt variables. Used at startup and to
@@ -861,6 +871,7 @@ pub(crate) fn shape(
     Shaped {
         edit_format: ctx.edit_format,
         system: profile.render_system(&vars),
+        context: profile.render_context(&vars),
         surface,
         warnings,
     }

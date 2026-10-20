@@ -1,12 +1,14 @@
-"""Compare `quack eval` results: one row per model and profile, summed over the tasks.
+"""Compare `quack eval` results: one row per suite, model, profile and planner, summed over
+the tasks, with each failure's label (see `Failure` in crates/quack-exec/src/eval.rs).
 
 Usage: python3 scripts/eval-table.py evals/results/<date> [more dirs or files...]
-When a model and profile ran more than once, the newest file (`-2`, `-3`, ...) wins.
+When one ran more than once, the newest file (`-2`, `-3`, ...) wins.
 """
 
 import json
 import re
 import sys
+from collections import Counter
 from pathlib import Path
 
 
@@ -23,12 +25,12 @@ def main(args):
     runs = {}
     for f in sorted(files, key=lambda f: (str(f.parent), newest_first(f))):
         r = json.loads(f.read_text())
-        runs[(r["model"], r["profile"])] = r
-    print("| model | profile | pass | steps | tool err | parse | edit fail "
-          "| prompt k (cached) | out k | cost | time |")
-    print("|---|---|---|---|---|---|---|---|---|---|---|")
+        runs[(r.get("suite", "tasks"), r["model"], r["profile"], r.get("planner") or "-")] = r
+    print("| suite | model | profile | planner | pass | steps | tool err | parse | edit fail "
+          "| prompt k (cached) | out k | cost | time | failures |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     total = 0.0
-    for (model, profile), r in sorted(runs.items()):
+    for (suite, model, profile, planner), r in sorted(runs.items()):
         rs = [x for x in r["results"] if not x.get("skipped")]
 
         def s(key):
@@ -37,16 +39,20 @@ def main(args):
         cost = s("cost")
         total += cost
         cached = 100 * s("cached_tokens") / max(1, s("prompt_tokens"))
-        print(f"| {model} | {profile} | {sum(x['passed'] for x in rs)}/{len(rs)} "
+        failures = Counter(x.get("failure") or "?" for x in rs if not x["passed"])
+        labels = ", ".join(f"{k} {v}" for k, v in failures.most_common()) or "-"
+        print(f"| {suite} | {model} | {profile} | {planner} | {sum(x['passed'] for x in rs)}/{len(rs)} "
               f"| {s('steps')} | {s('tool_errors')} | {s('parse_failures')} "
               f"| {s('edit_failures')} | {s('prompt_tokens') / 1000:.0f} ({cached:.0f}%) "
-              f"| {s('completion_tokens') / 1000:.1f} | ${cost:.3f} | {s('seconds'):.0f}s |")
+              f"| {s('completion_tokens') / 1000:.1f} | ${cost:.3f} | {s('seconds'):.0f}s "
+              f"| {labels} |")
     print(f"\ntotal ${total:.2f}")
-    for (model, profile), r in sorted(runs.items()):
+    for (suite, model, profile, planner), r in sorted(runs.items()):
         for x in r["results"]:
             if not x.get("passed") and not x.get("skipped"):
                 why = x.get("error") or "; ".join(x.get("failed_checks", []))
-                print(f"FAIL {model} {profile} {x['task']}: {why[:200]}")
+                label = x.get("failure") or "?"
+                print(f"FAIL {suite} {model} {profile} {planner} {x['task']} ({label}): {why[:200]}")
 
 
 if __name__ == "__main__":

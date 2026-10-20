@@ -308,6 +308,7 @@ pub(crate) async fn eval(
         load,
         repeat: args.repeat.max(1),
         keep: args.keep,
+        planner: args.planner.clone(),
         scratch: loaded
             .dirs
             .user_cache
@@ -326,7 +327,11 @@ pub(crate) async fn eval(
                     (Some(why), _, _) => format!("skipped ({why})"),
                     (None, Some(e), _) => format!("error: {e}"),
                     (None, None, true) => format!("pass ({} steps, {:.0}s)", r.steps, r.seconds),
-                    (None, None, false) => format!("FAIL: {}", r.failed_checks.join("; ")),
+                    (None, None, false) => format!(
+                        "FAIL ({}): {}",
+                        r.failure.map_or("?", |f| f.label()),
+                        r.failed_checks.join("; ")
+                    ),
                 }
             );
             results.push(r);
@@ -348,8 +353,12 @@ pub(crate) async fn eval(
     let report = eval::Report {
         harness: concat!("quack ", env!("CARGO_PKG_VERSION")).into(),
         date: eval::today(),
+        suite: suite
+            .file_name()
+            .map_or_else(|| "tasks".into(), |n| n.to_string_lossy().into_owned()),
         model: first(|r| r.model.as_str()),
         profile: first(|r| r.profile.as_str()),
+        planner: args.planner.clone(),
         sampling: results
             .iter()
             .find(|r| r.skipped.is_none() && !r.model.is_empty())
@@ -359,8 +368,18 @@ pub(crate) async fn eval(
     };
     println!("{}", eval::table(&report));
     let out = args.out.unwrap_or_else(|| {
-        let name =
-            format!("{}-{}.json", report.model, report.profile).replace(['/', '\\', ':'], "_");
+        let planned = report
+            .planner
+            .as_ref()
+            .map(|p| format!("-planner-{p}"))
+            .unwrap_or_default();
+        // The default suite keeps its old names; another's results start with its name.
+        let prefix = match report.suite.as_str() {
+            "tasks" => String::new(),
+            s => format!("{s}-"),
+        };
+        let name = format!("{prefix}{}-{}{planned}.json", report.model, report.profile)
+            .replace(['/', '\\', ':'], "_");
         suite
             .parent()
             .unwrap_or(&suite)

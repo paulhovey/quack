@@ -1,0 +1,7 @@
+category = "fix-symptom"
+prompt = "Cancelling a paid order refunds the customer, but the stock it reserved never becomes available again; cancelling an unpaid order does put it back. Fix it. Every cancelled order must also get exactly one cancellation email, and a paid one exactly one refund email."
+requires = ["python"]
+base = "../_projects/orderly"
+
+[[check]]
+command = "{python} -m unittest discover -s tests -t ."

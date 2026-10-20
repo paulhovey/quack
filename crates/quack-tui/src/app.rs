@@ -1224,15 +1224,8 @@ impl App {
         };
         self.review = None;
         match choices[pick].0 {
-            ReviewChoice::Accept => {
-                self.end_plan();
-                self.send("Carry out the plan above.".into());
-            }
-            ReviewChoice::AcceptAutoEdit => {
-                self.mode_before_plan.clear();
-                self.set_mode("auto-edit");
-                self.send("Carry out the plan above.".into());
-            }
+            ReviewChoice::Accept => self.accept_plan(None),
+            ReviewChoice::AcceptAutoEdit => self.accept_plan(Some("auto-edit")),
             ReviewChoice::KeepPlanning => {
                 self.note("still planning · say what to change, or /plan off to leave".into());
             }
@@ -1348,6 +1341,22 @@ impl App {
             m => m.to_owned(),
         };
         self.set_mode(&back);
+    }
+
+    /// Carry out the plan in `mode`, or in the mode plan mode was entered from. The engine
+    /// leaves plan mode and sends the turn (with a planner model, as a handoff brief).
+    fn accept_plan(&mut self, mode: Option<&str>) {
+        let back = match (mode, self.mode_before_plan.as_str()) {
+            (Some(m), _) => m.to_owned(),
+            (None, "" | "plan") => "ask".to_owned(),
+            (None, m) => m.to_owned(),
+        };
+        self.mode_before_plan.clear();
+        self.review = None;
+        self.panel_collapsed = true;
+        self.transcript
+            .push(Entry::User("Carry out the plan above.".into()));
+        self.ops.push(Op::AcceptPlan { mode: back });
     }
 
     /// Shift-Tab: ask → auto-edit → plan → ask. Other modes join the cycle at `ask`.
@@ -1591,8 +1600,7 @@ impl App {
                     if self.info.permission_mode != "plan" {
                         return self.note("not in plan mode; /plan starts it".into());
                     }
-                    self.end_plan();
-                    self.send("Carry out the plan above.".into());
+                    self.accept_plan(None);
                 }
                 "off" | "exit" => self.end_plan(),
                 task => {
@@ -1873,14 +1881,12 @@ mod tests {
         });
         type_str(&mut app, "/plan accept");
         press(&mut app, KeyCode::Enter);
-        let ops = app.take_ops();
         assert_eq!(
-            ops[0],
-            mode("auto-edit"),
+            app.take_ops(),
+            vec![Op::AcceptPlan {
+                mode: "auto-edit".into()
+            }],
             "back to the mode plan mode started from"
-        );
-        assert!(
-            matches!(&ops[1], Op::UserTurn { items, .. } if items == &[InputItem::text("Carry out the plan above.")])
         );
     }
 
@@ -1899,8 +1905,7 @@ mod tests {
     #[test]
     fn plan_review_bar_accepts_or_takes_a_revision() {
         let mut app = App::new(info());
-        let mode = |m: &str| Op::SetPermissionMode { mode: m.into() };
-        let carry_out = |op: &Op| matches!(op, Op::UserTurn { items, .. } if items == &[InputItem::text("Carry out the plan above.")]);
+        let accept = |m: &str| vec![Op::AcceptPlan { mode: m.into() }];
         let enter_plan = |app: &mut App| {
             type_str(app, "/plan");
             press(app, KeyCode::Enter);
@@ -1916,9 +1921,7 @@ mod tests {
         enter_plan(&mut app);
         press(&mut app, KeyCode::Down);
         press(&mut app, KeyCode::Enter);
-        let ops = app.take_ops();
-        assert_eq!(ops[0], mode("auto-edit"));
-        assert!(carry_out(&ops[1]), "{ops:?}");
+        assert_eq!(app.take_ops(), accept("auto-edit"));
         assert_eq!(app.review, None);
         app.on_engine(Event::PermissionMode { mode: "ask".into() });
 
@@ -1941,9 +1944,7 @@ mod tests {
         assert!(app.take_ops().is_empty());
         plan_turn_ends(&mut app);
         press(&mut app, KeyCode::Char('1'));
-        let ops = app.take_ops();
-        assert_eq!(ops[0], mode("ask"));
-        assert!(carry_out(&ops[1]), "{ops:?}");
+        assert_eq!(app.take_ops(), accept("ask"));
     }
 
     #[test]

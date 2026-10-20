@@ -1,0 +1,23 @@
+{
+  "coupons": [],
+  "customer": "bo@example.com",
+  "format": 1,
+  "grand_total": "83.12",
+  "id": "1002",
+  "lines": [
+    {
+      "qty": 1,
+      "sku": "LAMP-01",
+      "unit_price": "54.90"
+    },
+    {
+      "qty": 2,
+      "sku": "CANDLE-01",
+      "unit_price": "11.30"
+    }
+  ],
+  "placed_on": "2026-10-15",
+  "region": "US-CA",
+  "shipped_on": null,
+  "state": "paid"
+}

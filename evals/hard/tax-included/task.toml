@@ -1,0 +1,7 @@
+category = "feature"
+prompt = "Add support for regions whose prices already include tax. A region in config/settings.json can set `\"tax_included\": true` (`Region.tax_included` in the code; false when left out). Add New Zealand as region `NZ`: 15% tax, included, 6 delivery days. In such a region the customer pays the net amount (after discounts) and nothing on top, so `grand_total` equals `net`, and `tax` is the part of the taxable lines' net that is tax (for 115.00 at 15%, that is 15.00). On their invoices the tax line reads `Tax (included)`. Nothing changes for the other regions."
+requires = ["python"]
+base = "../_projects/orderly"
+
+[[check]]
+command = "{python} -m unittest discover -s tests -t ."

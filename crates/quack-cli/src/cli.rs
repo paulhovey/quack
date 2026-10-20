@@ -136,6 +136,10 @@ pub(crate) struct EvalArgs {
     /// Keep each run's workspace (under the cache directory) to look at afterwards.
     #[arg(long)]
     pub keep: bool,
+    /// Plan each task with this `<provider>/<model>` in plan mode, then accept the plan
+    /// and let the `-m` model carry it out (`[model] planner`).
+    #[arg(long)]
+    pub planner: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

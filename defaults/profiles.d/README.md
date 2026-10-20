@@ -1,7 +1,10 @@
 # defaults/profiles.d
 
 Model profiles, one directory each: `profile.toml` plus a `system.md` prompt template
-(minijinja). Delete a directory to remove that profile; with none installed the binary
+(minijinja), and optionally a `context.md`. `context.md` is the per-session part (workspace,
+date, files, AGENTS.md, skills, memory), sent at the start of the first user message so the
+system prompt and tools stay the same in every project and the server's prompt cache reuses
+them. Without one, everything goes in `system.md`. Delete a directory to remove that profile; with none installed the binary
 uses its compiled-in empty profile.
 
 - `generic`: a short original prompt for any model, using the internal tool names.

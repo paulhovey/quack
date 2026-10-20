@@ -1,0 +1,31 @@
+{
+  "currency": "USD",
+  "regions": {
+    "US-CA": { "name": "California", "tax_rate": "0.0725", "delivery_days": 3 },
+    "US-OR": { "name": "Oregon", "tax_rate": "0", "delivery_days": 3 },
+    "US-NY": { "name": "New York", "tax_rate": "0.04", "delivery_days": 2 },
+    "UK": { "name": "United Kingdom", "tax_rate": "0.20", "delivery_days": 5 },
+    "DE": { "name": "Germany", "tax_rate": "0.19", "delivery_days": 4 },
+    "NZ": { "name": "New Zealand", "tax_rate": "0.15", "delivery_days": 6, "tax_included": true }
+  },
+  "holidays": ["2026-11-26", "2026-12-25", "2027-01-01"],
+  "templates": {
+    "confirmation": {
+      "subject": "Order {order.id} confirmed",
+      "body": "Thanks for your order. You'll be charged {order.grand_total}."
+    },
+    "shipped": {
+      "subject": "Order {order.id} is on its way",
+      "body": "Your parcel left us today. Estimated delivery: {estimate:%A %d %B}."
+    },
+    "refund": {
+      "subject": "Refund for order {order.id}",
+      "body": "We've refunded {amount} to your card."
+    },
+    "cancelled": {
+      "subject": "Order {order.id} cancelled",
+      "body": "Your order {order.id} has been cancelled."
+    }
+  },
+  "report_columns": ["id", "placed_on", "customer", "region_code", "state", "net", "tax", "grand_total"]
+}

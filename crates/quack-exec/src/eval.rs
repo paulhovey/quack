@@ -2,9 +2,11 @@
 //! (docs/plan/13-testing-and-evals.md#quack-eval).
 //!
 //! A task is a directory: `task.toml` (the prompt and the checks) and `repo/` (the files
-//! the model starts with). Each run gets a fresh copy of `repo/` and its own data
-//! directory, so sessions and memory never mix with the user's. The user's providers,
-//! settings and AGENTS.md still apply: that is the setup being measured.
+//! the model starts with, laid over a shared `base` project when the task names one). Each
+//! run gets a fresh copy and its own data directory, so sessions and memory never mix with
+//! the user's. `hidden/` (tests the model never sees) is copied in only once the model is
+//! done. The user's providers, settings and AGENTS.md still apply: that is the setup being
+//! measured.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -31,6 +33,10 @@ pub struct TaskFile {
     pub requires: Vec<String>,
     #[serde(default = "default_timeout")]
     pub timeout_secs: u64,
+    /// A project folder, relative to the task's, copied in before `repo/` (which then holds
+    /// only the files this task changes), so several tasks can share one realistic codebase.
+    #[serde(default)]
+    pub base: Option<PathBuf>,
     #[serde(rename = "check", default)]
     pub checks: Vec<Check>,
 }
@@ -63,6 +69,105 @@ pub struct Task {
     pub id: String,
     pub dir: PathBuf,
     pub file: TaskFile,
+}
+
+impl Task {
+    /// Lay out the files the model starts with: `base`, then `repo/` over it.
+    pub fn prepare(&self, ws: &Path) -> std::io::Result<()> {
+        if let Some(base) = &self.file.base {
+            copy_dir(&self.dir.join(base), ws)?;
+        }
+        let repo = self.dir.join("repo");
+        if repo.is_dir() || self.file.base.is_none() {
+            copy_dir(&repo, ws)?;
+        }
+        Ok(())
+    }
+
+    /// Copy `hidden/` into a workspace the model is done with, for the checks to use.
+    pub fn reveal(&self, ws: &Path) -> std::io::Result<()> {
+        let hidden = self.dir.join("hidden");
+        if hidden.is_dir() {
+            copy_dir(&hidden, ws)?;
+        }
+        Ok(())
+    }
+
+    /// The paths the reference solution touches (`solution/` files and `DELETE` lines),
+    /// with `/` separators. Empty for a task that only asks a question.
+    pub fn solution_paths(&self) -> Vec<String> {
+        let solution = self.dir.join("solution");
+        let mut paths: Vec<String> = files_under(&solution)
+            .into_iter()
+            .filter(|p| p != "ANSWER" && p != "DELETE")
+            .collect();
+        if let Ok(text) = std::fs::read_to_string(solution.join("DELETE")) {
+            paths.extend(
+                text.lines()
+                    .map(|l| l.trim().replace('\\', "/"))
+                    .filter(|l| !l.is_empty()),
+            );
+        }
+        paths.sort();
+        paths.dedup();
+        paths
+    }
+}
+
+/// Folders that tools create as they run; changes in them are not the model's work.
+const SCRATCH_DIRS: &[&str] = &[
+    "__pycache__",
+    ".pytest_cache",
+    "target",
+    "node_modules",
+    ".git",
+];
+
+/// Every file under `root`, relative and with `/` separators, skipping `SCRATCH_DIRS`.
+fn files_under(root: &Path) -> Vec<String> {
+    fn walk(dir: &Path, prefix: &str, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let rel = if prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{prefix}/{name}")
+            };
+            match entry.file_type() {
+                Ok(t) if t.is_dir() => {
+                    if !SCRATCH_DIRS.contains(&name.as_str()) {
+                        walk(&entry.path(), &rel, out);
+                    }
+                }
+                Ok(_) => out.push(rel),
+                Err(_) => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, "", &mut out);
+    out.sort();
+    out
+}
+
+/// The files that differ between two trees: changed, added or removed.
+fn changed_files(before: &Path, after: &Path) -> Vec<String> {
+    let a = files_under(before);
+    let b = files_under(after);
+    let mut out: Vec<String> = a.iter().filter(|p| !b.contains(p)).cloned().collect();
+    out.extend(
+        b.iter()
+            .filter(|p| {
+                !a.contains(p)
+                    || std::fs::read(before.join(p)).ok() != std::fs::read(after.join(p)).ok()
+            })
+            .cloned(),
+    );
+    out.sort();
+    out
 }
 
 /// Every task under `suite`, sorted by id; `only` keeps the named ones.
@@ -107,6 +212,12 @@ pub struct RunResult {
     /// The checks that failed, as text.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub failed_checks: Vec<String>,
+    /// Why a failed run failed, as one label (see `Failure`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<Failure>,
+    /// The files the model changed, added or removed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed: Vec<String>,
     /// Model requests.
     pub steps: u32,
     pub tool_calls: u32,
@@ -137,12 +248,22 @@ pub struct RunResult {
 pub struct Report {
     pub harness: String,
     pub date: String,
+    /// The suite's folder name (`tasks`, `hard`, ...).
+    #[serde(default = "default_suite")]
+    pub suite: String,
     pub model: String,
     pub profile: String,
+    /// The model that planned each task (`--planner`), when one did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planner: Option<String>,
     /// The sampling settings sent (`temperature`, ...); empty: the server's defaults.
     #[serde(default)]
     pub sampling: serde_json::Map<String, serde_json::Value>,
     pub results: Vec<RunResult>,
+}
+
+fn default_suite() -> String {
+    "tasks".into()
 }
 
 impl Report {
@@ -188,6 +309,8 @@ pub struct EvalOptions {
     pub repeat: u32,
     /// Keep each run's workspace for inspection.
     pub keep: bool,
+    /// Plan with this model first, then accept the plan (`[model] planner`).
+    pub planner: Option<String>,
     /// Where the runs' workspaces go.
     pub scratch: PathBuf,
     /// Variables that replace the process environment's (tests isolate config this way).
@@ -355,8 +478,8 @@ fn check(
     failed
 }
 
-/// Check a workspace against a task, as a run would after the model finishes. `Err` when
-/// the task can't be checked here (a program it needs is missing).
+/// Check a workspace against a task, as a run would after the model finishes: `hidden/`
+/// goes in first. `Err` when the task can't be checked here (a program it needs is missing).
 pub fn check_workspace(
     task: &Task,
     ws: &Path,
@@ -364,6 +487,8 @@ pub fn check_workspace(
     tools: &[String],
 ) -> Result<Vec<String>, String> {
     let programs = requirements(&task.file)?;
+    task.reveal(ws)
+        .map_err(|e| format!("cannot copy hidden/: {e}"))?;
     Ok(check(&task.file.checks, ws, answer, tools, &programs))
 }
 
@@ -388,6 +513,103 @@ fn is_parse_failure(summary: &str) -> bool {
     .any(|p| summary.starts_with(p))
 }
 
+/// Why a run failed, read from what the runner saw, so a set of results says what to
+/// change in the harness rather than only how often it fails. The first that applies wins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Failure {
+    /// The task's time ran out.
+    Timeout,
+    /// The provider or engine failed (a request error, the engine stopping).
+    Error,
+    /// Tool calls the model sent did not parse; the profile's tool shapes don't suit it.
+    BadCalls,
+    /// It meant to change files but its edits failed, and it never got them in.
+    EditFailed,
+    /// The task needed changes and it made none.
+    NoChange,
+    /// It changed files, but none of the ones the solution changes.
+    WrongFiles,
+    /// It changed some of the solution's files and missed others.
+    MissedFiles,
+    /// Only the reply's checks failed: a wrong answer.
+    WrongAnswer,
+    /// It changed the right files without ever running a command, and the result is wrong.
+    Untested,
+    /// It changed the right files and the result is still wrong.
+    WrongFix,
+}
+
+impl Failure {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Timeout => "timeout",
+            Self::Error => "error",
+            Self::BadCalls => "bad-calls",
+            Self::EditFailed => "edit-failed",
+            Self::NoChange => "no-change",
+            Self::WrongFiles => "wrong-files",
+            Self::MissedFiles => "missed-files",
+            Self::WrongAnswer => "wrong-answer",
+            Self::Untested => "untested",
+            Self::WrongFix => "wrong-fix",
+        }
+    }
+}
+
+/// What `classify` reads about a finished run.
+#[derive(Debug, Clone, Default)]
+pub struct Outcome<'a> {
+    pub timed_out: bool,
+    pub error: bool,
+    pub parse_failures: u32,
+    pub edit_failures: u32,
+    pub tool_calls: u32,
+    /// The files the model changed.
+    pub changed: &'a [String],
+    /// The files the reference solution changes.
+    pub solution: &'a [String],
+    /// Only checks on the reply failed.
+    pub only_answer_failed: bool,
+    /// The model ran a shell command.
+    pub ran_commands: bool,
+}
+
+/// The label for a failed run (see `Failure`).
+pub fn classify(o: &Outcome<'_>) -> Failure {
+    if o.timed_out {
+        return Failure::Timeout;
+    }
+    if o.error {
+        return Failure::Error;
+    }
+    // Half or more of its calls broken: nothing else it did can be read as a choice.
+    if o.parse_failures > 0 && o.parse_failures * 2 >= o.tool_calls {
+        return Failure::BadCalls;
+    }
+    if o.only_answer_failed || o.solution.is_empty() {
+        return Failure::WrongAnswer;
+    }
+    let hit = o.solution.iter().filter(|p| o.changed.contains(p)).count();
+    if hit < o.solution.len() && o.edit_failures > 0 {
+        return Failure::EditFailed;
+    }
+    if o.changed.is_empty() {
+        return Failure::NoChange;
+    }
+    if hit == 0 {
+        return Failure::WrongFiles;
+    }
+    if hit < o.solution.len() {
+        return Failure::MissedFiles;
+    }
+    if o.ran_commands {
+        Failure::WrongFix
+    } else {
+        Failure::Untested
+    }
+}
+
 /// Run one task once.
 pub async fn run_task(task: &Task, opts: &EvalOptions, run: u32) -> RunResult {
     let mut result = RunResult {
@@ -405,12 +627,20 @@ pub async fn run_task(task: &Task, opts: &EvalOptions, run: u32) -> RunResult {
     let root = opts.scratch.join(format!("{}-{run}", task.id));
     let _ = std::fs::remove_dir_all(&root);
     let ws = root.join("ws");
-    if let Err(e) = copy_dir(&task.dir.join("repo"), &ws) {
-        result.skipped = Some(format!("cannot copy repo/: {e}"));
+    // An untouched copy, to tell what the model changed.
+    let start = root.join("start");
+    if let Err(e) = task.prepare(&ws).and_then(|()| task.prepare(&start)) {
+        result.skipped = Some(format!("cannot copy the task's files: {e}"));
         return result;
     }
     let mut load = opts.load.clone();
     load.cwd = ws.clone();
+    if let Some(p) = &opts.planner {
+        load.overrides.push(format!(
+            "model.planner={}",
+            serde_json::Value::String(p.clone())
+        ));
+    }
     load.overrides.extend([
         "permissions.mode=\"full-auto\"".to_owned(),
         // Memory stays inside the run.
@@ -434,6 +664,8 @@ pub async fn run_task(task: &Task, opts: &EvalOptions, run: u32) -> RunResult {
     let mut names: HashMap<String, String> = HashMap::new();
     let mut tools: Vec<String> = Vec::new();
     let mut sent = false;
+    // With a planner, the first turn is in plan mode and accepting it starts the second.
+    let mut planning = opts.planner.is_some();
     let mut interrupted = false;
     loop {
         let event = match tokio::time::timeout_at(deadline, engine.events.recv()).await {
@@ -454,6 +686,10 @@ pub async fn run_task(task: &Task, opts: &EvalOptions, run: u32) -> RunResult {
         match event {
             Event::StartupComplete if !sent => {
                 sent = true;
+                if planning {
+                    let mode = "plan".to_owned();
+                    engine.submit(Op::SetPermissionMode { mode }).await;
+                }
                 let op = Op::UserTurn {
                     items: vec![InputItem::text(task.file.prompt.clone())],
                     overrides: TurnOverrides::default(),
@@ -463,7 +699,8 @@ pub async fn run_task(task: &Task, opts: &EvalOptions, run: u32) -> RunResult {
             Event::StartupProgress {
                 subsystem: quack_protocol::Subsystem::Profile,
                 state: quack_protocol::LoadState::Ready { detail },
-            } => {
+            } if result.profile.is_empty() => {
+                // The session model's profile; a planner's comes later.
                 result.profile = detail.split(' ').next().unwrap_or_default().to_owned();
             }
             Event::AssistantDelta { text } => answer.push_str(&text),
@@ -507,6 +744,12 @@ pub async fn run_task(task: &Task, opts: &EvalOptions, run: u32) -> RunResult {
             Event::Error { error } if result.error.is_none() => {
                 result.error = Some(error.message);
             }
+            Event::TurnComplete { .. } if planning && !interrupted => {
+                planning = false;
+                answer.clear();
+                let mode = "full-auto".to_owned();
+                engine.submit(Op::AcceptPlan { mode }).await;
+            }
             Event::TurnComplete { .. } | Event::TurnAborted { .. } => break,
             _ => {}
         }
@@ -523,9 +766,37 @@ pub async fn run_task(task: &Task, opts: &EvalOptions, run: u32) -> RunResult {
     }
     engine.shutdown().await;
     result.seconds = started.elapsed().as_secs_f64();
+    result.changed = changed_files(&start, &ws);
+    let mut only_answer_failed = false;
     if result.error.is_none() || interrupted {
-        result.failed_checks = check(&task.file.checks, &ws, &answer, &tools, &programs);
+        if let Err(e) = task.reveal(&ws) {
+            result.error = Some(format!("cannot copy hidden/: {e}"));
+        }
+        let (answers, others): (Vec<Check>, Vec<Check>) = task
+            .file
+            .checks
+            .iter()
+            .cloned()
+            .partition(|c| c.answer_contains.is_some());
+        let others = check(&others, &ws, &answer, &tools, &programs);
+        let answers = check(&answers, &ws, &answer, &tools, &programs);
+        only_answer_failed = others.is_empty() && !answers.is_empty();
+        result.failed_checks = others.into_iter().chain(answers).collect();
         result.passed = result.error.is_none() && result.failed_checks.is_empty();
+    }
+    if !result.passed {
+        let solution = task.solution_paths();
+        result.failure = Some(classify(&Outcome {
+            timed_out: interrupted,
+            error: result.error.is_some(),
+            parse_failures: result.parse_failures,
+            edit_failures: result.edit_failures,
+            tool_calls: result.tool_calls,
+            changed: &result.changed,
+            solution: &solution,
+            only_answer_failed,
+            ran_commands: tools.iter().any(|t| t == "shell"),
+        }));
     }
     if !opts.keep {
         let _ = std::fs::remove_dir_all(&root);
@@ -594,7 +865,10 @@ pub fn table(report: &Report) -> String {
         let outcome = match (&r.skipped, r.passed) {
             (Some(why), _) => format!("skipped: {why}"),
             (None, true) => "pass".into(),
-            (None, false) => "FAIL".into(),
+            (None, false) => match r.failure {
+                Some(f) => format!("FAIL ({})", f.label()),
+                None => "FAIL".into(),
+            },
         };
         out.push_str(&format!(
             "| {} | {} | {} | {} | {} | {} | {} | {} ({}) | {} | {:.0}s |\n",
@@ -627,9 +901,14 @@ pub fn table(report: &Report) -> String {
         .cost()
         .map(|c| format!(" · ${c:.4}"))
         .unwrap_or_default();
+    let planner = report
+        .planner
+        .as_ref()
+        .map(|p| format!(" · planned by {p}"))
+        .unwrap_or_default();
     out.push_str(&format!(
-        "\n{} · profile {} · sampling: {sampling} · {passed}/{ran} passed{cost}\n",
-        report.model, report.profile
+        "\n{} · profile {}{planner} · suite {} · sampling: {sampling} · {passed}/{ran} passed{cost}\n",
+        report.model, report.profile, report.suite
     ));
     out
 }
@@ -676,6 +955,72 @@ mod tests {
         let failed = check(&checks, &tmp, "no", &[], &none);
         assert_eq!(failed.len(), 2, "{failed:?}");
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn failures_are_labelled_by_what_went_wrong() {
+        fn label(changed: &[&str], set: fn(&mut Outcome<'_>)) -> &'static str {
+            let changed: Vec<String> = changed.iter().map(|s| (*s).to_owned()).collect();
+            let solution = ["a.py".to_owned(), "b.py".to_owned()];
+            let mut o = Outcome {
+                changed: &changed,
+                solution: &solution,
+                tool_calls: 4,
+                ..Outcome::default()
+            };
+            set(&mut o);
+            classify(&o).label()
+        }
+        assert_eq!(label(&[], |o| o.timed_out = true), "timeout");
+        assert_eq!(label(&[], |o| o.error = true), "error");
+        assert_eq!(label(&[], |o| o.parse_failures = 2), "bad-calls");
+        assert_eq!(label(&[], |o| o.parse_failures = 1), "no-change");
+        assert_eq!(label(&["a.py"], |o| o.edit_failures = 1), "edit-failed");
+        assert_eq!(label(&["c.py"], |_| {}), "wrong-files");
+        assert_eq!(label(&["a.py"], |_| {}), "missed-files");
+        assert_eq!(label(&["a.py", "b.py"], |_| {}), "untested");
+        assert_eq!(
+            label(&["a.py", "b.py"], |o| o.ran_commands = true),
+            "wrong-fix"
+        );
+        // Edit failures it recovered from don't count against a complete change.
+        assert_eq!(
+            label(&["a.py", "b.py"], |o| o.edit_failures = 3),
+            "untested"
+        );
+        assert_eq!(
+            label(&["a.py", "b.py"], |o| o.only_answer_failed = true),
+            "wrong-answer"
+        );
+        assert_eq!(
+            label(&[], |o| o.solution = &[]),
+            "wrong-answer",
+            "a question has no solution files"
+        );
+    }
+
+    #[test]
+    fn changes_are_files_added_removed_or_edited() {
+        let tmp = tempfile_dir("changes");
+        let (a, b) = (tmp.join("a"), tmp.join("b"));
+        for d in [&a, &b] {
+            std::fs::create_dir_all(d.join("pkg").join("__pycache__")).expect("mkdir");
+            std::fs::write(d.join("same.py"), "x").expect("write");
+        }
+        std::fs::write(a.join("pkg").join("edit.py"), "1").expect("write");
+        std::fs::write(b.join("pkg").join("edit.py"), "2").expect("write");
+        std::fs::write(a.join("gone.py"), "").expect("write");
+        std::fs::write(b.join("new.py"), "").expect("write");
+        std::fs::write(b.join("pkg").join("__pycache__").join("x.pyc"), "").expect("write");
+        assert_eq!(changed_files(&a, &b), ["gone.py", "new.py", "pkg/edit.py"]);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    fn tempfile_dir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("quack-eval-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).expect("mkdir");
+        d
     }
 
     #[test]

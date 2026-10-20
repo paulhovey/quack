@@ -1,0 +1,6 @@
+category = "navigate"
+prompt = "A customer in the UK region orders 2 Enamel mugs and 3 packs of Breakfast tea, with the coupons WELCOME10, FLAT5 and TEA2. Exactly how much does orderly charge them in total, tax included? Reply with the amount."
+base = "../_projects/orderly"
+
+[[check]]
+answer_contains = "22.91"

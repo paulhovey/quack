@@ -1,0 +1,9 @@
+category = "fix-test"
+prompt = "The tests in tests/test_parse.py fail. Fix logsum/parse.py so that it does what its docstring describes and the tests pass. Don't change the tests."
+requires = ["python"]
+
+[[check]]
+command = "{python} -m unittest discover -s tests -t ."
+[[check]]
+file = "tests/test_parse.py"
+contains = "self.assertEqual(levels, [\"WARNING\", \"ERROR\", \"CRITICAL\"])"

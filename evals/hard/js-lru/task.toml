@@ -1,0 +1,6 @@
+category = "create"
+prompt = "Implement `LruCache` in src/cache.js as README.md describes; it is only a Map so far. src/fetcher.js already uses it. `node --test` must pass."
+requires = ["node"]
+
+[[check]]
+command = "node --test"

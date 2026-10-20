@@ -1,0 +1,7 @@
+category = "refactor"
+prompt = "Rename the `grand_total` property of `Order` to `total_due` everywhere it is used: code, tests, email templates and the export's columns. The saved order files are read by other tools, so their format must not change: the files already in data/orders/ still load, and orders saved from now on have exactly the same keys as before."
+requires = ["python"]
+base = "../_projects/orderly"
+
+[[check]]
+command = "{python} -m unittest discover -s tests -t ."

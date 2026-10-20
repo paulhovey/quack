@@ -1,0 +1,7 @@
+category = "fix-symptom"
+prompt = "`python -m orderly export` writes a broken CSV when a customer's name contains a comma, a quote or a line break: the columns shift when the file is opened in a spreadsheet (order 1006 shows it). Fix the export so that every value reads back exactly with Python's csv module. Keep the header and the columns as they are."
+requires = ["python"]
+base = "../_projects/orderly"
+
+[[check]]
+command = "{python} -m unittest discover -s tests -t ."

@@ -43,6 +43,10 @@ pub struct ModelSettings {
     pub default: String,
     /// Model for titles, summaries and cheap subtasks. Empty: use `default`.
     pub small: String,
+    /// Model that writes plans in plan mode, e.g. a larger one. Accepting the plan hands it
+    /// to the session's model as one message, instead of the planner's transcript. Empty:
+    /// plan with the session's model.
+    pub planner: String,
     /// Start with the model last switched to, when it is still available. A project's
     /// `model.default`, `QUACK_MODEL` and `-m` still win; `default` is the fallback.
     pub remember_last: bool,
@@ -56,6 +60,7 @@ impl Default for ModelSettings {
         Self {
             default: String::new(),
             small: String::new(),
+            planner: String::new(),
             remember_last: true,
             profile: String::new(),
         }

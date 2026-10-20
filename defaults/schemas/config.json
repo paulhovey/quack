@@ -215,6 +215,11 @@
           "description": "`<provider-id>/<model-id>` or `<provider-id>/<alias>`. Empty: pick with `/models`.",
           "type": "string"
         },
+        "planner": {
+          "default": "",
+          "description": "Model that writes plans in plan mode, e.g. a larger one. Accepting the plan hands it\nto the session's model as one message, instead of the planner's transcript. Empty:\nplan with the session's model.",
+          "type": "string"
+        },
         "profile": {
           "default": "",
           "description": "A profile id for every model this session, e.g. `qwen-code`. Empty: each model's\nown `profile` (normally `auto`).",
@@ -598,6 +603,7 @@
       "$ref": "#/$defs/ModelSettings",
       "default": {
         "default": "",
+        "planner": "",
         "profile": "",
         "remember_last": true,
         "small": ""

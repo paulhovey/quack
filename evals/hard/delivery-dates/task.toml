@@ -1,0 +1,7 @@
+category = "fix-symptom"
+prompt = "Shipping emails sometimes promise delivery on a Saturday (an order to New York shipped on Thursday 15 October 2026 gets one), and the estimates ignore public holidays. Deliveries only happen on business days: never at weekends, and never on the holidays listed in config/settings.json. Fix the estimates."
+requires = ["python"]
+base = "../_projects/orderly"
+
+[[check]]
+command = "{python} -m unittest discover -s tests -t ."

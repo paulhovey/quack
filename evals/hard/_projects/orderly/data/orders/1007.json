@@ -1,0 +1,18 @@
+{
+  "coupons": [],
+  "customer": "fi@example.com",
+  "format": 1,
+  "grand_total": "34.32",
+  "id": "1007",
+  "lines": [
+    {
+      "qty": 1,
+      "sku": "PEN-01",
+      "unit_price": "32.00"
+    }
+  ],
+  "placed_on": "2026-10-16",
+  "region": "US-CA",
+  "shipped_on": null,
+  "state": "cancelled"
+}

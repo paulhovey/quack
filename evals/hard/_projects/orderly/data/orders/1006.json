@@ -1,0 +1,21 @@
+{
+  "coupons": [
+    "SUMMER40",
+    "FLAT5"
+  ],
+  "customer": "Lovelace, Ada",
+  "format": 1,
+  "grand_total": "86.88",
+  "id": "1006",
+  "lines": [
+    {
+      "qty": 1,
+      "sku": "RUG-01",
+      "unit_price": "129.00"
+    }
+  ],
+  "placed_on": "2026-10-16",
+  "region": "UK",
+  "shipped_on": null,
+  "state": "paid"
+}

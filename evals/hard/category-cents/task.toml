@@ -1,0 +1,7 @@
+category = "fix-symptom"
+prompt = "On days with discounted orders, `python -m orderly report --day 2026-10-16 --by-category` shows category totals that don't add up to the day's net sales in `python -m orderly report --day 2026-10-16`: they're off by a cent or two. Find the cause and fix it where it starts, so every report and invoice agrees."
+requires = ["python"]
+base = "../_projects/orderly"
+
+[[check]]
+command = "{python} -m unittest discover -s tests -t ."

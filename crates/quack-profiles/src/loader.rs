@@ -13,6 +13,10 @@ pub struct Profile {
     /// Profile directory; `None` for the compiled-in empty profile.
     pub dir: Option<PathBuf>,
     pub system_template: String,
+    /// `context.md`: the per-session part of the prompt (workspace, date, instructions),
+    /// put at the start of the first user message so the system prompt and the tools
+    /// stay the same across sessions and projects, and the server's cache keeps them.
+    pub context_template: Option<String>,
     /// `compact.md` from the profile directory: the compaction prompt, if overridden.
     pub compact_prompt: Option<String>,
     /// `plan.md`: appended to the user's message in plan mode, if overridden.
@@ -38,6 +42,7 @@ impl Profile {
             },
             dir: None,
             system_template: "{{ instructions }}".into(),
+            context_template: None,
             compact_prompt: None,
             plan_prompt: None,
         }
@@ -83,6 +88,7 @@ pub fn load_profiles(loaded: &Loaded) -> (Vec<Profile>, Vec<String>) {
                         .map(|t| t.trim_start_matches('\u{feff}').trim().to_owned())
                         .filter(|t| !t.is_empty())
                 };
+                let context_template = optional("context.md");
                 let compact_prompt = optional("compact.md");
                 let plan_prompt = optional("plan.md");
                 profiles.push(Profile {
@@ -90,6 +96,7 @@ pub fn load_profiles(loaded: &Loaded) -> (Vec<Profile>, Vec<String>) {
                     file,
                     dir: Some(dir),
                     system_template,
+                    context_template,
                     compact_prompt,
                     plan_prompt,
                 });

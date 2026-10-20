@@ -1,0 +1,7 @@
+category = "feature"
+prompt = "Some coupons shouldn't combine with any other. Add an exclusive flag to coupons (`\"exclusive\": true` in data/coupons.json, `Coupon.exclusive` in the code, false when left out) and make SUMMER40 exclusive. When an order has an exclusive coupon, the customer gets whichever discount is bigger: one exclusive coupon on its own, or all of the order's other coupons together, combined the way they are today."
+requires = ["python"]
+base = "../_projects/orderly"
+
+[[check]]
+command = "{python} -m unittest discover -s tests -t ."
