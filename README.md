@@ -101,6 +101,14 @@ Everything below works today. Planned work is listed separately at the end.
 - A `todo` plan: the model keeps a checklist for multi-step work, and the current plan is
   shown to it again at every step, so it stays on track through long tasks. A line above
   the input shows progress and the step in hand; `/todo` expands it into the whole list.
+- Sub-agents: the `task` tool starts an agent from `agents.d/` with a fresh context, its
+  own todo list and a narrower set of tools, and only its final report comes back, so the
+  main conversation stays small. `explore` searches read-only (on `[model] small` when
+  set), and several started in one reply run in parallel. `general` makes a
+  self-contained change, one at a time, with its edits asking for approval like any
+  other. A task can carry out one item of the plan (`todo: 3`), which ticks off when it
+  succeeds. Its steps show under the `task` line, and `/tasks` lists every run with
+  what it did and its report. Add your own agents as two-line TOML files.
 - A forgiving `edit`: exact match first, then ignoring trailing spaces, indentation and blank
   lines. CRLF line endings and BOMs are kept, and a file changed since the agent read it is
   not overwritten.
@@ -158,7 +166,8 @@ Everything below works today. Planned work is listed separately at the end.
   Nothing changes until you accept. With `[model] planner = "<provider>/<model>"`, plan
   mode runs on that model (say, a large one) and your usual model carries the plan out.
   Accepting hands it one message (your requests, your answers, the plan) instead of the
-  planner's transcript, so its prompt cache still holds.
+  planner's transcript, so its prompt cache still holds. Read-only sub-agents (`explore`)
+  run in plan mode too, so the planner can search widely without filling its context.
 - `ask_user`: the agent can ask you questions in any mode, the same way. Headless runs skip
   them and the agent says what it assumed.
 - OS sandbox for shell commands, on by default: commands write only in the workspace and
@@ -303,7 +312,6 @@ Not available yet:
 - Editor integration (ACP).
 - Sandboxing on Windows.
 - Renaming symbols through the language server.
-- Sub-agents.
 - `/fork` and `/export`.
 - Automatic reload when config files change.
 - MCP prompts, resources and OAuth.

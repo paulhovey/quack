@@ -192,6 +192,22 @@ impl SessionLog {
         self.project.dir.join(&self.entry.dir)
     }
 
+    /// A log of its own for a sub-agent run: `agents/<name>.jsonl` in this session's folder.
+    /// Resuming the session never reads it.
+    pub fn child(&self, name: &str) -> std::io::Result<SessionLog> {
+        let dir = self.dir().join("agents");
+        std::fs::create_dir_all(&dir)?;
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join(format!("{name}.jsonl")))?;
+        Ok(Self {
+            project: self.project.clone(),
+            entry: self.entry.clone(),
+            file,
+        })
+    }
+
     /// Append one record. `payload` must serialize to a JSON object.
     pub fn append(&mut self, kind: &str, payload: impl Serialize) -> std::io::Result<()> {
         let mut m = Map::new();

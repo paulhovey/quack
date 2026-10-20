@@ -3,6 +3,7 @@
 //! survives long tool output and compaction.
 
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use futures::future::BoxFuture;
 use quack_protocol::ApprovalRequest;
@@ -46,13 +47,55 @@ impl Status {
 #[derive(Debug, Default)]
 pub struct Plan {
     items: Mutex<Vec<(String, Status)>>,
+    /// Bumped on every change, so the engine can tell clients.
+    version: AtomicU64,
 }
 
 impl Plan {
-    fn set(&self, items: Vec<(String, Status)>) {
+    pub(crate) fn set(&self, items: Vec<(String, Status)>) {
         if let Ok(mut i) = self.items.lock() {
             *i = items;
+            self.version.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    /// Set one item's status, chosen by its number (1-based) or its text (exact, else the
+    /// one item containing it, ignoring case). Returns the item's text.
+    pub(crate) fn mark(&self, which: &str, status: Status) -> Result<String, String> {
+        let mut items = self.items.lock().map_err(|_| "the plan is unavailable")?;
+        let at = match which.trim().parse::<usize>() {
+            Ok(n) if (1..=items.len()).contains(&n) => n - 1,
+            Ok(n) => return Err(format!("no plan item {n}; the plan has {}", items.len())),
+            Err(_) => {
+                let lower = which.trim().to_lowercase();
+                let exact = items.iter().position(|(t, _)| t.to_lowercase() == lower);
+                let mut hits = items
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (t, _))| t.to_lowercase().contains(&lower))
+                    .map(|(i, _)| i);
+                match (exact, hits.next(), hits.next()) {
+                    (Some(i), _, _) | (None, Some(i), None) => i,
+                    _ => return Err(format!("no single plan item matches `{which}`")),
+                }
+            }
+        };
+        items[at].1 = status;
+        self.version.fetch_add(1, Ordering::Relaxed);
+        Ok(items[at].0.clone())
+    }
+
+    /// Changes with every update of the plan.
+    pub fn version(&self) -> u64 {
+        self.version.load(Ordering::Relaxed)
+    }
+
+    /// The whole plan as `[x]`/`[~]`/`[ ]` lines; empty when there is none.
+    pub fn checklist(&self) -> String {
+        self.items
+            .lock()
+            .map(|i| Self::render(&i))
+            .unwrap_or_default()
     }
 
     fn render(items: &[(String, Status)]) -> String {
@@ -247,5 +290,31 @@ mod tests {
         );
         p.set(vec![("fix".into(), Status::Done)]);
         assert_eq!(p.reminder(), None);
+    }
+
+    #[test]
+    fn marks_items_by_number_or_text() {
+        let p = Plan::default();
+        p.set(vec![
+            ("Read the parser".into(), Status::Pending),
+            ("Fix the parser".into(), Status::Pending),
+            ("Run tests".into(), Status::Pending),
+        ]);
+        let v = p.version();
+        assert_eq!(
+            p.mark("2", Status::InProgress).as_deref(),
+            Ok("Fix the parser")
+        );
+        assert!(p.version() > v);
+        assert_eq!(
+            p.mark("run TESTS", Status::Done).as_deref(),
+            Ok("Run tests")
+        );
+        assert!(p.mark("parser", Status::Done).is_err(), "two items match");
+        assert!(p.mark("4", Status::Done).is_err());
+        assert_eq!(
+            p.checklist(),
+            "[ ] Read the parser\n[~] Fix the parser\n[x] Run tests"
+        );
     }
 }

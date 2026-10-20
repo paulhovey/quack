@@ -71,7 +71,8 @@ impl Default for Stats {
 }
 
 impl Stats {
-    /// A resumed session: token totals from its `usage` records.
+    /// A resumed session: token totals from its `usage` records, and its sub-agents' from
+    /// `agent_usage`.
     pub(crate) fn from_log(records: &[Record]) -> Self {
         let mut s = Self {
             resumed: true,
@@ -79,7 +80,7 @@ impl Stats {
         };
         for r in records {
             match r.kind.as_str() {
-                "usage" => {
+                "usage" | "agent_usage" => {
                     if let Some(u) = r
                         .data
                         .get("usage")

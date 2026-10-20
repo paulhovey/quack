@@ -248,6 +248,8 @@ mod tests {
             lsp: None,
             sandbox: Default::default(),
             plan: Default::default(),
+            agents: Default::default(),
+            spawn: None,
             edit_format: quack_config::settings::EditFormat::StrReplace,
             outline_above: 0,
         }

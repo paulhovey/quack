@@ -161,6 +161,7 @@ Round 2 (2026-10-18), tested against mock servers only; nothing here has been ru
 - `/fork`, `/export`, auto titles; `/fork --worktree` parallel sessions
 - Bundles (`bundles/`, `/bundles`)
 - Sub-agents (`task` tool) with `/tasks` views (moved from M5)
+  - Landed early (2026-10-19): `agents.d` (`explore` read-only on `[model] small`, `general`), `task` with a fresh context and its own todo list, read-only agents in parallel and allowed in plan mode, workers' approvals through the client, `todo` hand-off that ticks plan items, `Event::Plan`, `/tasks`, a `doctor` row ([04](04-agent-loop-and-tools.md#sub-agents)). Mock-server tests only; not yet measured with `quack eval`
 
 Landed early (2026-10-18): the project trust flow (Trust modal, `/trust`, `quack trust`, fingerprinted decisions; [01](01-configuration.md#as-implemented-2026-10-18)), and `/reload` keeping the conversation (folder watching is still to do; [01](01-configuration.md#hot-reload)). `/undo` and `/rewind` from edit pre-images ([07](07-sessions-memory-checkpoints.md#as-implemented-2026-10-18-ahead-of-m3)). Skills discovery, the `skill` tool, `{{ skills }}`, `/<skill>` and `/skills` ([08](08-instructions-skills-commands.md#as-implemented-2026-10-18-ahead-of-m3)). Still to do for skills: other harnesses' folders through the detection prompt. Hooks (2026-10-19): `hooks.d` with all seven events, `match` on tools, targets and prompts, secrets in `env`, enforced system-layer hooks, `on_error`, a `/doctor` row and the `jira` example ([11](11-security.md#as-implemented-2026-10-19-ahead-of-m3)).
 

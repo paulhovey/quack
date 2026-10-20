@@ -55,6 +55,10 @@ pub(crate) struct Setup {
     pub vars: PromptVars,
     /// Custom slash commands: `/<name> args` turns into the command's prompt.
     pub commands: Arc<Vec<CustomCommand>>,
+    /// Sub-agents the `task` tool can start (`agents.d`), by id.
+    pub agents: Arc<Vec<(String, quack_config::AgentFile)>>,
+    /// Offer the MCP servers' tools; off for sub-agents that do not list `mcp`.
+    pub mcp_tools: bool,
 }
 
 /// Files read from the workspace and config folders that shape the prompt.
@@ -639,10 +643,11 @@ async fn build_setup(
         detail: "loading profiles.d".into(),
     });
     let loaded = Arc::clone(config);
-    let (profiles, warnings) = tokio::task::spawn_blocking(move || load_profiles(&loaded))
-        .await
-        .unwrap_or_default();
-    for w in warnings {
+    let ((profiles, warnings), (agents, agent_warnings)) =
+        tokio::task::spawn_blocking(move || (load_profiles(&loaded), env::agents(&loaded)))
+            .await
+            .unwrap_or_default();
+    for w in warnings.into_iter().chain(agent_warnings) {
         warn(tx, w);
     }
     let mut names = vec![model.id.as_str()];
@@ -679,6 +684,17 @@ async fn build_setup(
         lsp: Some(lsp),
         sandbox: crate::sandbox::state(config),
         plan: Default::default(),
+        agents: Arc::new(
+            agents
+                .iter()
+                .map(|(id, a)| quack_tools::AgentInfo {
+                    id: id.clone(),
+                    description: a.description.trim().to_owned(),
+                    read_only: a.read_only,
+                })
+                .collect(),
+        ),
+        spawn: None,
         edit_format: EditFormat::StrReplace,
         // About 3.5 bytes per token.
         outline_above: config.settings.tools.read_outline_tokens as usize * 7 / 2,
@@ -771,6 +787,8 @@ async fn build_setup(
         mcp,
         vars,
         commands: Arc::new(commands),
+        agents: Arc::new(agents),
+        mcp_tools: true,
     })
 }
 

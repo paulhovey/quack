@@ -359,6 +359,33 @@ pub enum Event {
         #[serde(default)]
         context_tokens: u32,
     },
+    // sub-agents and the plan
+    /// A sub-agent (`agents.d`) started for the `task` call `call_id`. `id` names this run,
+    /// e.g. `explore-2`; `agent` is the agent's id.
+    AgentStarted {
+        id: String,
+        agent: String,
+        description: String,
+        call_id: CallId,
+        /// `<provider>/<model>` it runs on.
+        model: String,
+    },
+    /// An event of a sub-agent's own turn, for clients to show apart from the conversation.
+    /// Its approval requests are sent unwrapped instead, so every client answers them.
+    Agent {
+        id: String,
+        inner: Box<Event>,
+    },
+    AgentFinished {
+        id: String,
+        ok: bool,
+        /// e.g. `12 steps · 34.5k tokens`.
+        summary: String,
+    },
+    /// The plan (`todo`) changed: one `[x]`, `[~]` or `[ ]` line per item; empty when cleared.
+    Plan {
+        checklist: String,
+    },
     // diagnostics
     /// Something worth knowing that is not a problem, e.g. an offer.
     Notice {

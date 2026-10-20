@@ -60,3 +60,9 @@ todos = { to = "items" }
 [[tools]]
 name = "AskUserQuestion"
 maps_to = "ask_user"
+
+[[tools]]
+name = "Task"
+maps_to = "task"
+[tools.params]
+subagent_type = { to = "agent" }

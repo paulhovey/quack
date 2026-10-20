@@ -210,7 +210,13 @@ pub(crate) const COMMANDS: &[Command] = &[
         "Show the model's whole plan above the input, or just its summary",
         None,
     ),
-    c("tasks", &[], "", "Sub-agent views", Some("M5")),
+    c(
+        "tasks",
+        &[],
+        "",
+        "Sub-agents started this session: what each did and its report",
+        None,
+    ),
     c(
         "theme",
         &[],

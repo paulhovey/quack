@@ -18,6 +18,7 @@ mod search;
 mod shell;
 mod shell_split;
 mod skill;
+mod task;
 mod text;
 mod todo;
 mod write;
@@ -28,4 +29,5 @@ pub use registry::{
     ReadTracker, Registry, SandboxState, Subject, Tool, ToolCtx, ToolKind, ToolOutput,
 };
 pub use skill::expand as expand_skill;
+pub use task::{AgentInfo, SpawnRequest, Spawner, TaskReport, TaskRequest};
 pub use todo::Plan;

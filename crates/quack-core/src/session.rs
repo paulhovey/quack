@@ -1,12 +1,14 @@
 //! Session persistence: what the engine records, and rebuilding history on resume.
 //!
 //! Record types: `session_start`, `resume`, `message` (one chat message, exactly as sent),
-//! `tool` (UI summary of a tool call), `usage` (with `cost` when priced), `prune` (tool results replaced),
+//! `tool` (UI summary of a tool call), `usage` (with `cost` when priced), `agent_usage` (the
+//! same for a sub-agent's request, for `/stats`), `prune` (tool results replaced),
 //! `compaction` (history before `cut` replaced by `message`), `rewind` (history cut back
 //! to its first `to` messages), `handoff` (a planner's messages after the first `to`
 //! dropped; the brief that replaces them follows as a `message`; the transcript keeps
 //! them), `approval` and `questions` (what the user answered; replay skips them, since
-//! the tool results carry the answers), `model_switch` (also skipped).
+//! the tool results carry the answers), `model_switch` (also skipped), `agent` (a sub-agent
+//! run started; its own records are in `agents/<id>.jsonl`, which replay never reads).
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

@@ -5,6 +5,7 @@
 //! compiled defaults → defaults bundle → system → user → project (trusted only) → env → CLI,
 //! then keys locked by the system layer's `[policy]` are reset to the system value.
 
+pub mod agent;
 mod diagnostic;
 mod edit;
 pub mod hooks;
@@ -26,6 +27,7 @@ mod sha256;
 mod state;
 mod trust;
 
+pub use agent::AgentFile;
 pub use diagnostic::FileDiagnostic;
 pub use edit::{SettingRow, set_in_file};
 pub use hooks::HookFile;
@@ -100,6 +102,12 @@ pub fn load_lsp(loaded: &Loaded) -> Vec<Item<LspServerFile>> {
         |_| None,
     );
     items
+}
+
+/// Load `agents.d/*.toml` from every active layer, merged by id. A project's files load
+/// only when the project is trusted.
+pub fn load_agents(loaded: &Loaded) -> Vec<Item<AgentFile>> {
+    load_items::<AgentFile>(&loaded.item_layers(), "agents.d")
 }
 
 /// Load `providers.d/*.toml` from every active layer, merged by id.

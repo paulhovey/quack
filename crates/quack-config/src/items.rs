@@ -1,4 +1,4 @@
-//! One-file-per-item directories (`providers.d`, `mcp.d`, `lsp.d`, `hooks.d`).
+//! One-file-per-item directories (`providers.d`, `mcp.d`, `lsp.d`, `hooks.d`, `agents.d`).
 //!
 //! Items merge by id (default: file stem). A higher layer's item replaces a lower one
 //! entirely. A file containing only `enabled = false` disables the lower item. A file

@@ -27,7 +27,7 @@ use crate::startup::Setup;
 use crate::stats::Stats;
 
 /// Steps (model calls) per turn before pausing.
-const MAX_STEPS: usize = 100;
+pub(crate) const MAX_STEPS: usize = 100;
 /// Identical consecutive calls before the model is told to change approach.
 const REPEAT_LIMIT: usize = 3;
 
@@ -45,6 +45,9 @@ pub(crate) struct TurnCtx {
     pub tx: broadcast::Sender<Event>,
     pub cancel: CancellationToken,
     pub log: Option<SharedLog>,
+    /// The session's own log. For a sub-agent, whose messages go to its own `log`, its
+    /// usage is also recorded here (`agent_usage`), so `/stats` counts it after a resume.
+    pub main_log: Option<SharedLog>,
     /// Pre-images of edited files, for `/undo`.
     pub checkpoints: Option<Arc<Checkpoints>>,
     /// The session's usage, fed by `emit`.
@@ -52,6 +55,14 @@ pub(crate) struct TurnCtx {
     pub hooks: Arc<Hooks>,
     /// The session id, for hooks.
     pub session: String,
+    /// The sub-agent run this turn is (`explore-2`); `None` for the session's own turns.
+    pub agent: Option<String>,
+    /// Model calls before the turn stops.
+    pub max_steps: usize,
+    /// Sub-agent setups, built on first use.
+    pub pool: Arc<crate::agent::Pool>,
+    /// One approval or question on screen at a time, while sub-agents run side by side.
+    pub prompt_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// What the user sent, ready for the model, and what they typed (which hooks see).
@@ -73,7 +84,24 @@ impl TurnCtx {
         if let Ok(mut s) = self.stats.lock() {
             s.observe(&e);
         }
+        // A sub-agent's events go to clients wrapped, except the approvals they answer.
+        let e = match &self.agent {
+            Some(id) if !matches!(e, Event::ApprovalRequest { .. }) => Event::Agent {
+                id: id.clone(),
+                inner: Box::new(e),
+            },
+            _ => e,
+        };
         let _ = self.tx.send(e);
+    }
+
+    /// A call id as clients and the approval table see it. A sub-agent's model numbers its
+    /// calls from scratch, so its ids get the run's id in front.
+    fn key(&self, id: &str) -> String {
+        match &self.agent {
+            Some(a) => format!("{a}/{id}"),
+            None => id.to_owned(),
+        }
     }
 
     /// Emit the corrected estimate of what the next request will cost.
@@ -109,7 +137,7 @@ impl TurnCtx {
 
     /// `turn_end` hooks, in the background: nothing waits for them.
     fn turn_end(&self, fields: Value) {
-        if !self.hooks.any(HookEvent::TurnEnd) {
+        if self.agent.is_some() || !self.hooks.any(HookEvent::TurnEnd) {
             return;
         }
         let (hooks, tx, log) = (self.hooks.clone(), self.tx.clone(), self.log.clone());
@@ -158,13 +186,17 @@ pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: Prompt)
         Some(start) => start.await.unwrap_or_default(),
         None => Vec::new(),
     };
-    let hooked = ctx
-        .hooks(
+    // A sub-agent's prompt comes from the model, not the user.
+    let hooked = if ctx.agent.is_some() {
+        hooks::Outcome::default()
+    } else {
+        ctx.hooks(
             HookEvent::UserPrompt,
             json!({ "prompt": prompt.typed }),
             Target::Prompt(&prompt.typed),
         )
-        .await;
+        .await
+    };
     if let Some((id, reason)) = hooked.denied() {
         let reason = if reason.is_empty() {
             String::new()
@@ -196,7 +228,7 @@ pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: Prompt)
     let mut overflowed = false;
 
     let end = 'steps: {
-        for _ in 0..MAX_STEPS {
+        for _ in 0..ctx.max_steps {
             crate::context::fit(&ctx, &mut history).await;
             let estimated = raw_estimate(&ctx.setup, &history);
             let (msg, usage) = match stream_step(&ctx, &history).await {
@@ -278,7 +310,8 @@ pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: Prompt)
                 }
                 break 'steps StepEnd::Done;
             }
-            for (i, call) in calls.iter().enumerate() {
+            let mut i = 0;
+            while i < calls.len() {
                 if ctx.cancel.is_cancelled() {
                     // Every tool call needs a result, or the next request is invalid.
                     for c in &calls[i..] {
@@ -292,6 +325,26 @@ pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: Prompt)
                     }
                     break 'steps StepEnd::Aborted("interrupted".into());
                 }
+                // Read-only sub-agents started together run side by side.
+                let together = calls[i..].iter().take_while(|c| parallel(&ctx, c)).count();
+                if together > 1 {
+                    let batch = &calls[i..i + together];
+                    let outs =
+                        futures::future::join_all(batch.iter().map(|c| run_call(&ctx, c))).await;
+                    for (call, out) in batch.iter().zip(outs) {
+                        ctx.push(
+                            &mut history,
+                            Message::Tool {
+                                call_id: call.id.clone(),
+                                content: out.model,
+                            },
+                        );
+                    }
+                    i += together;
+                    continue;
+                }
+                let call = &calls[i];
+                i += 1;
                 recent.push((call.name.clone(), call.arguments.clone()));
                 let mut out = run_call(&ctx, call).await;
                 let repeats = recent
@@ -317,7 +370,10 @@ pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: Prompt)
             ctx.context_estimate(&history);
         }
         ctx.emit(Event::Warning {
-            message: format!("stopped after {MAX_STEPS} steps; send a message to continue"),
+            message: format!(
+                "stopped after {} steps; send a message to continue",
+                ctx.max_steps
+            ),
         });
         StepEnd::Done
     };
@@ -403,7 +459,12 @@ fn tool_specs(s: &Setup) -> Vec<ToolSpec> {
             parameters: t.schema.clone(),
         })
         .collect();
-    specs.extend(s.mcp.offered(s.budget).into_iter().map(|t| ToolSpec {
+    let mcp = if s.mcp_tools {
+        s.mcp.offered(s.budget)
+    } else {
+        Vec::new()
+    };
+    specs.extend(mcp.into_iter().map(|t| ToolSpec {
         name: t.name().to_owned(),
         description: t.description(&s.tool_ctx),
         parameters: t.schema(),
@@ -538,6 +599,13 @@ async fn stream_step(
         ))
     });
     session::record_usage(ctx.log.as_ref(), usage.as_ref(), cost);
+    if let (Some(agent), Some(u)) = (&ctx.agent, &usage) {
+        session::record(
+            ctx.main_log.as_ref(),
+            "agent_usage",
+            json!({ "agent": agent, "usage": u, "cost": cost }),
+        );
+    }
     if let Ok(mut st) = ctx.stats.lock() {
         st.request(usage.as_ref(), cost, sent.elapsed());
     }
@@ -645,7 +713,7 @@ pub(crate) fn parse_args(raw: &str) -> Result<Value, String> {
 fn begin(ctx: &TurnCtx, call: &ToolCall, summary: &str) {
     ctx.emit(Event::ToolCallBegin {
         call: ToolCallInfo {
-            call_id: CallId(call.id.clone()),
+            call_id: CallId(ctx.key(&call.id)),
             name: call.name.clone(),
             summary: summary.to_owned(),
         },
@@ -664,7 +732,7 @@ fn finish(ctx: &TurnCtx, call: &ToolCall, summary: &str, out: ToolOutput) -> Too
         }),
     );
     ctx.emit(Event::ToolCallEnd {
-        call_id: CallId(call.id.clone()),
+        call_id: CallId(ctx.key(&call.id)),
         result: ToolResultSummary {
             ok: out.ok,
             summary: out.summary.clone(),
@@ -683,6 +751,7 @@ fn reject(ctx: &TurnCtx, call: &ToolCall, message: String) -> ToolOutput {
 /// Show the user an `ask_user` call's questions and wait for the answers; `None` when
 /// the turn is interrupted.
 async fn ask(ctx: &TurnCtx, call_id: &CallId, questions: Vec<Question>) -> Option<Answers> {
+    let _one_at_a_time = ctx.prompt_lock.lock().await;
     let (otx, orx) = oneshot::channel();
     if let Ok(mut pending) = ctx.questions.lock() {
         pending.insert(call_id.0.clone(), otx);
@@ -715,10 +784,27 @@ async fn ask(ctx: &TurnCtx, call_id: &CallId, questions: Vec<Question>) -> Optio
     answer
 }
 
+/// Whether `call` starts a read-only sub-agent, which may run beside others.
+fn parallel(ctx: &TurnCtx, call: &ToolCall) -> bool {
+    let s = &ctx.setup;
+    let Some((internal, args)) = parse_args(&call.arguments)
+        .ok()
+        .and_then(|a| s.surface.map_call(&call.name, a))
+    else {
+        return false;
+    };
+    internal == "task"
+        && s.registry
+            .get("task")
+            .and_then(|t| t.subject(&args, &s.tool_ctx).ok())
+            == Some(Subject::Agent { read_only: true })
+}
+
 /// Run one tool call through mapping, permissions and approval.
 async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
     let s = &ctx.setup;
-    let call_id = CallId(call.id.clone());
+    let call_id = CallId(ctx.key(&call.id));
+    let plan_version = s.tool_ctx.plan.version();
     let args = match parse_args(&call.arguments) {
         Ok(a) => a,
         Err(e) => return reject(ctx, call, e),
@@ -728,7 +814,7 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
             Some(tool) => (tool, args),
             None => return reject(ctx, call, format!("tool `{internal}` is not available")),
         },
-        None => match s.mcp.find(&call.name, s.budget) {
+        None => match s.mcp.find(&call.name, s.budget).filter(|_| s.mcp_tools) {
             Some(tool) => (tool, args),
             None => {
                 return reject(
@@ -822,9 +908,10 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
                 Ok(r) => r,
                 Err(e) => return done(ToolOutput::error(e)),
             };
+            let _one_at_a_time = ctx.prompt_lock.lock().await;
             let (otx, orx) = oneshot::channel();
             if let Ok(mut pending) = ctx.approvals.lock() {
-                pending.insert(call.id.clone(), otx);
+                pending.insert(call_id.0.clone(), otx);
             }
             ctx.emit(Event::ApprovalRequest {
                 call_id: call_id.clone(),
@@ -839,7 +926,7 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
                 st.waited(asked.elapsed());
             }
             if let Ok(mut pending) = ctx.approvals.lock() {
-                pending.remove(&call.id);
+                pending.remove(&call_id.0);
             }
             session::record(
                 ctx.log.as_ref(),
@@ -885,7 +972,7 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
         Some(cp) => subject
             .edited()
             .iter()
-            .filter_map(|p| match cp.before(ctx.turn.0, &call.id, p) {
+            .filter_map(|p| match cp.before(ctx.turn.0, &call_id.0, p) {
                 Ok(seq) => Some((cp, seq, p)),
                 Err(e) => {
                     tracing::warn!(error = %e, path = %p.display(), "no undo point for this edit");
@@ -904,7 +991,10 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
     let post_args = ctx.hooks.any(HookEvent::PostTool).then(|| args.clone());
     let (atx, mut arx) = mpsc::unbounded_channel();
     tctx.ask = Some(atx);
-    // The call runs until done; questions it asks on the way go to the user.
+    let (stx, mut srx) = mpsc::unbounded_channel();
+    tctx.spawn = Some(stx);
+    // The call runs until done; questions it asks on the way go to the user, and
+    // sub-agents it starts run here.
     let mut out = {
         let run = tool.run(args, &tctx);
         tokio::pin!(run);
@@ -917,9 +1007,17 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
                         let _ = reply.send(a);
                     }
                 }
+                Some((request, reply)) = srx.recv() => {
+                    let _ = reply.send(crate::agent::run(ctx, &call_id.0, request).await);
+                }
             }
         }
     };
+    if s.tool_ctx.plan.version() != plan_version {
+        ctx.emit(Event::Plan {
+            checklist: s.tool_ctx.plan.checklist(),
+        });
+    }
     drop(tctx);
     let _ = forward.await;
     for (cp, seq, p) in checkpoints {

@@ -155,6 +155,7 @@ fn local(config: &Loaded) -> Vec<DoctorCheck> {
 
     out.push(mcp_check(config));
     out.push(hooks_check(config));
+    out.push(agents_check(config));
     out.push(lsp_check(config));
 
     let instructions = crate::env::instructions(config);
@@ -431,6 +432,51 @@ fn mcp_check(config: &Loaded) -> DoctorCheck {
 
 /// Hook files: each one parses and checks, and its program (and any `{dir}` file it names)
 /// exists. Nothing runs.
+/// `agents.d`: the sub-agents the `task` tool offers, and files that failed to load.
+fn agents_check(config: &Loaded) -> DoctorCheck {
+    let (agents, failed) = crate::env::agents(config);
+    if agents.is_empty() && failed.is_empty() {
+        return check(
+            "agents",
+            CheckStatus::Info,
+            "no agents in agents.d; the task tool is not offered",
+        );
+    }
+    let names: Vec<String> = agents
+        .iter()
+        .map(|(id, a)| {
+            let model = match a.model.trim() {
+                "" => String::new(),
+                "small" if config.settings.model.small.is_empty() => {
+                    ", small model unset: uses the session's".into()
+                }
+                "small" => format!(", on {}", config.settings.model.small),
+                m => format!(", on {m}"),
+            };
+            match (a.read_only, model.is_empty()) {
+                (false, true) => id.clone(),
+                (ro, _) => {
+                    let ro = if ro { "read-only" } else { "" };
+                    let model = if ro.is_empty() {
+                        model.trim_start_matches(", ").to_owned()
+                    } else {
+                        model
+                    };
+                    format!("{id} ({ro}{model})")
+                }
+            }
+        })
+        .collect();
+    let mut lines = vec![format!("{} agents: {}", agents.len(), names.join(", "))];
+    lines.extend(failed);
+    let worst = if lines.len() > 1 {
+        CheckStatus::Warn
+    } else {
+        CheckStatus::Ok
+    };
+    check("agents", worst, lines.join("\n"))
+}
+
 fn hooks_check(config: &Loaded) -> DoctorCheck {
     let mut lines = Vec::new();
     let mut worst = CheckStatus::Ok;

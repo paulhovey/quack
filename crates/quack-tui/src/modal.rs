@@ -591,6 +591,91 @@ fn placeholder(label: &str, detail: &str, theme: &Theme) -> ModalItem {
     }
 }
 
+/// The `/tasks` modal: each sub-agent run of this session, newest first, with what it did
+/// and its report.
+pub(crate) fn tasks(runs: &[crate::app::AgentRun], theme: &Theme) -> Modal {
+    use crate::app::AgentItem;
+    let items = if runs.is_empty() {
+        vec![placeholder(
+            "no sub-agents yet",
+            "The model starts sub-agents with its task tool, from the agents in agents.d: \
+             explore for read-only searches (several at once), general for self-contained \
+             changes. Each works with a fresh context and only its report comes back.",
+            theme,
+        )]
+    } else {
+        runs.iter()
+            .rev()
+            .map(|r| {
+                let took = r.took.unwrap_or_else(|| r.started.elapsed());
+                let state = match r.ok {
+                    None => format!("running · {} steps", r.steps()),
+                    Some(true) => r.summary.clone(),
+                    Some(false) => format!("failed · {}", r.summary),
+                };
+                let mut detail = vec![
+                    Line::styled(format!("{}: {}", r.agent, r.description), theme.accent),
+                    Line::raw(""),
+                    field(theme, "run", r.id.clone()),
+                    field(theme, "model", r.model.clone()),
+                    field(
+                        theme,
+                        "state",
+                        format!("{state} · {}", crate::theme::elapsed(took)),
+                    ),
+                    Line::raw(""),
+                ];
+                for item in &r.items {
+                    match item {
+                        AgentItem::Tool(t) => {
+                            let (mark, style) = match t.ok {
+                                None => ("…", theme.accent),
+                                Some(true) => ("✓", theme.ok),
+                                Some(false) => ("✗", theme.error),
+                            };
+                            let result = if t.result.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" · {}", t.result)
+                            };
+                            detail.push(Line::from(vec![
+                                Span::styled(format!("{mark} "), style),
+                                Span::raw(t.summary.clone()),
+                                Span::styled(result, theme.dim),
+                            ]));
+                        }
+                        AgentItem::Text(text) => {
+                            detail.push(Line::raw(""));
+                            detail.extend(text.trim().lines().map(|l| Line::raw(l.to_owned())));
+                            detail.push(Line::raw(""));
+                        }
+                    }
+                }
+                ModalItem {
+                    label: format!("{} · {}", r.id, r.description),
+                    hint: match r.ok {
+                        None => "running".into(),
+                        Some(true) => "done".into(),
+                        Some(false) => "failed".into(),
+                    },
+                    detail,
+                    action: None,
+                    run: false,
+                    alt: None,
+                    charts: Vec::new(),
+                }
+            })
+            .collect()
+    };
+    Modal::new(
+        "Tasks",
+        vec![ModalTab {
+            title: "Sub-agents".into(),
+            items,
+        }],
+    )
+}
+
 /// The `/resume` modal. `sessions` is `None` while the engine is listing them.
 pub(crate) fn sessions(
     sessions: Option<&[quack_protocol::SessionSummary]>,

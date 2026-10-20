@@ -144,6 +144,8 @@ maki's `code_execution` tool lets the model chain tools inside an interpreter so
 
 The `task` tool runs a sub-agent with a fresh context and a restricted tool set. Only its final report enters the parent context. Sub-agents can use the `small` model. Each one shows up in the UI as its own navigable view (maki `/tasks`).
 
+Built 2026-10-19 ([04](04-agent-loop-and-tools.md#sub-agents)). The parent's prefix is unaffected: the `task` tool's description (with the agent list) is fixed for the session, and a report is an ordinary tool result. Each agent keeps one setup per parent model, so its own system prompt and tools are cached across runs; the agent list makes the tool block differ between projects that add their own agents.
+
 ## Metrics
 
 Logged per request: prompt tokens, cached tokens (when reported), completion tokens and, when the model has a `cost`, the price. `/stats` shows per-session totals, rebuilt from the log on resume. Timings (TTFT, speed, time in tools and approvals) are kept in memory only, so after a resume they cover the time since. These feed the `auto` strategy and the eval reports.

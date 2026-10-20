@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "description": {
+      "description": "What the agent is for. The model reads it in the `task` tool's description.",
+      "type": "string"
+    },
+    "enabled": {
+      "default": true,
+      "type": "boolean"
+    },
+    "id": {
+      "default": null,
+      "description": "Defaults to the file stem. The model names the agent by it.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "max_steps": {
+      "default": null,
+      "description": "Model calls before the agent stops and reports what it has.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "model": {
+      "default": "",
+      "description": "`small` (the `[model] small` model), `<provider>/<model>`, or empty for the model\nrunning the turn. Falls back to that model when the one named cannot load.",
+      "type": "string"
+    },
+    "prompt": {
+      "default": "",
+      "description": "Added after the model's system prompt for the agent's whole run.",
+      "type": "string"
+    },
+    "read_only": {
+      "default": false,
+      "description": "The agent changes nothing: edits are refused and only commands that read run, as in\nplan mode. Read-only agents may run in plan mode, and several started in one reply\nrun at the same time.",
+      "type": "boolean"
+    },
+    "tools": {
+      "default": [],
+      "description": "Internal tool names the agent may use (`read`, `grep`, `shell`, ...); `mcp` adds the\nMCP servers' tools. Empty: every tool the session has. Sub-agents never get `task`\nor `ask_user`.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "description"
+  ],
+  "title": "AgentFile",
+  "type": "object"
+}

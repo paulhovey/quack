@@ -205,6 +205,82 @@ pub(crate) fn parse_plan(text: &str) -> Vec<(PlanState, String)> {
         .collect()
 }
 
+/// Something a sub-agent did: text it wrote, or a tool call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AgentItem {
+    Text(String),
+    Tool(ToolEntry),
+}
+
+/// A sub-agent run (`task`), from its events.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AgentRun {
+    /// The run, e.g. `explore-2`.
+    pub id: String,
+    pub agent: String,
+    pub description: String,
+    pub model: String,
+    /// The `task` call that started it.
+    pub call_id: CallId,
+    /// `None` while running.
+    pub ok: Option<bool>,
+    pub summary: String,
+    pub started: Instant,
+    pub took: Option<Duration>,
+    pub items: Vec<AgentItem>,
+}
+
+impl AgentRun {
+    fn on_event(&mut self, e: Event) {
+        match e {
+            Event::AssistantDelta { text } => match self.items.last_mut() {
+                Some(AgentItem::Text(t)) => t.push_str(&text),
+                _ => self.items.push(AgentItem::Text(text)),
+            },
+            Event::AssistantRewrite { text } => {
+                if let Some(AgentItem::Text(t)) = self.items.last_mut() {
+                    *t = text;
+                }
+            }
+            Event::ToolCallBegin { call } => self.items.push(AgentItem::Tool(ToolEntry {
+                call_id: call.call_id,
+                name: call.name,
+                summary: call.summary,
+                ok: None,
+                result: String::new(),
+                detail: String::new(),
+                started: Some(Instant::now()),
+                took: None,
+            })),
+            Event::ToolCallEnd { call_id, result } => {
+                if let Some(t) = self.items.iter_mut().rev().find_map(|i| match i {
+                    AgentItem::Tool(t) if t.call_id == call_id => Some(t),
+                    _ => None,
+                }) {
+                    t.ok = Some(result.ok);
+                    t.result = result.summary;
+                    t.detail = result.detail.unwrap_or_default();
+                    t.took = t.started.map(|s| s.elapsed());
+                }
+            }
+            Event::Warning { message } => self.items.push(AgentItem::Text(format!("! {message}"))),
+            Event::Error { error } => {
+                self.items
+                    .push(AgentItem::Text(format!("! {}", error.message)));
+            }
+            _ => {}
+        }
+    }
+
+    /// Its calls so far.
+    pub(crate) fn steps(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|i| matches!(i, AgentItem::Tool(_)))
+            .count()
+    }
+}
+
 /// An `ask_user` call's questions, answered one at a time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Asking {
@@ -295,6 +371,8 @@ pub struct App {
     pub(crate) plan: Vec<(PlanState, String)>,
     /// `/todo`: the whole plan above the input instead of its one-line summary.
     pub(crate) plan_expanded: bool,
+    /// Sub-agent runs in this session, oldest first (`/tasks`).
+    pub(crate) agents: Vec<AgentRun>,
     panel_collapsed: bool,
     /// A `/resume` is in flight: clear the transcript when it lands.
     resuming: bool,
@@ -352,6 +430,7 @@ impl App {
             turn_tools: 0,
             plan: Vec::new(),
             plan_expanded: false,
+            agents: Vec::new(),
             panel_collapsed: false,
             resuming: false,
             mode_before_plan: String::new(),
@@ -681,6 +760,7 @@ impl App {
             Event::SessionResumed { session, items } => {
                 if std::mem::take(&mut self.resuming) {
                     self.transcript.clear();
+                    self.agents.clear();
                     self.context = None;
                     self.growth.clear();
                 }
@@ -773,6 +853,37 @@ impl App {
             }
             Event::ApprovalRequest { call_id, request } => {
                 self.approval = Some(Approval { call_id, request });
+            }
+            Event::Plan { checklist } => self.plan = parse_plan(&checklist),
+            Event::AgentStarted {
+                id,
+                agent,
+                description,
+                call_id,
+                model,
+            } => self.agents.push(AgentRun {
+                id,
+                agent,
+                description,
+                model,
+                call_id,
+                ok: None,
+                summary: String::new(),
+                started: Instant::now(),
+                took: None,
+                items: Vec::new(),
+            }),
+            Event::Agent { id, inner } => {
+                if let Some(a) = self.agents.iter_mut().rev().find(|a| a.id == id) {
+                    a.on_event(*inner);
+                }
+            }
+            Event::AgentFinished { id, ok, summary } => {
+                if let Some(a) = self.agents.iter_mut().rev().find(|a| a.id == id) {
+                    a.ok = Some(ok);
+                    a.summary = summary;
+                    a.took = Some(a.started.elapsed());
+                }
             }
             Event::Questions { call_id, questions } if !questions.is_empty() => {
                 self.asking = Some(Asking::new(call_id, questions));
@@ -1448,6 +1559,7 @@ impl App {
                     return self.note("wait for the current turn to finish first".into());
                 }
                 self.transcript.clear();
+                self.agents.clear();
                 self.context = None;
                 self.growth.clear();
                 self.ops.push(Op::NewSession);
@@ -1544,6 +1656,7 @@ impl App {
                 force: args == "--force",
             }),
             "skills" => self.modal = Some(modal::skills(&self.skills, &self.theme)),
+            "tasks" => self.modal = Some(modal::tasks(&self.agents, &self.theme)),
             "todo" => {
                 self.plan_expanded = !self.plan_expanded;
                 if self.plan.is_empty() {

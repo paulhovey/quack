@@ -162,6 +162,10 @@ pub struct Engine {
     hooks: Arc<Hooks>,
     /// The `session_start` hooks running, for the session's first prompt.
     start_context: Option<JoinHandle<Vec<String>>>,
+    /// Sub-agent setups for the current config (`pool()`).
+    pool: Option<Arc<crate::agent::Pool>>,
+    /// Sub-agent runs in this session, for their ids.
+    agent_runs: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl Engine {
@@ -207,6 +211,8 @@ impl Engine {
             stats: Arc::default(),
             hooks: Arc::default(),
             start_context: None,
+            pool: None,
+            agent_runs: Arc::default(),
             mcp: crate::mcp::Mcp::new(McpManager::new(
                 Vec::new(),
                 PathBuf::new(),
@@ -1073,13 +1079,9 @@ impl Engine {
             (Some(_), Some(start), Some(history)) => {
                 let planner = &c.setup;
                 let start = start.min(history.len());
-                let note = planner
-                    .profile
-                    .plan_prompt
-                    .as_deref()
-                    .unwrap_or(PLAN_PROMPT);
+                let note = plan_note(planner);
                 let ask = planner.surface.name_of("ask_user");
-                let text = handoff::brief(&history[start..], note, ask, &planner.model_ref);
+                let text = handoff::brief(&history[start..], &note, ask, &planner.model_ref);
                 history.truncate(start);
                 Some((start, planner.model_ref.clone(), text))
             }
@@ -1102,6 +1104,23 @@ impl Engine {
 
     fn warn(&self, message: String) {
         self.emit(Event::Warning { message });
+    }
+
+    /// The sub-agent pool, made again when a reload replaced the config or the servers.
+    fn pool(&mut self) -> Arc<crate::agent::Pool> {
+        match &self.pool {
+            Some(p) if p.current(&self.config, &self.mcp, &self.lsp) => p.clone(),
+            _ => {
+                let p = Arc::new(crate::agent::Pool::new(
+                    self.config.clone(),
+                    self.mcp.clone(),
+                    self.lsp.clone(),
+                    self.agent_runs.clone(),
+                ));
+                self.pool = Some(p.clone());
+                p
+            }
+        }
     }
 
     /// Create the session log on the first turn.
@@ -1574,6 +1593,7 @@ impl Engine {
 
     /// Run `/compact` like a turn: it owns the history until it is done and Esc stops it.
     fn start_compact(&mut self, focus: Option<String>, done: mpsc::Sender<(TurnId, Vec<Message>)>) {
+        let pool = self.pool();
         let Some(convo) = &mut self.convo else {
             return self.warn("no model is ready to write a summary".into());
         };
@@ -1594,10 +1614,15 @@ impl Engine {
             tx: self.tx.clone(),
             cancel,
             log: self.log.clone(),
+            main_log: self.log.clone(),
             checkpoints: None,
             stats: self.stats.clone(),
             hooks: self.hooks.clone(),
             session: self.session.id.0.clone(),
+            agent: None,
+            max_steps: turn::MAX_STEPS,
+            pool,
+            prompt_lock: Arc::default(),
         };
         tokio::spawn(async move {
             ctx.emit(Event::TurnStarted { turn });
@@ -1666,8 +1691,7 @@ impl Engine {
         }
         // Plan mode asks for a plan at the end of the message, after the cached prefix.
         let prompt = if perms.lock().is_ok_and(|p| p.plan) {
-            let note = setup.profile.plan_prompt.as_deref().unwrap_or(PLAN_PROMPT);
-            format!("{prompt}\n\n{note}")
+            format!("{prompt}\n\n{}", plan_note(&setup))
         } else {
             prompt
         };
@@ -1685,6 +1709,7 @@ impl Engine {
         }
         let cancel = CancellationToken::new();
         self.running = Some((turn, cancel.clone()));
+        let pool = self.pool();
         let ctx = TurnCtx {
             turn,
             setup,
@@ -1695,10 +1720,15 @@ impl Engine {
             tx: self.tx.clone(),
             cancel,
             log: self.log.clone(),
+            main_log: self.log.clone(),
             checkpoints: self.checkpoints(),
             stats: self.stats.clone(),
             hooks: self.hooks.clone(),
             session: self.session.id.0.clone(),
+            agent: None,
+            max_steps: turn::MAX_STEPS,
+            pool,
+            prompt_lock: Arc::default(),
         };
         let prompt = turn::Prompt {
             text: prompt,
@@ -1727,6 +1757,27 @@ struct Point {
 enum Reload {
     Read(Result<Box<Loaded>, String>),
     Ready(Box<StartupOutcome>),
+}
+
+/// The request appended to each message in plan mode: the profile's `plan.md` (or the
+/// default), and when read-only sub-agents can run, a pointer to them.
+fn plan_note(setup: &Setup) -> String {
+    let note = setup.profile.plan_prompt.as_deref().unwrap_or(PLAN_PROMPT);
+    let explorers: Vec<&str> = setup
+        .tool_ctx
+        .agents
+        .iter()
+        .filter(|a| a.read_only)
+        .map(|a| a.id.as_str())
+        .collect();
+    match setup.surface.name_of("task") {
+        Some(task) if !explorers.is_empty() => format!(
+            "{note} To explore widely without filling your context, hand searches to \
+             read-only agents ({}) with {task}; several started in one reply run in parallel.",
+            explorers.join(", ")
+        ),
+        _ => note.to_owned(),
+    }
 }
 
 /// `/<skill> [args]` becomes the skill's instructions followed by the request. Anything

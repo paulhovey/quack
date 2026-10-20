@@ -337,6 +337,11 @@ fn tool_rows(app: &App, tool: &ToolEntry, width: usize, rows: &mut Vec<Line<'sta
         return;
     }
 
+    if let Some(run) = app.agents.iter().rev().find(|a| a.call_id == tool.call_id) {
+        agent_rows(app, run, tool, width, rows);
+        return;
+    }
+
     let is_diff = tool.detail.starts_with("--- ");
     let lines: Vec<&str> = tool.detail.lines().collect();
     let shown: Vec<&str> = if tool.ok.is_none() {
@@ -388,6 +393,64 @@ fn tool_rows(app: &App, tool: &ToolEntry, width: usize, rows: &mut Vec<Line<'sta
             t.dim,
         ));
     }
+}
+
+/// Under a `task` call: what its sub-agent is doing, then the start of its report.
+fn agent_rows(
+    app: &App,
+    run: &crate::app::AgentRun,
+    tool: &ToolEntry,
+    width: usize,
+    rows: &mut Vec<Line<'static>>,
+) {
+    use crate::app::AgentItem;
+    let t = &app.theme;
+    let row = |rows: &mut Vec<Line<'static>>, text: &str, style: Style| {
+        rows.push(Line::from(vec![
+            Span::styled("     › ", t.dim),
+            Span::styled(truncate(text, width.saturating_sub(7)), style),
+        ]));
+    };
+    if tool.ok.is_none() {
+        let start = run.items.len().saturating_sub(TOOL_LIVE_LINES);
+        for item in &run.items[start..] {
+            match item {
+                AgentItem::Tool(c) => {
+                    let line = if c.result.is_empty() {
+                        c.summary.clone()
+                    } else {
+                        format!("{} · {}", c.summary, c.result)
+                    };
+                    let style = if c.ok == Some(false) { t.error } else { t.dim };
+                    row(rows, &line, style);
+                }
+                AgentItem::Text(text) => {
+                    if let Some(l) = text.lines().rev().find(|l| !l.trim().is_empty()) {
+                        row(rows, l.trim(), t.dim.add_modifier(Modifier::ITALIC));
+                    }
+                }
+            }
+        }
+        return;
+    }
+    let report: Vec<&str> = tool
+        .detail
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    for l in report.iter().take(TOOL_OK_LINES) {
+        row(rows, l.trim(), t.dim);
+    }
+    let more = report.len().saturating_sub(TOOL_OK_LINES);
+    let more = if more > 0 {
+        format!("{more} more lines · ")
+    } else {
+        String::new()
+    };
+    rows.push(Line::styled(
+        format!("       {more}/tasks shows what it did"),
+        t.dim,
+    ));
 }
 
 fn draw_transcript(f: &mut Frame<'_>, app: &App, area: Rect) {
@@ -1803,6 +1866,94 @@ mod tests {
         app.context = Some((70_000, 104_000));
         app.speed = Some(48.0);
         insta::assert_snapshot!(render(&app, 80, 24));
+    }
+
+    #[test]
+    fn a_sub_agent_shows_under_its_task_and_in_tasks() {
+        use crate::app::PlanState;
+        use crossterm::event::{KeyCode, KeyModifiers};
+        use quack_protocol::{CallId, ToolCallInfo, ToolResultSummary};
+        let mut app = started_app();
+        app.on_engine(Event::StartupComplete);
+        app.on_engine(Event::ToolCallBegin {
+            call: ToolCallInfo {
+                call_id: CallId("t1".into()),
+                name: "Task".into(),
+                summary: "explore: find the parser".into(),
+            },
+        });
+        app.on_engine(Event::Plan {
+            checklist: "[~] find the parser\n[ ] fix it".into(),
+        });
+        assert_eq!(app.plan[0].0, PlanState::Active);
+        app.on_engine(Event::AgentStarted {
+            id: "explore-1".into(),
+            agent: "explore".into(),
+            description: "find the parser".into(),
+            call_id: CallId("t1".into()),
+            model: "mock/small".into(),
+        });
+        let inner = |e: Event| Event::Agent {
+            id: "explore-1".into(),
+            inner: Box::new(e),
+        };
+        app.on_engine(inner(Event::ToolCallBegin {
+            call: ToolCallInfo {
+                call_id: CallId("explore-1/c1".into()),
+                name: "grep".into(),
+                summary: "grep fn parse".into(),
+            },
+        }));
+        app.on_engine(inner(Event::ToolCallEnd {
+            call_id: CallId("explore-1/c1".into()),
+            result: ToolResultSummary {
+                ok: true,
+                summary: "3 matches".into(),
+                detail: None,
+            },
+        }));
+        app.on_engine(inner(Event::AssistantDelta {
+            text: "Reading src/parse.rs".into(),
+        }));
+        let s = render(&app, 80, 24);
+        assert!(
+            s.contains("› grep fn parse · 3 matches") && s.contains("› Reading src/parse.rs"),
+            "{s}"
+        );
+        app.on_engine(inner(Event::AssistantRewrite {
+            text: "The parser is parse() in src/parse.rs:12.".into(),
+        }));
+        app.on_engine(Event::AgentFinished {
+            id: "explore-1".into(),
+            ok: true,
+            summary: "2 steps".into(),
+        });
+        app.on_engine(Event::ToolCallEnd {
+            call_id: CallId("t1".into()),
+            result: ToolResultSummary {
+                ok: true,
+                summary: "2 steps".into(),
+                detail: Some("The parser is parse() in src/parse.rs:12.".into()),
+            },
+        });
+        let s = render(&app, 80, 24);
+        assert!(
+            s.contains("› The parser is parse() in src/parse.rs:12.")
+                && s.contains("/tasks shows what it did"),
+            "{s}"
+        );
+        for c in "/tasks".chars() {
+            key(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        let s = render(&app, 100, 30);
+        assert!(
+            s.contains("explore-1 · find the parser")
+                && s.contains("mock/small")
+                && s.contains("grep fn parse · 3 matches")
+                && s.contains("src/parse.rs:12"),
+            "{s}"
+        );
     }
 
     #[test]

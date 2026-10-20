@@ -204,6 +204,22 @@ pub(crate) fn skills(config: &Loaded) -> skills::Found {
     skills::discover(&roots, &config.settings.skills.disabled)
 }
 
+/// `agents.d`: the enabled agents by id, and a warning for each file that failed.
+pub(crate) fn agents(config: &Loaded) -> (Vec<(String, quack_config::AgentFile)>, Vec<String>) {
+    let mut out = Vec::new();
+    let mut warnings = Vec::new();
+    for item in quack_config::load_agents(config) {
+        match item.state {
+            quack_config::ItemState::Loaded(a) => out.push((item.id, a)),
+            quack_config::ItemState::Failed(d) => {
+                warnings.push(format!("agent skipped: {}", d.one_line()));
+            }
+            quack_config::ItemState::Disabled(_) => {}
+        }
+    }
+    (out, warnings)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

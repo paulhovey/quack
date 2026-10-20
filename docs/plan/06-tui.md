@@ -114,7 +114,7 @@ All configuration UIs share one modal widget, so they look and behave the same:
 | `/instructions` | | The AGENTS.md files in the system prompt, then those attached to tool results so far, each with its size and text (built 2026-10-18). Opening in an editor is still to do; `/init` generates one |
 | `/init` | | Generate AGENTS.md for this repo |
 | `/todo` | | Expand the plan line above the input into the whole checklist, and back (built 2026-10-18; above the input rather than a side pane, so it works at any width) |
-| `/tasks` | | Sub-agent views (M5) |
+| `/tasks` | | Sub-agent runs of this session, newest first: model, state, each call and the report (built 2026-10-19). Under a running `task` line the transcript shows the agent's last steps |
 | `/theme` | | Theme picker with live preview |
 | `/keys` | | Keybinding viewer/editor |
 | `/doctor` | | Runs `quack doctor` checks, shown as a modal report |

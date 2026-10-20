@@ -41,6 +41,11 @@ pub enum Subject {
     ToolSearch,
     /// Updating the model's own plan (`todo`); changes nothing.
     Plan,
+    /// Starting a sub-agent (`task`). Its own calls are checked one by one; this decides
+    /// only whether it may start (plan mode runs only read-only agents).
+    Agent {
+        read_only: bool,
+    },
     /// A tool on an MCP server.
     Mcp {
         server: String,
@@ -154,6 +159,10 @@ pub struct ToolCtx {
     pub sandbox: SandboxState,
     /// The model's plan (`todo`), shown to it with every step.
     pub plan: Arc<crate::todo::Plan>,
+    /// Sub-agents the `task` tool can start; empty hides it.
+    pub agents: Arc<Vec<crate::task::AgentInfo>>,
+    /// Where `task` sends sub-agents to run; `None` when none can start.
+    pub spawn: Option<crate::task::Spawner>,
     /// Which edit tool the model gets (never `auto`: resolved at session start).
     pub edit_format: EditFormat,
     /// `read` without a range returns the outline of files longer than this many bytes,
@@ -228,6 +237,7 @@ impl Registry {
             Arc::new(crate::lsp::Lsp),
             Arc::new(crate::todo::Todo),
             Arc::new(crate::ask::AskUser),
+            Arc::new(crate::task::Task),
         ];
         Self { tools }
     }
@@ -238,6 +248,30 @@ impl Registry {
 
     pub fn iter(&self) -> impl Iterator<Item = &Arc<dyn Tool>> {
         self.tools.iter()
+    }
+}
+
+/// A context for unit tests: the current directory, no extras.
+#[cfg(test)]
+pub(crate) fn test_ctx() -> ToolCtx {
+    ToolCtx {
+        root: PathBuf::from("."),
+        shell: ShellKind::detect("sh", None),
+        default_timeout: Duration::from_secs(5),
+        max_timeout: Duration::from_secs(5),
+        cancel: CancellationToken::new(),
+        on_output: None,
+        ask: None,
+        reads: Arc::default(),
+        memory: None,
+        skills: Arc::default(),
+        lsp: None,
+        sandbox: SandboxState::Off,
+        plan: Arc::default(),
+        agents: Arc::default(),
+        spawn: None,
+        edit_format: EditFormat::StrReplace,
+        outline_above: 0,
     }
 }
 

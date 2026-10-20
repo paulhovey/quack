@@ -261,6 +261,15 @@ impl Permissions {
         // Memory is not part of the workspace: reads are free, and writes ask only when
         // configured to (they show in the transcript and are easy to undo).
         // Installed skills are instructions the user put there.
+        if let Subject::Agent { read_only } = subject {
+            return if self.plan && !read_only {
+                Decision::Deny(
+                    "plan mode runs only read-only agents; accept the plan to use this one".into(),
+                )
+            } else {
+                Decision::Allow
+            };
+        }
         if matches!(
             subject,
             Subject::Skill | Subject::ToolSearch | Subject::Plan
