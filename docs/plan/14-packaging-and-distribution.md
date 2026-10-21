@@ -60,11 +60,21 @@ When no provider is configured:
   3. **Add a server by URL.** An optional key is stored in the credential store.
 
   It then lists the provider's models and saves the chosen one as `model.default`.
-- `/setup` in the TUI runs the same local detection and shows one row per server and model. Enter writes the provider file and switches to that model, which becomes `model.default` only if none is set. A server that a configured provider already points at is reused rather than written again. Hosted services and other addresses are pointed to `quack setup`, so API keys are never typed into the TUI.
+- `/setup` in the TUI runs the same local detection and shows one row per server and model. Enter writes the provider file and switches to that model, which becomes `model.default` only if none is set. A server that a configured provider already points at is reused rather than written again.
 - Files written are minimal: a comment and `base_url`, plus `api_key` when a key was given. If the id is already taken, a number is added (`server-2`). A server that a configured provider already points at is reused. A provider the system policy would disable is refused.
 - The wizard and `/setup` only offer the loaded providers; the binary contains no server addresses ([02](02-providers.md#servers-not-engines-2026-10-18)). Option 1 probes the loopback ones; option 3 takes any URL.
 - The "no providers configured" startup message names `/setup` and `quack setup`.
 - Code: `quack-core/src/setup.rs` (shared), `quack-cli/src/setup.rs` (wizard), `Op::DetectServers` / `Op::AddProvider`.
+
+### Setup in the TUI (2026-10-20)
+
+Someone who installs `quack-plucked` and runs `quack` should not have to know about `quack setup`. So the TUI now covers all three of the wizard's choices:
+- **It opens on its own.** When startup ends with no model ready and no `[model] default` configured, `/setup` opens once, unless a trust prompt is waiting. That offer does not probe anything: "find servers on this machine" waits for Enter, so detection still runs only when asked. Typing `/setup` yourself probes at once, as before.
+- **Three tabs:** *This machine* (detection, as before), *Hosted services* (the configured services that take a key, from `Op::ListServices`; with no defaults bundle this tab says so and points to the next one), and *Any server* (by URL, plus how to write a provider file by hand).
+- **Keys are typed into a prompt box** that shows them as dots. Entering a key was earlier left to `quack setup` so that keys never went through the TUI. It is allowed now with these limits: the key never enters the input, its history or the transcript. It travels in `Op::SetProviderKey` / `Op::AddServer` as a `SecretText`, whose `Debug` output is redacted. The engine stores it in the OS credential store under the provider id (on `spawn_blocking`, because Linux shells out to `secret-tool`) and writes only `api_key = { keyring = "<id>" }`. If the credential store is unavailable, the error says so, and the service's row explains how to use its variable instead.
+- **A URL** is checked for `http(s)://`, and the id comes from the host (`setup::id_from_url`, shared with the wizard). It asks no name question.
+- **Then the model:** once the engine replies with `Event::ProviderAdded`, it sends `Event::ModelCatalog` for that provider alone, and the TUI opens `/models` on it. A model picked there is remembered as the last used one, so the next start uses it. A ready hosted service goes straight to `/models`, filtered to its id.
+- Tests: `core/tests/setup.rs` (adding a server by URL, listing services, refusals), and the TUI tests `first_run_offers_setup_and_adds_a_server_by_url` (the key is never drawn, never in `Debug`, never in the input) and `setup_is_not_offered_when_a_model_is_ready_and_esc_backs_out_of_a_prompt`.
 
 ## Release artifacts
 

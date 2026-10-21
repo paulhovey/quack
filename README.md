@@ -45,8 +45,9 @@ Everything below works today. Planned work is listed separately at the end.
 
 ### Getting started
 
-- `quack setup` (or `/setup`) finds model servers running on this machine, or adds a hosted
-  service with its key stored in the OS credential store.
+- Run `quack`. If no model is ready, `/setup` opens on its own: it finds model servers on this
+  machine, adds a hosted service with its key stored in the OS credential store, or adds any
+  OpenAI-compatible server by its URL. `quack setup` asks the same questions in a plain terminal.
 - API keys come from an environment variable, a file, a command, or the OS keyring (Windows,
   macOS, and Linux through the Secret Service). `quack keyring set|delete` manages them.
 - `quack login chatgpt` signs in to a ChatGPT plan in the browser; `quack logout chatgpt`
@@ -350,7 +351,8 @@ irm https://github.com/paulhovey/quack/releases/latest/download/install.ps1 | ie
 ```
 
 This installs the binary and the defaults: provider files for local servers and hosted
-services, model profiles, language servers and MCP examples. Then run `quack setup`.
+services, model profiles, language servers and MCP examples. Then run `quack`; it walks you
+through adding a provider.
 
 For organisations that ship their own files, `quack-plucked` is the duck without its
 feathers: the binary alone. Add `--plucked` (`sh -s -- --plucked`, or `-Plucked` on Windows).

@@ -82,6 +82,77 @@ pub(crate) fn draw(f: &mut Frame<'_>, app: &App) {
     if let Some(modal) = &app.modal {
         modal.draw(f, &app.theme, &app.glyphs);
     }
+    draw_prompt(f, app);
+}
+
+/// `/setup`'s question box: a URL or a key, over everything else. A key is drawn as dots.
+fn draw_prompt(f: &mut Frame<'_>, app: &App) {
+    let Some(p) = &app.prompt else {
+        return;
+    };
+    let t = &app.theme;
+    let screen = f.area();
+    let width = screen.width.saturating_sub(4).min(72);
+    let inner_w = usize::from(width.saturating_sub(4));
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for h in &p.help {
+        lines.extend(wrap(h, inner_w).into_iter().map(|l| Line::styled(l, t.dim)));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(p.label.clone(), t.accent));
+    let shown = if p.secret {
+        let dot = if app.info.ui.ascii { "*" } else { "•" };
+        dot.repeat(p.text.chars().count())
+    } else {
+        p.text.clone()
+    };
+    // Keep the end of a long answer in view, where the cursor is.
+    let room = inner_w.saturating_sub(3);
+    let mut tail: String = shown.chars().rev().take(room).collect();
+    tail = tail.chars().rev().collect();
+    let field_row = lines.len();
+    lines.push(Line::from(vec![
+        Span::styled("› ", t.accent),
+        Span::raw(tail.clone()),
+    ]));
+    if let Some(e) = &p.error {
+        lines.extend(
+            wrap(e, inner_w)
+                .into_iter()
+                .map(|l| Line::styled(l, t.error)),
+        );
+    }
+    let height = (u16::try_from(lines.len()).unwrap_or(u16::MAX) + 2).min(screen.height);
+    let area = Rect {
+        x: screen.x + (screen.width - width) / 2,
+        y: screen.y + screen.height.saturating_sub(height) / 2,
+        width,
+        height,
+    };
+    let block = Block::bordered()
+        .border_set(app.glyphs.border)
+        .border_style(t.accent)
+        .padding(ratatui::widgets::Padding::horizontal(1))
+        .title(Span::styled(format!(" {} ", p.title), t.pill(t.accent)))
+        .title_bottom(
+            key_hints(
+                t,
+                &[
+                    ("⏎", if p.last_step() { "add" } else { "next" }),
+                    ("^u", "clear"),
+                    ("esc", "back"),
+                ],
+            )
+            .right_aligned(),
+        );
+    let inner = block.inner(area);
+    f.render_widget(Clear, area);
+    f.render_widget(Paragraph::new(lines).block(block), area);
+    let x = inner.x + 2 + u16::try_from(tail.width()).unwrap_or(0);
+    let y = inner.y + u16::try_from(field_row).unwrap_or(0);
+    if y < inner.bottom() {
+        f.set_cursor_position((x.min(inner.right().saturating_sub(1)), y));
+    }
 }
 
 fn draw_header(f: &mut Frame<'_>, app: &App, area: Rect) {
@@ -1362,6 +1433,12 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
+    /// Startup ends; these tests are not about the first-run `/setup` offer.
+    fn started(app: &mut App) {
+        app.skip_setup_offer();
+        app.on_engine(Event::StartupComplete);
+    }
+
     fn render(app: &App, w: u16, h: u16) -> String {
         let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("terminal");
         terminal.draw(|f| draw(f, app)).expect("draw");
@@ -1439,7 +1516,7 @@ mod tests {
         let mut app = App::new(test_info());
         app.on_engine(ready(Subsystem::Config));
         assert!(!render(&app, 80, 24).contains("ready-detail"));
-        app.on_engine(Event::StartupComplete);
+        started(&mut app);
         assert!(!render(&app, 80, 24).contains("ready-detail"));
 
         // A slow one shows it after the grace period.
@@ -1459,7 +1536,7 @@ mod tests {
             },
         });
         assert!(render(&app, 80, 24).contains("no model selected"));
-        app.on_engine(Event::StartupComplete);
+        started(&mut app);
         assert!(render(&app, 80, 24).contains("no model selected"));
     }
 
@@ -1527,7 +1604,7 @@ mod tests {
         use crossterm::event::{KeyCode, KeyModifiers};
         use quack_protocol::{RequestStat, StatsReport, ToolStat};
         let mut app = App::new(test_info());
-        app.on_engine(Event::StartupComplete);
+        started(&mut app);
         let tool = |name: &str, calls, failed, ms| ToolStat {
             name: name.into(),
             calls,
@@ -1794,7 +1871,7 @@ mod tests {
         use crate::app::Approval;
         use quack_protocol::{CallId, ToolCallInfo, ToolResultSummary};
         let mut app = App::new(test_info());
-        app.on_engine(Event::StartupComplete);
+        started(&mut app);
         app.transcript.push(Entry::User("rename the helper".into()));
         app.on_engine(Event::ReasoningDelta {
             text: "Need to find the helper first.".into(),
@@ -1872,7 +1949,7 @@ mod tests {
         info.model = Some("charm/qwen3.8-flash".into());
         info.permission_mode = "auto-edit".into();
         let mut app = App::new(info);
-        app.on_engine(Event::StartupComplete);
+        started(&mut app);
         app.transcript
             .push(Entry::User("make the parser faster".into()));
         let call = |app: &mut App,
@@ -1933,7 +2010,7 @@ mod tests {
         use crossterm::event::{KeyCode, KeyModifiers};
         use quack_protocol::{CallId, ToolCallInfo, ToolResultSummary};
         let mut app = started_app();
-        app.on_engine(Event::StartupComplete);
+        started(&mut app);
         app.on_engine(Event::ToolCallBegin {
             call: ToolCallInfo {
                 call_id: CallId("t1".into()),
@@ -2104,7 +2181,7 @@ mod tests {
         let mut info = test_info();
         info.ui.ascii = true;
         let mut app = App::new(info);
-        app.on_engine(Event::StartupComplete);
+        started(&mut app);
         app.transcript
             .push(Entry::User("fix the failing test".into()));
         app.transcript.push(Entry::Assistant(
@@ -2117,7 +2194,7 @@ mod tests {
     #[test]
     fn long_input_wraps_and_grows_the_box() {
         let mut app = App::new(test_info());
-        app.on_engine(Event::StartupComplete);
+        started(&mut app);
         // 40 columns leave 36 for text.
         app.input
             .set("please read the failing test and then fix the bug it points at");
@@ -2137,7 +2214,7 @@ mod tests {
             Event as TermEvent, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
         };
         let mut app = App::new(test_info());
-        app.on_engine(Event::StartupComplete);
+        started(&mut app);
         app.input.set("earlier prompt");
         app.input.submit();
         app.input
@@ -2186,7 +2263,7 @@ mod tests {
     #[test]
     fn slash_popup_highlights_matched_letters() {
         let mut app = App::new(test_info());
-        app.on_engine(Event::StartupComplete);
+        started(&mut app);
         app.input.set("/rw");
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
         terminal.draw(|f| draw(f, &app)).expect("draw");
@@ -2280,7 +2357,7 @@ mod tests {
     #[test]
     fn welcome_duck_animates_and_honors_reduced_motion() {
         let mut app = App::new(test_info());
-        app.on_engine(Event::StartupComplete);
+        started(&mut app);
 
         // Frame 0: static duck, closed beak, open eye, resting wave
         let s0 = render(&app, 80, 24);
@@ -2308,7 +2385,7 @@ mod tests {
         let mut info_rm = test_info();
         info_rm.ui.reduced_motion = true;
         let mut app_rm = App::new(info_rm);
-        app_rm.on_engine(Event::StartupComplete);
+        started(&mut app_rm);
         for _ in 0..104 {
             app_rm.on_tick();
         }
@@ -2316,5 +2393,104 @@ mod tests {
         assert!(s_rm.contains("<(o )___"));
         assert!(s_rm.contains("._> /"));
         assert!(s_rm.contains("~~~~~~~~~~"));
+    }
+
+    #[test]
+    fn first_run_offers_setup_and_adds_a_server_by_url() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        use quack_protocol::{Op, SecretText, ServiceInfo};
+        let none = KeyModifiers::NONE;
+        let mut app = App::new(test_info());
+        app.on_engine(Event::StartupComplete);
+        // Setup opens on its own, and lists the services without probing this machine.
+        assert_eq!(app.modal.as_ref().map(|m| m.title.as_str()), Some("Setup"));
+        assert_eq!(app.take_ops(), vec![Op::ListServices]);
+        app.on_engine(Event::Services {
+            services: vec![ServiceInfo {
+                id: "example".into(),
+                name: "Example".into(),
+                group: "Hosted".into(),
+                base_url: "https://api.example.com/v1".into(),
+                env: Some("EXAMPLE_KEY".into()),
+                ready: false,
+            }],
+        });
+        key(&mut app, KeyCode::Tab, none);
+        let s = render(&app, 100, 30);
+        assert!(s.contains("needs a key"), "{s}");
+        assert!(s.contains("Or set EXAMPLE_KEY"), "{s}");
+
+        // Any server → its URL → its key.
+        key(&mut app, KeyCode::Tab, none);
+        key(&mut app, KeyCode::Enter, none);
+        assert!(app.modal.is_none());
+        for c in "gpu-box:8000/v1".chars() {
+            key(&mut app, KeyCode::Char(c), none);
+        }
+        key(&mut app, KeyCode::Enter, none);
+        assert!(render(&app, 100, 30).contains("must start with http://"));
+        key(&mut app, KeyCode::Char('u'), KeyModifiers::CONTROL);
+        app.on_terminal(crossterm::event::Event::Paste(
+            "http://gpu-box:8000/v1\n".into(),
+        ));
+        key(&mut app, KeyCode::Enter, none);
+        for c in "sk-secret".chars() {
+            key(&mut app, KeyCode::Char(c), none);
+        }
+        let s = render(&app, 100, 30);
+        assert!(s.contains("Add a server · 2 of 2"), "{s}");
+        assert!(s.contains("•••••••••"), "{s}");
+        assert!(!s.contains("sk-secret"), "{s}");
+        assert!(!format!("{app:?}").contains("sk-secret"));
+        key(&mut app, KeyCode::Enter, none);
+        let ops = app.take_ops();
+        assert_eq!(
+            ops,
+            vec![Op::AddServer {
+                base_url: "http://gpu-box:8000/v1".into(),
+                key: Some(SecretText("sk-secret".into())),
+            }]
+        );
+        assert!(!format!("{ops:?}").contains("sk-secret"));
+        assert!(
+            app.input.is_empty(),
+            "the key never reaches the input or its history"
+        );
+
+        // Once added, its models are offered.
+        app.on_engine(Event::ProviderAdded {
+            id: "gpu-box".into(),
+            path: Some("providers.d/gpu-box.toml".into()),
+        });
+        assert_eq!(app.modal.as_ref().map(|m| m.title.as_str()), Some("Models"));
+        assert!(app.prompt.is_none());
+    }
+
+    #[test]
+    fn setup_is_not_offered_when_a_model_is_ready_and_esc_backs_out_of_a_prompt() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        use quack_protocol::Op;
+        let mut info = test_info();
+        info.model = Some("mock/tiny".into());
+        let mut app = App::new(info);
+        app.on_engine(Event::StartupComplete);
+        assert!(app.modal.is_none());
+        assert!(app.take_ops().is_empty());
+
+        // Asked for, /setup looks for servers at once.
+        app.input.set("/setup");
+        key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.take_ops(), vec![Op::DetectServers, Op::ListServices]);
+        assert!(render(&app, 100, 30).contains("looking for servers"));
+
+        app.input.set("/setup key example");
+        app.modal = None;
+        key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert!(render(&app, 100, 30).contains("example API key"));
+        key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert!(render(&app, 100, 30).contains("paste the key"));
+        key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert!(app.prompt.is_none());
+        assert_eq!(app.modal.as_ref().map(|m| m.title.as_str()), Some("Setup"));
     }
 }

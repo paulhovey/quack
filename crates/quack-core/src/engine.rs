@@ -899,6 +899,41 @@ impl Engine {
         self.switch_to(Role::Session, added.id, model);
     }
 
+    /// `/setup`'s key and URL steps: write the provider in the background, then list its
+    /// models alone so the user can pick one.
+    fn connect(
+        &self,
+        add: impl FnOnce(&Loaded) -> Result<crate::setup::Added, String> + Send + 'static,
+    ) {
+        let config = self.config.clone();
+        let tx = self.tx.clone();
+        let current = self.session.model.clone();
+        tokio::spawn(async move {
+            let cfg = config.clone();
+            let added = tokio::task::spawn_blocking(move || add(&cfg))
+                .await
+                .unwrap_or_else(|e| Err(e.to_string()));
+            let added = match added {
+                Ok(a) => a,
+                Err(message) => {
+                    let _ = tx.send(Event::Error {
+                        error: EngineError {
+                            kind: EngineErrorKind::Config,
+                            message: format!("cannot add the provider: {message}"),
+                        },
+                    });
+                    return;
+                }
+            };
+            let _ = tx.send(Event::ProviderAdded {
+                id: added.id.clone(),
+                path: added.path.map(|p| p.display().to_string()),
+            });
+            let providers = crate::models::catalog_of(config, Some(&added.id)).await;
+            let _ = tx.send(Event::ModelCatalog { providers, current });
+        });
+    }
+
     /// Build the setup for `provider/model` in the background; `on_switched` (or
     /// `on_planner`) gets it.
     fn switch_to(&self, role: Role, provider: String, model: String) {
@@ -1394,6 +1429,26 @@ impl Engine {
                 api,
                 model,
             } => self.add_provider(&id, &base_url, api.as_deref(), model),
+            Op::ListServices => {
+                let config = self.config.clone();
+                let tx = self.tx.clone();
+                tokio::spawn(async move {
+                    let services =
+                        tokio::task::spawn_blocking(move || crate::setup::service_infos(&config))
+                            .await
+                            .unwrap_or_default();
+                    let _ = tx.send(Event::Services { services });
+                });
+            }
+            Op::SetProviderKey { id, key } => self.connect(move |config| {
+                crate::setup::set_service_key(config, &id, &key.0).map(|path| crate::setup::Added {
+                    id,
+                    path: Some(path),
+                })
+            }),
+            Op::AddServer { base_url, key } => self.connect(move |config| {
+                crate::setup::add_server(config, &base_url, key.as_ref().map(|k| k.0.as_str()))
+            }),
             Op::SetPermissionMode { mode } if !self.started => self.pending_mode = Some(mode),
             Op::SetPermissionMode { mode } => self.set_mode(&mode),
             Op::SetSandbox { off } if !self.started => self.pending_sandbox = Some(off),
@@ -1927,6 +1982,9 @@ fn op_name(op: &Op) -> &'static str {
         Op::InitInstructions => "init_instructions",
         Op::RestartMcp { .. } => "restart_mcp",
         Op::AddProvider { .. } => "add_provider",
+        Op::ListServices => "list_services",
+        Op::SetProviderKey { .. } => "set_provider_key",
+        Op::AddServer { .. } => "add_server",
         Op::SetPermissionMode { .. } => "set_permission_mode",
         Op::SetSandbox { .. } => "set_sandbox",
         Op::AcceptPlan { .. } => "accept_plan",

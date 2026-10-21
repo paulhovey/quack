@@ -93,6 +93,25 @@ impl Modal {
         self
     }
 
+    /// Keep the tab, filter and selection of the modal this one replaces, so a refresh
+    /// that arrives while the user looks around does not move them.
+    pub fn keep_place(mut self, old: Option<&Modal>) -> Self {
+        if let Some(old) = old.filter(|o| o.title == self.title) {
+            self.tab = old.tab.min(self.tabs.len().saturating_sub(1));
+            self.filter = old.filter.clone();
+            self.selected = old.selected;
+            self.refilter();
+        }
+        self
+    }
+
+    /// Start with this text in the filter line.
+    pub fn with_filter(mut self, text: &str) -> Self {
+        self.filter = text.to_owned();
+        self.refilter();
+        self
+    }
+
     fn items(&self) -> &[ModalItem] {
         self.tabs.get(self.tab).map_or(&[], |t| t.items.as_slice())
     }
@@ -554,9 +573,8 @@ pub(crate) fn models(
             if items.is_empty() {
                 items.push(placeholder(
                     "no models ready",
-                    "Start a server on this machine and run /setup, or run `quack \
-                     setup` in a terminal to give a hosted service its key. /providers lists \
-                     what is configured.",
+                    "/setup adds one: a server on this machine, a hosted service with its \
+                     key, or any server by its URL. /providers lists what is configured.",
                     theme,
                 ));
             }
@@ -1928,10 +1946,9 @@ pub(crate) fn providers(
         )],
         Some([]) => vec![placeholder(
             "no providers",
-            "/setup finds model servers on this machine; `quack setup` in a \
-             terminal also adds hosted services and servers elsewhere. Or add a TOML file \
-             with a base_url to providers.d in your config folder (`quack config \
-             paths` shows where).",
+            "/setup adds one: a server on this machine, a hosted service with its key, or \
+             any server by its URL. Or add a TOML file with a base_url to providers.d in \
+             your config folder (`quack config paths` shows where).",
             theme,
         )],
         Some(list) => list
@@ -2409,38 +2426,73 @@ pub(crate) fn lsp(servers: Option<&[quack_protocol::LspServerInfo]>, theme: &The
     )
 }
 
-/// The `/setup` modal: model servers found on this machine, one row per model. `None`
-/// while looking.
-pub(crate) fn setup(servers: Option<&[quack_protocol::DetectedServer]>, theme: &Theme) -> Modal {
-    const ELSEWHERE: &str = "For a hosted service, or a server on another machine or port, \
-         run `quack setup` in a terminal.";
-    let items = match servers {
-        None => vec![placeholder(
-            "looking for servers…",
-            "Checking the providers in providers.d that point at this machine (Ollama, \
-             llama.cpp, vLLM, LM Studio and SGLang out of the box). Nothing leaves this \
-             machine.",
-            theme,
-        )],
-        Some([]) => vec![ModalItem {
-            label: "no servers found".into(),
-            hint: String::new(),
-            detail: vec![
-                Line::styled(
-                    "None of the servers on this machine in providers.d answered. Start \
-                     one, for example `ollama serve` or `llama-server --jinja -m \
-                     <model.gguf>`, then run /setup again.",
-                    theme.dim,
-                ),
+/// What `/setup` knows so far.
+#[derive(Debug, Default)]
+pub(crate) struct SetupView {
+    pub local: Scan,
+    /// The hosted services in providers.d; `None` while listing.
+    pub services: Option<Vec<quack_protocol::ServiceInfo>>,
+}
+
+/// Looking for model servers on this machine, which happens only when the user asks.
+#[derive(Debug, Default)]
+pub(crate) enum Scan {
+    #[default]
+    NotYet,
+    Looking,
+    Found(Vec<quack_protocol::DetectedServer>),
+}
+
+/// The `/setup` modal: servers on this machine, hosted services that take a key, and any
+/// server by its URL.
+pub(crate) fn setup(view: &SetupView, theme: &Theme) -> Modal {
+    const ELSEWHERE: &str = "For a hosted service, or a server on another machine or \
+         port, press tab for the other ways to add one.";
+    const LOOKS_AT: &str = "Checks the providers in providers.d that point at this machine \
+         (Ollama, llama.cpp, vLLM, LM Studio and SGLang with the defaults bundle). Nothing \
+         leaves this machine.";
+    let item =
+        |label: &str, hint: &str, detail: Vec<Line<'static>>, action: Option<String>| ModalItem {
+            label: label.to_owned(),
+            hint: hint.to_owned(),
+            detail,
+            run: action.is_some(),
+            action,
+            alt: None,
+            charts: Vec::new(),
+        };
+    let local = match &view.local {
+        Scan::NotYet => vec![item(
+            "find servers on this machine",
+            "",
+            vec![
+                Line::styled(LOOKS_AT, theme.dim),
+                Line::raw(""),
+                Line::styled("⏎ look now", theme.dim),
                 Line::raw(""),
                 Line::styled(ELSEWHERE, theme.dim),
             ],
-            action: None,
-            run: false,
-            alt: None,
-            charts: Vec::new(),
-        }],
-        Some(list) => list
+            Some("/setup scan".into()),
+        )],
+        Scan::Looking => vec![placeholder("looking for servers…", LOOKS_AT, theme)],
+        Scan::Found(list) if list.is_empty() => vec![item(
+            "no servers found",
+            "",
+            vec![
+                Line::styled(
+                    "None of the servers on this machine in providers.d answered. Start \
+                     one, for example `ollama serve` or `llama-server --jinja -m \
+                     <model.gguf>`, then look again.",
+                    theme.dim,
+                ),
+                Line::raw(""),
+                Line::styled("⏎ look again", theme.dim),
+                Line::raw(""),
+                Line::styled(ELSEWHERE, theme.dim),
+            ],
+            Some("/setup scan".into()),
+        )],
+        Scan::Found(list) => list
             .iter()
             .enumerate()
             .flat_map(|(i, s)| {
@@ -2477,27 +2529,130 @@ pub(crate) fn setup(servers: Option<&[quack_protocol::DetectedServer]>, theme: &
                     });
                     detail.push(Line::raw(""));
                     detail.push(Line::styled(ELSEWHERE, theme.dim));
-                    ModalItem {
-                        label: format!("{} · {}", s.name, m.id),
-                        hint: m
-                            .context_window
+                    item(
+                        &format!("{} · {}", s.name, m.id),
+                        &m.context_window
                             .map_or_else(String::new, crate::theme::tokens),
                         detail,
-                        action: Some(format!("/setup use {i} {}", m.id)),
-                        run: true,
-                        alt: None,
-                        charts: Vec::new(),
-                    }
+                        Some(format!("/setup use {i} {}", m.id)),
+                    )
                 })
             })
             .collect(),
     };
+    let hosted = match view.services.as_deref() {
+        None => vec![placeholder(
+            "listing services…",
+            "Reading the hosted services in providers.d.",
+            theme,
+        )],
+        Some([]) => vec![placeholder(
+            "no hosted services configured",
+            "providers.d has no hosted services that take a key. The defaults bundle ships \
+             a list of them; an install without it (quack-plucked) has none. Add a service \
+             under Any server with its OpenAI-compatible URL instead.",
+            theme,
+        )],
+        Some(list) => list
+            .iter()
+            .map(|s| {
+                let mut detail = vec![
+                    Line::styled(s.name.clone(), theme.accent),
+                    Line::raw(""),
+                    field(theme, "provider", s.id.clone()),
+                    field(theme, "group", s.group.clone()),
+                    field(theme, "url", s.base_url.clone()),
+                    Line::raw(""),
+                ];
+                let action = if s.ready {
+                    detail.push(Line::styled("Its key is set.", theme.ok));
+                    detail.push(Line::raw(""));
+                    detail.push(Line::styled("⏎ pick one of its models", theme.dim));
+                    format!("/setup models {}", s.id)
+                } else {
+                    detail.push(Line::styled(
+                        "⏎ enter its API key; quack keeps it in the OS credential store, \
+                         and the provider file in your config folder only names it",
+                        theme.dim,
+                    ));
+                    if let Some(env) = &s.env {
+                        detail.push(Line::raw(""));
+                        detail.push(Line::styled(
+                            format!("Or set {env} in your shell and start quack again."),
+                            theme.dim,
+                        ));
+                    }
+                    format!("/setup key {}", s.id)
+                };
+                item(
+                    &s.name,
+                    if s.ready { "ready" } else { "needs a key" },
+                    detail,
+                    Some(action),
+                )
+            })
+            .collect(),
+    };
+    let other = vec![
+        item(
+            "add a server by its URL",
+            "",
+            vec![
+                Line::styled("Any OpenAI-compatible server", theme.accent),
+                Line::raw(""),
+                Line::raw(
+                    "A model server on another machine or port, or a hosted service that is \
+                     not listed. quack asks for its base URL (for example \
+                     http://gpu-box:8000/v1) and then its API key, if it needs one.",
+                ),
+                Line::raw(""),
+                Line::styled(
+                    "The key goes to the OS credential store; the provider file written to \
+                     your config folder only names it.",
+                    theme.dim,
+                ),
+                Line::raw(""),
+                Line::styled("⏎ start", theme.dim),
+            ],
+            Some("/setup url".into()),
+        ),
+        item(
+            "write a provider file yourself",
+            "",
+            vec![
+                Line::raw(
+                    "A provider is a TOML file in providers.d in your config folder. Two lines \
+                     are enough:",
+                ),
+                Line::raw(""),
+                Line::styled("  base_url = \"http://gpu-box:8000/v1\"", theme.accent),
+                Line::styled("  api_key = { env = \"MY_KEY\" }", theme.accent),
+                Line::raw(""),
+                Line::styled(
+                    "`quack config paths` shows where the folder is. Run /reload after \
+                     adding one.",
+                    theme.dim,
+                ),
+            ],
+            None,
+        ),
+    ];
     Modal::new(
         "Setup",
-        vec![ModalTab {
-            title: "Servers on this machine".into(),
-            items,
-        }],
+        vec![
+            ModalTab {
+                title: "This machine".into(),
+                items: local,
+            },
+            ModalTab {
+                title: "Hosted services".into(),
+                items: hosted,
+            },
+            ModalTab {
+                title: "Any server".into(),
+                items: other,
+            },
+        ],
     )
 }
 

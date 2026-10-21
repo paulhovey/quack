@@ -1,5 +1,5 @@
 <context>
-- Workspace root: {{ workspace_root }}{% if git_branch %} (git branch: {{ git_branch }}){% endif %}
+- Workspace root: {{ workspace_root }}{% if git_branch %} (git branch: {{ git_branch }}){% endif %} (only worry about this folder and its sub-folders; do not inspect or modify files outside it)
 - Today's date: {{ date }}
 {% if folder_listing %}
 Top-level contents of the workspace:

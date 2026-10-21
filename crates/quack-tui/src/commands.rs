@@ -51,7 +51,7 @@ pub(crate) const COMMANDS: &[Command] = &[
         "setup",
         &[],
         "",
-        "Find model servers on this machine and add one as a provider",
+        "Add a provider: a server on this machine, a hosted service, or any URL",
         None,
     ),
     c(

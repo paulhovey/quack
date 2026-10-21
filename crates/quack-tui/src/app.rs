@@ -8,7 +8,7 @@ use quack_config::settings::{ShowReasoning, StartupPanel, UiSettings};
 use quack_config::{LayerStatus, Loaded, SettingRow};
 use quack_protocol::{
     Answer, ApprovalDecision, ApprovalRequest, CallId, Event, InputItem, LoadState, ModelId, Op,
-    ProviderId, Question, ReplayItem, SessionId, Subsystem, TurnOverrides, WriteScope,
+    ProviderId, Question, ReplayItem, SecretText, SessionId, Subsystem, TurnOverrides, WriteScope,
 };
 use ratatui::layout::Rect;
 
@@ -327,6 +327,98 @@ pub(crate) enum ReviewChoice {
     KeepPlanning,
 }
 
+/// A one-line question `/setup` asks: a server's URL or an API key.
+pub(crate) struct Prompt {
+    pub title: String,
+    pub label: String,
+    pub help: Vec<String>,
+    /// Draw the text as dots.
+    pub secret: bool,
+    pub text: String,
+    /// Why the last answer was not taken.
+    pub error: Option<String>,
+    then: PromptThen,
+}
+
+#[derive(Debug)]
+enum PromptThen {
+    ServerUrl,
+    ServerKey { url: String },
+    ServiceKey { id: String },
+}
+
+/// Never shows the text: it may be a key.
+impl std::fmt::Debug for Prompt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Prompt")
+            .field("title", &self.title)
+            .field("then", &self.then)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Prompt {
+    /// Enter sends the answer instead of asking another question.
+    pub(crate) fn last_step(&self) -> bool {
+        !matches!(self.then, PromptThen::ServerUrl)
+    }
+
+    fn server_url() -> Self {
+        Self {
+            title: "Add a server · 1 of 2".into(),
+            label: "Base URL".into(),
+            help: vec![
+                "The address of any OpenAI-compatible server, usually ending in /v1, for \
+                 example http://gpu-box:8000/v1."
+                    .into(),
+            ],
+            secret: false,
+            text: String::new(),
+            error: None,
+            then: PromptThen::ServerUrl,
+        }
+    }
+
+    fn server_key(url: String) -> Self {
+        Self {
+            title: "Add a server · 2 of 2".into(),
+            label: "API key".into(),
+            help: vec![
+                format!(
+                    "The key for {url}, if it needs one. Leave it empty for a server on your own network that takes none."
+                ),
+                "It goes to the OS credential store, never into a file.".into(),
+            ],
+            secret: true,
+            text: String::new(),
+            error: None,
+            then: PromptThen::ServerKey { url },
+        }
+    }
+
+    fn service_key(service: Option<&quack_protocol::ServiceInfo>, id: &str) -> Self {
+        let name = service.map_or(id, |s| s.name.as_str());
+        let mut help = vec![format!(
+            "Paste your {name} API key. quack keeps it in the OS credential store under \
+             `{id}`; the provider file in your config folder only names it."
+        )];
+        if let Some(env) = service.and_then(|s| s.env.as_ref()) {
+            help.push(format!(
+                "To use the {env} environment variable instead, press esc, set it in your shell and start quack again."
+            ));
+        }
+        Self {
+            title: format!("{name} API key"),
+            label: "API key".into(),
+            help,
+            secret: true,
+            text: String::new(),
+            error: None,
+            then: PromptThen::ServiceKey { id: id.to_owned() },
+        }
+    }
+}
+
 /// A tool call waiting for the user's decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Approval {
@@ -396,8 +488,14 @@ pub struct App {
     skills: Vec<quack_protocol::SkillInfo>,
     /// Custom slash commands, minus any that a built-in command's name hides.
     custom: Vec<quack_protocol::CommandInfo>,
-    /// Servers found by the last `/setup`.
-    detected: Vec<quack_protocol::DetectedServer>,
+    /// What `/setup` has found so far.
+    setup: modal::SetupView,
+    /// A question from `/setup`, drawn over everything else.
+    pub(crate) prompt: Option<Prompt>,
+    /// `/setup` sent a key or URL and waits for the provider to be added.
+    setup_adding: bool,
+    /// `/setup` opened on its own once this run, because no model was ready.
+    setup_offered: bool,
     /// A `.quack/` waiting for a trust decision.
     trust: Option<modal::TrustPrompt>,
     frame: u64,
@@ -451,7 +549,10 @@ impl App {
             clipboard: None,
             skills: Vec::new(),
             custom: Vec::new(),
-            detected: Vec::new(),
+            setup: modal::SetupView::default(),
+            prompt: None,
+            setup_adding: false,
+            setup_offered: false,
             trust: None,
             frame: 0,
             dirty: true,
@@ -598,7 +699,21 @@ impl App {
                     row.1 = state;
                 }
             }
-            Event::StartupComplete => self.startup_done = true,
+            Event::StartupComplete => {
+                self.startup_done = true;
+                // A first run with nothing set up: show how to add a provider instead of
+                // waiting for the user to find /setup. `info.model` starts as `[model]
+                // default`, so a configured model whose server is down does not count.
+                if self.info.model.is_none()
+                    && !self.setup_offered
+                    && self.modal.is_none()
+                    && self.prompt.is_none()
+                    && self.trust.is_none()
+                {
+                    self.setup_offered = true;
+                    self.open_setup();
+                }
+            }
             Event::ConfigReloaded => {
                 self.startup_done = false;
                 self.panel_collapsed = false;
@@ -642,12 +757,15 @@ impl App {
             Event::ModelCatalog { providers, current } => {
                 // Only refresh a /models modal that is still open.
                 if self.modal.as_ref().is_some_and(|m| m.title == "Models") {
-                    self.modal = Some(modal::models(
-                        Some(&providers),
-                        current.as_deref(),
-                        self.info.ui.ascii,
-                        &self.theme,
-                    ));
+                    self.modal = Some(
+                        modal::models(
+                            Some(&providers),
+                            current.as_deref(),
+                            self.info.ui.ascii,
+                            &self.theme,
+                        )
+                        .keep_place(self.modal.as_ref()),
+                    );
                 }
             }
             Event::Instructions { files } => {
@@ -733,10 +851,27 @@ impl App {
                 }
             }
             Event::ServersDetected { servers } => {
-                if self.modal.as_ref().is_some_and(|m| m.title == "Setup") {
-                    self.modal = Some(modal::setup(Some(&servers), &self.theme));
-                }
-                self.detected = servers;
+                self.setup.local = modal::Scan::Found(servers);
+                self.refresh_setup();
+            }
+            Event::Services { services } => {
+                self.setup.services = Some(services);
+                self.refresh_setup();
+            }
+            Event::ProviderAdded { id, path } if self.setup_adding => {
+                // Its models follow; the user picks one.
+                self.setup_adding = false;
+                self.note(match path {
+                    Some(path) => format!("added provider {id} ({path}); pick a model"),
+                    None => format!("using the existing provider {id}; pick a model"),
+                });
+                self.prompt = None;
+                self.modal = Some(modal::models(
+                    None,
+                    self.info.model.as_deref(),
+                    self.info.ui.ascii,
+                    &self.theme,
+                ));
             }
             Event::ProviderAdded { id, path } => self.note(match path {
                 Some(path) => format!("added provider {id} ({path}); switching…"),
@@ -1028,7 +1163,12 @@ impl App {
             }
             Event::Notice { message } => self.transcript.push(Entry::System(message)),
             Event::Warning { message } => self.transcript.push(Entry::Warning(message)),
-            Event::Error { error } => self.transcript.push(Entry::Error(error.message)),
+            Event::Error { error } => {
+                if std::mem::take(&mut self.setup_adding) {
+                    self.note("run /setup to try again".into());
+                }
+                self.transcript.push(Entry::Error(error.message));
+            }
             _ => self.dirty = false,
         }
     }
@@ -1038,9 +1178,15 @@ impl App {
             // Windows reports Release events too; act on Press and Repeat only.
             TermEvent::Key(key) if key.kind != KeyEventKind::Release => self.on_key(key),
             TermEvent::Paste(text) => {
-                match &mut self.modal {
-                    Some(m) => m.paste(&text),
-                    None => self.input.insert_str(&text),
+                if let Some(p) = &mut self.prompt {
+                    p.text
+                        .push_str(text.lines().next().unwrap_or_default().trim());
+                    p.error = None;
+                } else {
+                    match &mut self.modal {
+                        Some(m) => m.paste(&text),
+                        None => self.input.insert_str(&text),
+                    }
                 }
                 self.dirty = true;
             }
@@ -1088,6 +1234,9 @@ impl App {
         }
         if self.asking.is_some() {
             return self.on_asking_key(key);
+        }
+        if self.prompt.is_some() {
+            return self.on_prompt_key(key);
         }
         if let Some(modal) = &mut self.modal {
             match modal.on_key(key) {
@@ -1271,6 +1420,92 @@ impl App {
 
     /// Keys while the model's questions are showing. The input stays live for an answer in
     /// the user's own words.
+    fn on_prompt_key(&mut self, key: KeyEvent) {
+        let Some(p) = &mut self.prompt else {
+            return;
+        };
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc => {
+                self.prompt = None;
+                self.open_setup();
+            }
+            KeyCode::Enter => self.answer_prompt(),
+            KeyCode::Backspace => {
+                p.text.pop();
+            }
+            KeyCode::Char('u') if ctrl => p.text.clear(),
+            KeyCode::Char(c) if !ctrl => {
+                p.text.push(c);
+                p.error = None;
+            }
+            _ => {}
+        }
+    }
+
+    /// Enter in a `/setup` prompt: check the answer, then ask the next question or send it.
+    fn answer_prompt(&mut self) {
+        let Some(p) = self.prompt.take() else {
+            return;
+        };
+        let text = p.text.trim().to_owned();
+        let retry = |mut p: Prompt, error: &str| {
+            p.error = Some(error.to_owned());
+            Some(p)
+        };
+        self.prompt = match &p.then {
+            PromptThen::ServerUrl if text.is_empty() => {
+                retry(p, "type the server's URL, or press esc to go back")
+            }
+            PromptThen::ServerUrl
+                if !(text.starts_with("http://") || text.starts_with("https://")) =>
+            {
+                retry(p, "the URL must start with http:// or https://")
+            }
+            PromptThen::ServerUrl => Some(Prompt::server_key(text)),
+            PromptThen::ServerKey { url } => {
+                self.note(format!("adding {url}…"));
+                self.setup_adding = true;
+                self.ops.push(Op::AddServer {
+                    base_url: url.clone(),
+                    key: (!text.is_empty()).then_some(SecretText(text)),
+                });
+                None
+            }
+            PromptThen::ServiceKey { .. } if text.is_empty() => {
+                retry(p, "paste the key, or press esc to go back")
+            }
+            PromptThen::ServiceKey { id } => {
+                self.note(format!("storing the {id} key…"));
+                self.setup_adding = true;
+                self.ops.push(Op::SetProviderKey {
+                    id: id.clone(),
+                    key: SecretText(text),
+                });
+                None
+            }
+        };
+    }
+
+    #[cfg(test)]
+    pub(crate) fn skip_setup_offer(&mut self) {
+        self.setup_offered = true;
+    }
+
+    /// Open `/setup` with what is known, and list the hosted services again.
+    fn open_setup(&mut self) {
+        self.modal = Some(modal::setup(&self.setup, &self.theme));
+        self.ops.push(Op::ListServices);
+    }
+
+    /// Redraw an open `/setup` with new findings, keeping the user's place.
+    fn refresh_setup(&mut self) {
+        if self.modal.as_ref().is_some_and(|m| m.title == "Setup") {
+            self.modal =
+                Some(modal::setup(&self.setup, &self.theme).keep_place(self.modal.as_ref()));
+        }
+    }
+
     fn on_asking_key(&mut self, key: KeyEvent) {
         if self.scroll_key(key) {
             return;
@@ -1711,10 +1946,14 @@ impl App {
             }
             "setup" if args.starts_with("use ") => {
                 let mut parts = args["use ".len()..].splitn(2, ' ');
+                let found = match &self.setup.local {
+                    modal::Scan::Found(list) => list.as_slice(),
+                    _ => &[],
+                };
                 let server = parts
                     .next()
                     .and_then(|i| i.parse::<usize>().ok())
-                    .and_then(|i| self.detected.get(i));
+                    .and_then(|i| found.get(i));
                 match (server, parts.next()) {
                     (Some(s), Some(model)) => self.ops.push(Op::AddProvider {
                         id: s.id.clone(),
@@ -1725,9 +1964,30 @@ impl App {
                     _ => self.note("pick a server and model from /setup".into()),
                 }
             }
+            "setup" if args == "url" => self.prompt = Some(Prompt::server_url()),
+            "setup" if args.starts_with("key ") => {
+                let id = args["key ".len()..].trim();
+                let service = self.setup.services.iter().flatten().find(|s| s.id == id);
+                self.prompt = Some(Prompt::service_key(service, id));
+            }
+            "setup" if args.starts_with("models ") => {
+                let id = args["models ".len()..].trim();
+                self.modal = Some(
+                    modal::models(
+                        None,
+                        self.info.model.as_deref(),
+                        self.info.ui.ascii,
+                        &self.theme,
+                    )
+                    .with_filter(&format!("{id}/")),
+                );
+                self.ops.push(Op::ListModels);
+            }
             "setup" => {
-                self.modal = Some(modal::setup(None, &self.theme));
+                // Asking for /setup is asking to look; the first-run offer waits for "scan".
+                self.setup.local = modal::Scan::Looking;
                 self.ops.push(Op::DetectServers);
+                self.open_setup();
             }
             "undo" => self.ops.push(Op::Undo {
                 checkpoint: None,

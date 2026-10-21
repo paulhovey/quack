@@ -116,6 +116,23 @@ pub enum Op {
         api: Option<String>,
         model: String,
     },
+    /// Ask for the hosted services in `providers.d` that take a key; answered with
+    /// `Event::Services`.
+    ListServices,
+    /// Store a configured service's API key in the OS credential store and point its
+    /// provider file (copied to the user layer) at it. Answered with `Event::ProviderAdded`
+    /// and then `Event::ModelCatalog` for that provider alone.
+    SetProviderKey {
+        id: String,
+        key: SecretText,
+    },
+    /// Add any OpenAI-compatible server by its URL, with its key (if any) in the OS
+    /// credential store. Answered like `SetProviderKey`.
+    AddServer {
+        base_url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key: Option<SecretText>,
+    },
     /// Ask for the memory notes; answered with `Event::MemoryNotes`.
     ListMemory,
     /// Delete a memory note. `scope` is `global` or `project`.
@@ -313,6 +330,10 @@ pub enum Event {
     },
     ServersDetected {
         servers: Vec<DetectedServer>,
+    },
+    /// The hosted services setup offers, grouped as they should be listed.
+    Services {
+        services: Vec<ServiceInfo>,
     },
     /// A provider file was written (`path`), or an existing one reused (`path` is `None`).
     ProviderAdded {
@@ -640,6 +661,33 @@ pub struct DetectedServer {
     /// The configured provider that already points here, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub configured: Option<String>,
+}
+
+/// A hosted service from `providers.d` that takes a key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServiceInfo {
+    pub id: String,
+    pub name: String,
+    /// Heading it is listed under.
+    pub group: String,
+    pub base_url: String,
+    /// The variable its key is read from, when it is read from one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<String>,
+    /// Its key can be read now.
+    pub ready: bool,
+}
+
+/// Text the user typed that must not be shown: serialized as is, but `Debug` hides it, so
+/// it never reaches a log.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SecretText(pub String);
+
+impl std::fmt::Debug for SecretText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SecretText(…)")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

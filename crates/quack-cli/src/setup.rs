@@ -199,7 +199,7 @@ fn by_url(config: &Loaded, io: &mut Io<'_>) -> Result<Option<String>, String> {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err("The URL must start with http:// or https://".into());
     }
-    let suggested = id_from_url(&url);
+    let suggested = setup::id_from_url(&url);
     let id = io
         .ask(&format!("Name for this provider [{suggested}]: "))
         .filter(|s| !s.is_empty())
@@ -302,41 +302,6 @@ fn choose<'a, T>(io: &mut Io<'_>, items: &'a [T], prompt: &str) -> Result<Option
     }
 }
 
-/// `https://api.example.com/v1` → `example`; `http://10.0.0.5:8000/v1` → `server-8000`.
-fn id_from_url(url: &str) -> String {
-    let host_port = url
-        .split("://")
-        .nth(1)
-        .unwrap_or(url)
-        .split('/')
-        .next()
-        .unwrap_or_default();
-    let (host, port) = host_port.rsplit_once(':').unwrap_or((host_port, ""));
-    let is_ip = host.chars().all(|c| c.is_ascii_digit() || c == '.');
-    let name = if is_ip || host == "localhost" {
-        String::new()
-    } else {
-        let labels: Vec<&str> = host
-            .split('.')
-            .filter(|l| !matches!(*l, "api" | "www" | "llm" | "inference"))
-            .collect();
-        let pick = if labels.len() >= 2 {
-            labels[labels.len() - 2]
-        } else {
-            labels.first().copied().unwrap_or_default()
-        };
-        pick.to_ascii_lowercase()
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-            .collect()
-    };
-    match (name.is_empty(), port.is_empty()) {
-        (false, _) => name,
-        (true, false) => format!("server-{port}"),
-        (true, true) => "server".into(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,7 +354,7 @@ mod tests {
         let code = run(config, &mut io).await;
         let out = String::from_utf8_lossy(&out);
         assert_eq!(code, exit::OK, "{out}");
-        let id = id_from_url(&url);
+        let id = setup::id_from_url(&url);
         let file = std::fs::read_to_string(tmp.path().join(format!("user/providers.d/{id}.toml")))
             .expect("provider file");
         assert_eq!(file, format!("# Added by setup.\nbase_url = \"{url}\"\n"));
@@ -427,13 +392,5 @@ mod tests {
         assert!(out.contains("export QUACK_TEST_UNSET_KEY="), "{out}");
         // Nothing is written for a key read from a variable.
         assert!(!tmp.path().join("user/providers.d").exists());
-    }
-
-    #[test]
-    fn ids_from_urls() {
-        assert_eq!(id_from_url("https://api.example.com/v1"), "example");
-        assert_eq!(id_from_url("http://gpu-box:8000/v1"), "gpu-box");
-        assert_eq!(id_from_url("http://10.0.0.5:8000/v1"), "server-8000");
-        assert_eq!(id_from_url("https://inference.corp.example.org"), "example");
     }
 }

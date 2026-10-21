@@ -78,6 +78,21 @@ pub struct Service {
 /// Heading for a service whose file sets no `group`.
 pub const OTHER_SERVICES: &str = "Other services";
 
+/// [`services`] as the protocol carries them.
+pub fn service_infos(config: &Loaded) -> Vec<quack_protocol::ServiceInfo> {
+    services(config)
+        .into_iter()
+        .map(|s| quack_protocol::ServiceInfo {
+            id: s.id,
+            name: s.name,
+            group: s.group,
+            base_url: s.base_url,
+            env: s.env,
+            ready: s.ready,
+        })
+        .collect()
+}
+
 /// The hosted services setup offers, grouped in the order each group first appears and
 /// by id within a group.
 pub fn services(config: &Loaded) -> Vec<Service> {
@@ -321,16 +336,20 @@ pub fn add_provider(
 fn add_file(config: &Loaded, id: &str, base_url: &str, text: &str) -> Result<Added, String> {
     check_id(id)?;
     check_policy(config, id, base_url)?;
-    let items = load_providers(config);
-    if let Some(item) = items.iter().find(|i| {
-        i.loaded()
-            .is_some_and(|f| same_server(&f.base_url, base_url))
-    }) {
-        return Ok(Added {
-            id: item.id.clone(),
-            path: None,
-        });
+    if let Some(id) = configured_at(config, base_url) {
+        return Ok(Added { id, path: None });
     }
+    let (id, path) = free_file(config, id)?;
+    write_new(&path, text)?;
+    Ok(Added {
+        id,
+        path: Some(path),
+    })
+}
+
+/// `id`, or `id-2`, `id-3`, … when it is taken, and its file in the user layer.
+fn free_file(config: &Loaded, id: &str) -> Result<(String, PathBuf), String> {
+    let items = load_providers(config);
     let dir = providers_dir(config)?;
     let taken =
         |id: &str| items.iter().any(|i| i.id == id) || dir.join(format!("{id}.toml")).exists();
@@ -345,11 +364,85 @@ fn add_file(config: &Loaded, id: &str, base_url: &str, text: &str) -> Result<Add
         .find(|id| !taken(id))
         .ok_or_else(|| format!("too many providers named {id}"))?;
     let path = dir.join(format!("{id}.toml"));
-    write_new(&path, text)?;
+    Ok((id, path))
+}
+
+/// Add any OpenAI-compatible server by its URL, named after its host. A key is stored in
+/// the OS credential store under the provider id. A provider that already points at the
+/// server is reused, and the key is then left alone.
+pub fn add_server(config: &Loaded, base_url: &str, key: Option<&str>) -> Result<Added, String> {
+    let base_url = base_url.trim();
+    if !(base_url.starts_with("http://") || base_url.starts_with("https://")) {
+        return Err("the URL must start with http:// or https://".into());
+    }
+    let id = id_from_url(base_url);
+    check_id(&id)?;
+    check_policy(config, &id, base_url)?;
+    if let Some(id) = configured_at(config, base_url) {
+        return Ok(Added { id, path: None });
+    }
+    let (id, path) = free_file(config, &id)?;
+    let mut text = provider_text("Added by setup.", base_url, None);
+    if let Some(key) = key.filter(|k| !k.is_empty()) {
+        quack_config::keyring_set(&id, key).map_err(|e| e.to_string())?;
+        let quoted = serde_json::Value::from(id.as_str()).to_string();
+        text.push_str(&format!("api_key = {{ keyring = {quoted} }}\n"));
+    }
+    write_new(&path, &text)?;
     Ok(Added {
         id,
         path: Some(path),
     })
+}
+
+/// Store a configured service's key in the OS credential store and read it from there.
+/// Returns the provider file written.
+pub fn set_service_key(config: &Loaded, id: &str, key: &str) -> Result<PathBuf, String> {
+    let service = services(config)
+        .into_iter()
+        .find(|s| s.id == id)
+        .ok_or_else(|| format!("`{id}` is not a configured service that takes a key"))?;
+    if key.is_empty() {
+        return Err("nothing entered; nothing stored".into());
+    }
+    quack_config::keyring_set(id, key).map_err(|e| e.to_string())?;
+    use_keyring_key(config, &service)
+}
+
+/// A provider id for a URL: `https://api.example.com/v1` → `example`,
+/// `http://10.0.0.5:8000/v1` → `server-8000`.
+pub fn id_from_url(url: &str) -> String {
+    let host_port = url
+        .split("://")
+        .nth(1)
+        .unwrap_or(url)
+        .split('/')
+        .next()
+        .unwrap_or_default();
+    let (host, port) = host_port.rsplit_once(':').unwrap_or((host_port, ""));
+    let is_ip = host.chars().all(|c| c.is_ascii_digit() || c == '.');
+    let name = if is_ip || host == "localhost" {
+        String::new()
+    } else {
+        let labels: Vec<&str> = host
+            .split('.')
+            .filter(|l| !matches!(*l, "api" | "www" | "llm" | "inference"))
+            .collect();
+        let pick = if labels.len() >= 2 {
+            labels[labels.len() - 2]
+        } else {
+            labels.first().copied().unwrap_or_default()
+        };
+        pick.to_ascii_lowercase()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect()
+    };
+    match (name.is_empty(), port.is_empty()) {
+        (false, _) => name,
+        (true, false) => format!("server-{port}"),
+        (true, true) => "server".into(),
+    }
 }
 
 /// `<user config>/providers.d`.
@@ -415,6 +508,14 @@ mod tests {
             "http://127.0.0.1:8080/v1",
             "http://127.0.0.1:8000/v1"
         ));
+    }
+
+    #[test]
+    fn ids_from_urls() {
+        assert_eq!(id_from_url("https://api.example.com/v1"), "example");
+        assert_eq!(id_from_url("http://gpu-box:8000/v1"), "gpu-box");
+        assert_eq!(id_from_url("http://10.0.0.5:8000/v1"), "server-8000");
+        assert_eq!(id_from_url("https://inference.corp.example.org"), "example");
     }
 
     #[test]
