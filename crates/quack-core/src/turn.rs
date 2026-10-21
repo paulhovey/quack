@@ -869,12 +869,10 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
 
     let mut tctx = s.tool_ctx.clone();
     tctx.cancel = ctx.cancel.child_token();
-    // Yolo runs commands outside the sandbox too.
-    if ctx
-        .perms
-        .lock()
-        .is_ok_and(|p| p.mode == quack_config::settings::PermissionMode::Yolo && !p.plan)
-    {
+    // Yolo and `/sandbox off` run commands outside the sandbox.
+    if ctx.perms.lock().is_ok_and(|p| {
+        p.sandbox_off || (p.mode == quack_config::settings::PermissionMode::Yolo && !p.plan)
+    }) {
         tctx.sandbox = quack_tools::SandboxState::Off;
     }
     let summary = tool.summary(&args, &tctx);

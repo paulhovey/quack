@@ -213,6 +213,8 @@ pub struct Permissions {
     pub memory_writes_ask: bool,
     /// Plan mode: look but don't change anything (docs/plan/04-agent-loop-and-tools.md#plan-mode).
     pub plan: bool,
+    /// `/sandbox off`: shell commands run without the OS sandbox this session.
+    pub sandbox_off: bool,
 }
 
 impl Permissions {
@@ -233,6 +235,7 @@ impl Permissions {
             session: Vec::new(),
             memory_writes_ask: false,
             plan: false,
+            sandbox_off: false,
         };
         (perms, warnings)
     }

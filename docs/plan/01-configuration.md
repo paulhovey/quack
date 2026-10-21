@@ -72,7 +72,7 @@ remember_last = true                        # start with the model last switched
 [ui]
 theme = "auto"                 # auto | dark | light | <name in themes/>
 show_reasoning = "collapsed"   # hidden | collapsed | expanded
-startup_panel = "auto"         # auto (hide when all ready) | always | never
+startup_panel = "auto"         # auto (only on problems or a slow start) | always | never
 
 [context]
 budget_ratio = 0.85            # fraction of model context window we plan to use

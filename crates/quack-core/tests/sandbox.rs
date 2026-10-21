@@ -124,3 +124,92 @@ async fn full_auto_stays_in_the_sandbox() {
     assert!(!outside.exists());
     engine.shutdown().await;
 }
+
+#[tokio::test]
+async fn sandbox_off_keeps_the_mode_and_drops_the_sandbox() {
+    if quack_sandbox::available().is_err() {
+        return;
+    }
+    let home = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .expect("HOME");
+    let tmp = tempfile::Builder::new()
+        .prefix(".quack-sandbox-test")
+        .tempdir_in(home)
+        .expect("tempdir");
+    let outside = tmp.path().join("outside.txt");
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(body_string_contains("\"role\":\"tool\""))
+        .respond_with(sse_text("done"))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(sse_call(
+            "c1",
+            "shell",
+            serde_json::json!({"command": format!("echo ok > '{}'", outside.display())}),
+        ))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+
+    std::fs::create_dir_all(tmp.path().join("user")).expect("mkdir");
+    std::fs::write(
+        tmp.path().join("user").join("config.toml"),
+        "[sandbox]\nmode = \"workspace-write\"\n",
+    )
+    .expect("config");
+    let loaded = common::workspace(tmp.path(), &server.uri(), r#"["tiny"]"#, "");
+    let mut engine = Engine::spawn(Arc::new(loaded));
+    engine
+        .submit(Op::SetPermissionMode {
+            mode: "full-auto".into(),
+        })
+        .await;
+    engine.submit(Op::SetSandbox { off: true }).await;
+
+    // full-auto still runs it without asking, and now nothing stops the write.
+    let events = turn(&mut engine, "write outside").await;
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::ApprovalRequest { .. })),
+        "{events:?}"
+    );
+    assert!(outside.exists(), "the command still ran in the sandbox");
+    engine.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_locked_sandbox_mode_refuses_sandbox_off() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let server = MockServer::start().await;
+    std::fs::create_dir_all(tmp.path().join("system")).expect("mkdir");
+    std::fs::write(
+        tmp.path().join("system").join("config.toml"),
+        "[policy]\nlocked = [\"sandbox.mode\"]\n",
+    )
+    .expect("config");
+    let loaded = common::workspace(tmp.path(), &server.uri(), r#"["tiny"]"#, "");
+    let mut engine = Engine::spawn(Arc::new(loaded));
+    engine.submit(Op::SetSandbox { off: true }).await;
+    let mut warned = false;
+    loop {
+        let e = tokio::time::timeout(Duration::from_secs(10), engine.events.recv())
+            .await
+            .expect("event")
+            .expect("open");
+        match e {
+            Event::Warning { message } if message.contains("locked") => warned = true,
+            Event::Sandbox { off } => {
+                assert!(!off);
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert!(warned);
+    engine.shutdown().await;
+}

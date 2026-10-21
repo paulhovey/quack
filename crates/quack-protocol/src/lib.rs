@@ -79,6 +79,12 @@ pub enum Op {
     SetPermissionMode {
         mode: String,
     },
+    /// Run shell commands without the OS sandbox for the rest of the session (`off`), or
+    /// go back to `[sandbox] mode`. Permission modes and approvals are unchanged. Refused
+    /// when the system policy locks `sandbox.mode`.
+    SetSandbox {
+        off: bool,
+    },
     /// Leave plan mode for `mode` and carry out the plan. When a `[model] planner` wrote
     /// it, the session's model gets the requests, the user's answers and the plan in one
     /// message instead of the planner's transcript.
@@ -336,6 +342,10 @@ pub enum Event {
     /// The session's permission mode, e.g. `ask` or `plan`.
     PermissionMode {
         mode: String,
+    },
+    /// Whether the user turned the sandbox off for this session (`Op::SetSandbox`).
+    Sandbox {
+        off: bool,
     },
     Compacted {
         summary_tokens: u32,

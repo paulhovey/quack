@@ -23,6 +23,9 @@ const DOUBLE_ESC: Duration = Duration::from_millis(600);
 const SPIN_EVERY: u64 = 5;
 /// Welcome duck advances animation every N frames (16 ms each).
 const DUCK_ANIM_EVERY: u64 = 8;
+/// `startup_panel = "auto"`: frames (16 ms each) a clean startup gets before the panel
+/// shows, so a fast start never flashes it. Problems show it at once.
+const PANEL_GRACE: u64 = 30;
 /// Transcript rows one mouse-wheel notch scrolls.
 const WHEEL_ROWS: usize = 3;
 
@@ -374,12 +377,16 @@ pub struct App {
     /// Sub-agent runs in this session, oldest first (`/tasks`).
     pub(crate) agents: Vec<AgentRun>,
     panel_collapsed: bool,
+    /// The frame startup (or the last `/reload`) began on, for `PANEL_GRACE`.
+    startup_frame: u64,
     /// A `/resume` is in flight: clear the transcript when it lands.
     resuming: bool,
     /// The mode to go back to when plan mode ends.
     mode_before_plan: String,
     /// The mode `/yolo` turns back to.
     mode_before_yolo: String,
+    /// `/sandbox off`: shell commands run without the OS sandbox this session.
+    pub(crate) sandbox_off: bool,
     /// Text for the terminal's clipboard (OSC 52), written by the event loop.
     clipboard: Option<String>,
     /// Installed skills, runnable as `/<name>`.
@@ -432,9 +439,11 @@ impl App {
             plan_expanded: false,
             agents: Vec::new(),
             panel_collapsed: false,
+            startup_frame: 0,
             resuming: false,
             mode_before_plan: String::new(),
             mode_before_yolo: String::new(),
+            sandbox_off: false,
             clipboard: None,
             skills: Vec::new(),
             custom: Vec::new(),
@@ -495,8 +504,11 @@ impl App {
             StartupPanel::Always => true,
             StartupPanel::Never => false,
             StartupPanel::Auto => {
-                let all_fine = self.startup_done && self.startup_issues() == 0;
-                !self.panel_collapsed && !all_fine
+                // Show problems at once, a slow start after the grace period, and a fast
+                // clean start never.
+                let slow = !self.startup_done
+                    && self.frame.wrapping_sub(self.startup_frame) >= PANEL_GRACE;
+                !self.panel_collapsed && (self.startup_issues() > 0 || slow)
             }
         }
     }
@@ -557,6 +569,10 @@ impl App {
         if animating && !self.info.ui.reduced_motion && self.frame.is_multiple_of(SPIN_EVERY) {
             self.dirty = true;
         }
+        // A slow startup's panel appears once the grace period ends.
+        if !self.startup_done && self.frame.wrapping_sub(self.startup_frame) == PANEL_GRACE {
+            self.dirty = true;
+        }
         // The welcome duck animates on startup while the transcript is empty.
         if self.transcript.is_empty()
             && !self.info.ui.reduced_motion
@@ -582,6 +598,7 @@ impl App {
             Event::ConfigReloaded => {
                 self.startup_done = false;
                 self.panel_collapsed = false;
+                self.startup_frame = self.frame;
                 self.trust = None;
                 self.note("config reloaded".into());
             }
@@ -959,6 +976,17 @@ impl App {
                     self.review = None;
                 }
                 self.info.permission_mode = mode;
+            }
+            Event::Sandbox { off } => {
+                if off && !self.sandbox_off {
+                    self.note(format!(
+                        "sandbox off: shell commands run without the OS sandbox; {} mode still decides what asks · /sandbox on turns it back on",
+                        self.info.permission_mode
+                    ));
+                } else if !off && self.sandbox_off {
+                    self.note("sandbox on".into());
+                }
+                self.sandbox_off = off;
             }
             Event::TurnAborted { reason, .. } => {
                 self.turn_running = false;
@@ -1445,6 +1473,21 @@ impl App {
         }
     }
 
+    /// `/sandbox`: turn the OS sandbox off for this session, or back on.
+    fn toggle_sandbox(&mut self, args: &str) {
+        let off = match args.trim() {
+            "off" => true,
+            "on" => false,
+            "" => !self.sandbox_off,
+            other => {
+                return self.note(format!(
+                    "unknown argument `{other}`; use /sandbox on or /sandbox off"
+                ));
+            }
+        };
+        self.ops.push(Op::SetSandbox { off });
+    }
+
     /// Leave plan mode for the mode it was entered from.
     fn end_plan(&mut self) {
         let back = match self.mode_before_plan.as_str() {
@@ -1707,6 +1750,7 @@ impl App {
             }
             "permissions" => self.set_mode(args),
             "yolo" => self.toggle_yolo(args),
+            "sandbox" => self.toggle_sandbox(args),
             "plan" => match args {
                 "" => self.set_mode("plan"),
                 "accept" | "go" => {
@@ -2161,6 +2205,25 @@ mod tests {
         type_str(&mut app, "/yolo off");
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.take_ops(), vec![mode("auto-edit")]);
+    }
+
+    #[test]
+    fn sandbox_toggles_without_changing_the_mode() {
+        let mut app = App::new(info());
+        app.on_engine(Event::PermissionMode {
+            mode: "plan".into(),
+        });
+        type_str(&mut app, "/sandbox");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.take_ops(), vec![Op::SetSandbox { off: true }]);
+        app.on_engine(Event::Sandbox { off: true });
+        type_str(&mut app, "/sandbox");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.take_ops(), vec![Op::SetSandbox { off: false }]);
+        type_str(&mut app, "/sandbox off");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.take_ops(), vec![Op::SetSandbox { off: true }]);
+        assert_eq!(app.info.permission_mode, "plan");
     }
 
     #[test]

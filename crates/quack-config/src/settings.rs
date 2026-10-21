@@ -106,7 +106,7 @@ pub enum ShowReasoning {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum StartupPanel {
-    /// Collapse to the status bar once everything is ready.
+    /// Show only when something needs attention or startup is slow (over half a second).
     Auto,
     Always,
     Never,

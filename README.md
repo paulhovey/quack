@@ -194,6 +194,10 @@ Everything below works today. Planned work is listed separately at the end.
 - Where the sandbox can't run (Windows for now, very old Linux kernels), the default runs
   commands without it and says so; a mode you set yourself fails closed, so every command
   asks first.
+- `/sandbox` (or `/sandbox off|on`) turns the sandbox off for the rest of the session and
+  back on, without changing the permission mode: plan, ask and full-auto keep asking what
+  they asked before, but commands run unsandboxed. The status bar shows "no sandbox" while
+  it is off. A system policy that locks `sandbox.mode` refuses it.
 
 ### Context
 

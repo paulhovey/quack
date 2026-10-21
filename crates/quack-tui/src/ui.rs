@@ -568,6 +568,11 @@ fn draw_status(f: &mut Frame<'_>, app: &App, area: Rect) {
         Span::styled(format!(" {label} "), t.pill(t.mode(mode))),
         Span::raw(" "),
     ];
+    // Yolo already says the sandbox is off.
+    if app.sandbox_off && mode != "yolo" {
+        left.push(Span::styled("no sandbox", t.warn));
+        left.push(Span::styled(" · ", t.dim));
+    }
     match &app.info.model {
         Some(m) => left.push(Span::raw(m.clone())),
         None => left.push(Span::styled("no model", t.warn)),
@@ -1402,6 +1407,55 @@ mod tests {
             app.on_engine(Event::StartupProgress { subsystem, state });
         }
         app
+    }
+
+    #[test]
+    fn status_bar_says_when_the_sandbox_is_off() {
+        let mut app = App::new(test_info());
+        assert!(!render(&app, 100, 30).contains("no sandbox"));
+        app.on_engine(Event::Sandbox { off: true });
+        assert!(render(&app, 100, 30).contains("no sandbox"));
+        // Yolo's pill already says so.
+        app.on_engine(Event::PermissionMode {
+            mode: "yolo".into(),
+        });
+        assert!(!render(&app, 100, 30).contains("no sandbox"));
+    }
+
+    #[test]
+    fn startup_panel_waits_for_a_problem_or_a_slow_start() {
+        let ready = |subsystem| Event::StartupProgress {
+            subsystem,
+            state: LoadState::Ready {
+                detail: "ready-detail".into(),
+            },
+        };
+        // A fast, clean start never shows the panel.
+        let mut app = App::new(test_info());
+        app.on_engine(ready(Subsystem::Config));
+        assert!(!render(&app, 80, 24).contains("ready-detail"));
+        app.on_engine(Event::StartupComplete);
+        assert!(!render(&app, 80, 24).contains("ready-detail"));
+
+        // A slow one shows it after the grace period.
+        let mut app = App::new(test_info());
+        app.on_engine(ready(Subsystem::Config));
+        for _ in 0..30 {
+            app.on_tick();
+        }
+        assert!(render(&app, 80, 24).contains("ready-detail"));
+
+        // A problem shows it at once and keeps it after startup.
+        let mut app = App::new(test_info());
+        app.on_engine(Event::StartupProgress {
+            subsystem: Subsystem::Provider,
+            state: LoadState::NeedsAttention {
+                detail: "no model selected".into(),
+            },
+        });
+        assert!(render(&app, 80, 24).contains("no model selected"));
+        app.on_engine(Event::StartupComplete);
+        assert!(render(&app, 80, 24).contains("no model selected"));
     }
 
     #[test]

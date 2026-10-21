@@ -154,6 +154,13 @@ pub(crate) const COMMANDS: &[Command] = &[
         None,
     ),
     c(
+        "sandbox",
+        &[],
+        "[on|off]",
+        "Toggle the OS sandbox for shell commands, keeping the permission mode",
+        None,
+    ),
+    c(
         "mcp",
         &[],
         "[restart <id>]",

@@ -150,6 +150,8 @@ pub struct Engine {
     switch_tx: Option<mpsc::Sender<(Role, Result<Setup, String>)>>,
     /// A mode set before startup finished, applied once a model is ready.
     pending_mode: Option<String>,
+    /// A `/sandbox` setting sent before startup finished.
+    pending_sandbox: Option<bool>,
     /// Told to the model at the start of the next turn, e.g. that the user undid an edit.
     notes: Vec<String>,
     /// MCP servers, shared by every model the session switches to.
@@ -207,6 +209,7 @@ impl Engine {
             title: None,
             switch_tx: None,
             pending_mode: None,
+            pending_sandbox: None,
             notes: Vec::new(),
             stats: Arc::default(),
             hooks: Arc::default(),
@@ -419,6 +422,9 @@ impl Engine {
             Some(mode) => self.set_mode(&mode),
             None => self.emit_mode(),
         }
+        if let Some(off) = self.pending_sandbox.take() {
+            self.set_sandbox(off);
+        }
         let source = if resumed && self.log.is_some() {
             "resume"
         } else {
@@ -582,6 +588,39 @@ impl Engine {
             _ => {}
         }
         self.emit_mode();
+    }
+
+    fn sandbox_locked(&self) -> bool {
+        let locked = &self.config.settings.policy.locked;
+        locked.iter().any(|k| k == "sandbox" || k == "sandbox.mode")
+    }
+
+    /// `/sandbox on|off`: run shell commands without the OS sandbox this session, whatever
+    /// the permission mode, or go back to `[sandbox] mode`.
+    fn set_sandbox(&mut self, off: bool) {
+        let Some(c) = &self.convo else {
+            return self.warn("no model is ready; the sandbox setting applies once one is".into());
+        };
+        if off && self.sandbox_locked() {
+            self.warn("`sandbox.mode` is locked by the system policy; the sandbox stays on".into());
+            return self.emit(Event::Sandbox { off: false });
+        }
+        if let Ok(mut p) = c.perms.lock() {
+            p.sandbox_off = off;
+        }
+        if !off {
+            match &c.setup.tool_ctx.sandbox {
+                quack_tools::SandboxState::On(_) => {}
+                quack_tools::SandboxState::Off => self.warn(format!(
+                    "[sandbox] mode = \"{}\", so commands still run without a sandbox · set it in config.toml",
+                    self.config.settings.sandbox.mode.label()
+                )),
+                quack_tools::SandboxState::Unavailable(why) => self.warn(format!(
+                    "the sandbox is not available ({why}); every shell command asks first"
+                )),
+            }
+        }
+        self.emit(Event::Sandbox { off });
     }
 
     fn emit_mode(&self) {
@@ -1357,6 +1396,8 @@ impl Engine {
             } => self.add_provider(&id, &base_url, api.as_deref(), model),
             Op::SetPermissionMode { mode } if !self.started => self.pending_mode = Some(mode),
             Op::SetPermissionMode { mode } => self.set_mode(&mode),
+            Op::SetSandbox { off } if !self.started => self.pending_sandbox = Some(off),
+            Op::SetSandbox { off } => self.set_sandbox(off),
             Op::AcceptPlan { mode } => {
                 self.queued.push_back(Queued::Accept(mode));
                 self.next_queued(done, reload);
@@ -1560,6 +1601,12 @@ impl Engine {
                         .max_permission_mode
                         .map_or(old.mode, |cap| old.mode.min(cap));
                     perms.plan = old.plan;
+                    // A reload that locks `sandbox.mode` turns the sandbox back on.
+                    perms.sandbox_off = old.sandbox_off && !self.sandbox_locked();
+                    if old.sandbox_off && !perms.sandbox_off {
+                        self.warn("`sandbox.mode` is now locked by the system policy; the sandbox is back on".into());
+                        self.emit(Event::Sandbox { off: false });
+                    }
                 }
                 c.history.unwrap_or_default()
             }
@@ -1881,6 +1928,7 @@ fn op_name(op: &Op) -> &'static str {
         Op::RestartMcp { .. } => "restart_mcp",
         Op::AddProvider { .. } => "add_provider",
         Op::SetPermissionMode { .. } => "set_permission_mode",
+        Op::SetSandbox { .. } => "set_sandbox",
         Op::AcceptPlan { .. } => "accept_plan",
         Op::DeleteMemory { .. } => "delete_memory",
         Op::SetTitle { .. } => "set_title",
