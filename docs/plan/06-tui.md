@@ -165,7 +165,7 @@ Defaults are listed in `quack keys --print`. Users override them in `config.toml
 - Supported: Windows 10 1809+ and Windows 11, on x64 and ARM64. VT processing is required. On legacy conhost without VT, print a clear message suggesting Windows Terminal.
 - Unicode width: use `unicode-width` and avoid ambiguous-width glyphs in chrome. Provide `ui.ascii = true` for fonts that lack box-drawing or spinner glyphs.
 - Clipboard: OSC 52 where supported, with `arboard` as a fallback (Windows clipboard API) for "copy last response" and "copy code block".
-- Mouse: optional (`ui.mouse = false` default), because mouse capture breaks native text selection in most terminals. When on, the wheel scrolls the transcript; `/reload` turns capture on or off.
+- Mouse: on by default (`ui.mouse = true`): the wheel scrolls the transcript and a left click places the input cursor. Capture breaks native text selection in most terminals, so Shift-drag selects, and `ui.mouse = false` turns capture off; `/reload` follows the setting.
 
 ## Accessibility
 
@@ -180,5 +180,5 @@ Defaults are listed in `quack keys --print`. Users override them in `config.toml
 
 ## Open questions
 
-- Text selection in full-screen mode: most terminals let users bypass mouse capture with Shift-drag, and mouse capture is off by default anyway. Is in-app selection with a "copy selection" mode worth building? Proposed: `/copy` plus code-block picking in M1, and in-app selection later only if users ask for it.
+- Text selection in full-screen mode: most terminals let users bypass mouse capture with Shift-drag, and `ui.mouse = false` turns capture off. Is in-app selection with a "copy selection" mode worth building? Proposed: `/copy` plus code-block picking in M1, and in-app selection later only if users ask for it.
 - Should we support a split-pane diff view (side-by-side) for approvals on wide terminals? Proposed: yes, automatically at ≥160 columns.

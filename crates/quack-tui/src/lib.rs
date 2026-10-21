@@ -79,7 +79,7 @@ async fn event_loop(
     trace: Option<&StartupTrace>,
 ) -> io::Result<()> {
     let mut input = EventStream::new();
-    // `ui.mouse`: capture the mouse so the wheel scrolls; followed across `/reload`.
+    // `ui.mouse`: capture the mouse for the wheel and input clicks; followed across `/reload`.
     let mut mouse = false;
     let mut tick = tokio::time::interval(FRAME);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);

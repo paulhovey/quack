@@ -510,8 +510,8 @@
           "type": "boolean"
         },
         "mouse": {
-          "default": false,
-          "description": "Capture the mouse. Off by default because it breaks native text selection.",
+          "default": true,
+          "description": "Capture the mouse for wheel scrolling and clicks in the input. Native text selection\nthen needs Shift held; turn this off to select without it.",
           "type": "boolean"
         },
         "reduced_motion": {
@@ -692,7 +692,7 @@
       "$ref": "#/$defs/UiSettings",
       "default": {
         "ascii": false,
-        "mouse": false,
+        "mouse": true,
         "reduced_motion": false,
         "show_reasoning": "collapsed",
         "startup_panel": "auto",

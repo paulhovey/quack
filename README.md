@@ -296,8 +296,10 @@ env = { JIRA_URL = "https://jira.example.com", JIRA_TOKEN = { keyring = "jira" }
 - A full-screen terminal UI with markdown rendering and an ASCII mode.
 - A scrollable history with a scrollbar: PageUp/PageDown by page, Shift-Up/Down by line,
   Ctrl-Home/Ctrl-End to the top or the latest. The view holds still while a reply streams
-  in below. Set `ui.mouse = true` to scroll with the wheel (it takes over the mouse, so
-  hold Shift to select text).
+  in below. The wheel scrolls and a click places the input cursor; this takes over the
+  mouse, so hold Shift to select text, or set `ui.mouse = false` to give it back.
+- An input box that wraps long lines and grows to six rows. Up/Down move between its rows
+  and step through history from the top or bottom row.
 - A slash-command palette that highlights the letters you typed and shows what doesn't fit
   on the row (the rest of a description, aliases) underneath. Every picker (`/models`,
   `/config`, `/help`, …) works the same way, with tabs, match highlighting and a scrollbar.

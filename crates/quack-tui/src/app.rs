@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
-    Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
+    Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
 use quack_config::settings::{ShowReasoning, StartupPanel, UiSettings};
 use quack_config::{LayerStatus, Loaded, SettingRow};
@@ -10,6 +10,7 @@ use quack_protocol::{
     Answer, ApprovalDecision, ApprovalRequest, CallId, Event, InputItem, LoadState, ModelId, Op,
     ProviderId, Question, ReplayItem, SessionId, Subsystem, TurnOverrides, WriteScope,
 };
+use ratatui::layout::Rect;
 
 use crate::commands::{self, COMMANDS, Command};
 use crate::fuzzy;
@@ -348,6 +349,8 @@ pub struct App {
     pub(crate) scroll: Cell<usize>,
     /// `(rows, height)` of the transcript as last drawn.
     pub(crate) view: Cell<(usize, usize)>,
+    /// The input box's text area and its first visible row, as last drawn.
+    pub(crate) input_view: Cell<(Rect, usize)>,
     /// How reasoning shows right now: `ui.show_reasoning`, flipped by Ctrl-T.
     pub(crate) show_reasoning: ShowReasoning,
     pub(crate) popup_selected: usize,
@@ -421,6 +424,7 @@ impl App {
             modal: None,
             scroll: Cell::new(0),
             view: Cell::new((0, 0)),
+            input_view: Cell::new((Rect::default(), 0)),
             show_reasoning: info.ui.show_reasoning,
             popup_selected: 0,
             popup_dismissed: false,
@@ -1044,10 +1048,33 @@ impl App {
             TermEvent::Mouse(m) if self.modal.is_none() => match m.kind {
                 MouseEventKind::ScrollUp => self.scroll_up(WHEEL_ROWS),
                 MouseEventKind::ScrollDown => self.scroll_down(WHEEL_ROWS),
+                MouseEventKind::Down(MouseButton::Left) => self.click_input(m.column, m.row),
                 _ => {}
             },
             _ => {}
         }
+    }
+
+    /// Columns the input text wraps at: the box as last drawn, less the prompt.
+    fn input_width(&self) -> usize {
+        match self.input_view.get().0.width {
+            // Not drawn yet: nothing wraps.
+            0 => usize::MAX,
+            w => usize::from(w.saturating_sub(2)),
+        }
+    }
+
+    /// A click in the input box moves the cursor there.
+    fn click_input(&mut self, x: u16, y: u16) {
+        let (area, first) = self.input_view.get();
+        if !area.contains((x, y).into()) {
+            return;
+        }
+        let layout = self.input.layout(self.input_width());
+        let row = first + usize::from(y - area.y);
+        let col = usize::from((x - area.x).saturating_sub(2));
+        self.input.place(&layout, row, col);
+        self.dirty = true;
     }
 
     fn on_key(&mut self, key: KeyEvent) {
@@ -1119,8 +1146,16 @@ impl App {
             KeyCode::Down if !popup.is_empty() => {
                 self.popup_selected = (self.popup_selected + 1).min(popup.len() - 1);
             }
-            KeyCode::Up => self.input.history_prev(),
-            KeyCode::Down => self.input.history_next(),
+            KeyCode::Up => {
+                if !self.input.up(self.input_width()) {
+                    self.input.history_prev();
+                }
+            }
+            KeyCode::Down => {
+                if !self.input.down(self.input_width()) {
+                    self.input.history_next();
+                }
+            }
             KeyCode::Left => self.input.left(),
             KeyCode::Right => self.input.right(),
             KeyCode::Home => self.input.home(),
@@ -1206,7 +1241,7 @@ impl App {
         Some((room, turns_left(&self.growth, room)))
     }
 
-    /// Whether the terminal should capture the mouse (`ui.mouse`), for wheel scrolling.
+    /// Whether the terminal should capture the mouse (`ui.mouse`), for wheel scrolling and input clicks.
     pub fn wants_mouse(&self) -> bool {
         self.info.ui.mouse
     }

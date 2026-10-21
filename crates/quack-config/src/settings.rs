@@ -76,7 +76,8 @@ pub struct UiSettings {
     pub startup_panel: StartupPanel,
     /// Use ASCII instead of box-drawing and spinner glyphs.
     pub ascii: bool,
-    /// Capture the mouse. Off by default because it breaks native text selection.
+    /// Capture the mouse for wheel scrolling and clicks in the input. Native text selection
+    /// then needs Shift held; turn this off to select without it.
     pub mouse: bool,
     /// Replace spinners with static indicators.
     pub reduced_motion: bool,
@@ -89,7 +90,7 @@ impl Default for UiSettings {
             show_reasoning: ShowReasoning::Collapsed,
             startup_panel: StartupPanel::Auto,
             ascii: false,
-            mouse: false,
+            mouse: true,
             reduced_motion: false,
         }
     }

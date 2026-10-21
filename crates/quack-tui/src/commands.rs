@@ -295,7 +295,7 @@ pub(crate) const KEYS: &[(&str, &str)] = &[
     ("Shift-Enter / Alt-Enter / Ctrl-J", "New line"),
     ("Esc", "Close modal or popup; otherwise interrupt the turn"),
     ("Ctrl-C", "Clear input, interrupt, or press twice to quit"),
-    ("Up / Down", "Input history"),
+    ("Up / Down", "Move between input rows, then through history"),
     ("PageUp / PageDown", "Scroll the transcript a page"),
     ("Shift-Up / Shift-Down", "Scroll the transcript a line"),
     (

@@ -26,7 +26,15 @@ pub(crate) fn draw(f: &mut Frame<'_>, app: &App) {
     } else {
         0
     };
-    let input_rows = u16::try_from(app.input.line_count().min(MAX_INPUT_LINES)).unwrap_or(1) + 2;
+    let input_rows = u16::try_from(
+        app.input
+            .layout(input_width(f.area().width))
+            .rows
+            .len()
+            .min(MAX_INPUT_LINES),
+    )
+    .unwrap_or(1)
+        + 2;
     let plan_rows = if app.plan_expanded && !app.plan.is_empty() {
         // The whole plan, up to a third of the screen.
         let cap = (f.area().height / 3).max(2);
@@ -514,43 +522,40 @@ fn draw_transcript(f: &mut Frame<'_>, app: &App, area: Rect) {
     }
 }
 
+/// Columns for input text: the box's borders and the prompt take four.
+fn input_width(area_width: u16) -> usize {
+    usize::from(area_width.saturating_sub(4))
+}
+
 fn draw_input(f: &mut Frame<'_>, app: &App, area: Rect) {
     let block = Block::bordered()
         .border_set(app.glyphs.border)
         .border_style(app.theme.border);
     let inner = block.inner(area);
-    let (cur_line, cur_col) = app.input.cursor_line_col();
-    let first = cur_line.saturating_sub(MAX_INPUT_LINES - 1);
-    let lines: Vec<Line<'_>> = app
-        .input
-        .text()
-        .split('\n')
+    let layout = app.input.layout(input_width(area.width));
+    let (cur_row, cur_col) = layout.cursor;
+    let visible = usize::from(inner.height).max(1);
+    let first = cur_row.saturating_sub(visible - 1);
+    app.input_view.set((inner, first));
+    let lines: Vec<Line<'_>> = layout
+        .rows
+        .into_iter()
         .enumerate()
         .skip(first)
-        .take(MAX_INPUT_LINES)
+        .take(visible)
         .map(|(i, l)| {
             let lead = if i == 0 {
                 format!("{} ", app.glyphs.prompt)
             } else {
                 "  ".into()
             };
-            Line::from(vec![
-                Span::styled(lead, app.theme.accent),
-                Span::raw(l.to_owned()),
-            ])
+            Line::from(vec![Span::styled(lead, app.theme.accent), Span::raw(l)])
         })
         .collect();
     f.render_widget(Paragraph::new(lines).block(block), area);
     if app.modal.is_none() {
-        let line_text = app
-            .input
-            .text()
-            .split('\n')
-            .nth(cur_line)
-            .unwrap_or_default();
-        let col_w: usize = line_text.chars().take(cur_col).collect::<String>().width();
-        let x = inner.x + 2 + u16::try_from(col_w).unwrap_or(0);
-        let y = inner.y + u16::try_from(cur_line - first).unwrap_or(0);
+        let x = inner.x + 2 + u16::try_from(cur_col).unwrap_or(0);
+        let y = inner.y + u16::try_from(cur_row - first).unwrap_or(0);
         f.set_cursor_position((x.min(inner.right().saturating_sub(1)), y));
     }
 }
@@ -2107,6 +2112,75 @@ mod tests {
         ));
         app.input.set("/re");
         insta::assert_snapshot!(render(&app, 80, 24));
+    }
+
+    #[test]
+    fn long_input_wraps_and_grows_the_box() {
+        let mut app = App::new(test_info());
+        app.on_engine(Event::StartupComplete);
+        // 40 columns leave 36 for text.
+        app.input
+            .set("please read the failing test and then fix the bug it points at");
+        let mut terminal = Terminal::new(TestBackend::new(40, 16)).expect("terminal");
+        terminal.draw(|f| draw(f, &app)).expect("draw");
+        let s = terminal.backend().to_string();
+        assert!(s.contains("please read the failing test and "), "{s}");
+        assert!(s.contains("  then fix the bug it points at"), "{s}");
+        // The cursor follows the text onto the second row, just past its end.
+        let pos = terminal.get_cursor_position().expect("cursor");
+        assert_eq!((pos.x, pos.y), (1 + 2 + 29, 16 - 3));
+    }
+
+    #[test]
+    fn arrows_and_clicks_move_the_cursor_in_wrapped_input() {
+        use crossterm::event::{
+            Event as TermEvent, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        };
+        let mut app = App::new(test_info());
+        app.on_engine(Event::StartupComplete);
+        app.input.set("earlier prompt");
+        app.input.submit();
+        app.input
+            .set("please read the failing test and then fix the bug it points at");
+        let mut terminal = Terminal::new(TestBackend::new(40, 16)).expect("terminal");
+        let mut cursor = |app: &App| {
+            terminal.draw(|f| draw(f, app)).expect("draw");
+            let p = terminal.get_cursor_position().expect("cursor");
+            (p.x, p.y)
+        };
+        assert_eq!(cursor(&app), (32, 13));
+        // Up moves to the first row, and only then reaches history.
+        key(&mut app, KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(cursor(&app), (32, 12));
+        key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(cursor(&app), (32, 13));
+        key(&mut app, KeyCode::Up, KeyModifiers::NONE);
+        key(&mut app, KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(app.input.text(), "earlier prompt");
+        key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        app.input
+            .set("please read the failing test and then fix the bug it points at");
+        cursor(&app);
+
+        // A click on "read" puts the cursor there; one outside the box does nothing.
+        let click = |app: &mut App, column, row| {
+            app.on_terminal(TermEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            }));
+        };
+        click(&mut app, 10, 12);
+        assert_eq!(cursor(&app), (10, 12));
+        click(&mut app, 10, 2);
+        assert_eq!(cursor(&app), (10, 12));
+        key(&mut app, KeyCode::Char('x'), KeyModifiers::NONE);
+        assert!(
+            app.input.text().starts_with("please xread"),
+            "{}",
+            app.input.text()
+        );
     }
 
     #[test]

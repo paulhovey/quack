@@ -1,6 +1,8 @@
 //! Multi-line input buffer with a char-indexed cursor and in-memory history.
 //! Persisted per-project history, `@` file completion and paste chips land in M1.
 
+use unicode_width::UnicodeWidthChar;
+
 #[derive(Debug, Default)]
 pub(crate) struct Input {
     text: String,
@@ -125,17 +127,138 @@ impl Input {
         self.cursor = self.len();
     }
 
-    /// Line index and column (in chars) of the cursor.
-    pub fn cursor_line_col(&self) -> (usize, usize) {
-        let before: String = self.text.chars().take(self.cursor).collect();
-        let line = before.matches('\n').count();
-        let col = before.rsplit('\n').next().map_or(0, |l| l.chars().count());
-        (line, col)
+    /// The text soft-wrapped to `width` columns, and the cursor's row and column there.
+    pub fn layout(&self, width: usize) -> Layout {
+        let width = width.max(1);
+        let mut rows = Vec::new();
+        let mut spans = Vec::new();
+        let mut cursor = None;
+        let mut start = 0;
+        for line in self.text.split('\n') {
+            let chars: Vec<char> = line.chars().collect();
+            let end = start + chars.len();
+            let wrapped = wrap_line(&chars, width);
+            let last = wrapped.len() - 1;
+            for (n, (a, b)) in wrapped.into_iter().enumerate() {
+                // A cursor on a row boundary sits at the start of the next row.
+                let here = self.cursor >= start + a
+                    && (self.cursor < start + b || (b == chars.len() && self.cursor == end));
+                if cursor.is_none() && here {
+                    let col = chars[a..self.cursor - start]
+                        .iter()
+                        .map(|c| c.width().unwrap_or(0))
+                        .sum();
+                    cursor = Some((rows.len(), col));
+                }
+                rows.push(chars[a..b].iter().collect());
+                // A wrapped row's end is the next row's start, so the cursor stops short of it.
+                spans.push((start + a, start + b - usize::from(n < last)));
+            }
+            start = end + 1;
+        }
+        let (mut row, mut col) = cursor.unwrap_or((rows.len().saturating_sub(1), 0));
+        // A full last row leaves no room for the cursor: it moves to a row of its own.
+        if col >= width {
+            row += 1;
+            col = 0;
+            if row == rows.len() {
+                rows.push(String::new());
+                spans.push((self.cursor, self.cursor));
+            }
+        }
+        Layout {
+            rows,
+            spans,
+            cursor: (row, col),
+        }
     }
 
-    pub fn line_count(&self) -> usize {
-        self.text.matches('\n').count() + 1
+    /// Move the cursor to display column `col` of `row` in `layout`, or as near as it gets.
+    pub fn place(&mut self, layout: &Layout, row: usize, col: usize) {
+        let Some(&(start, max)) = layout.spans.get(row.min(layout.spans.len() - 1)) else {
+            return;
+        };
+        let mut at = start;
+        let mut w = 0;
+        for c in self.text.chars().skip(start).take(max - start) {
+            w += c.width().unwrap_or(0);
+            if w > col {
+                break;
+            }
+            at += 1;
+        }
+        self.cursor = at;
     }
+
+    /// Move the cursor up a row at `width` columns. False when it is already on the top row.
+    pub fn up(&mut self, width: usize) -> bool {
+        let layout = self.layout(width);
+        let (row, col) = layout.cursor;
+        if row == 0 {
+            return false;
+        }
+        self.place(&layout, row - 1, col);
+        true
+    }
+
+    /// Move the cursor down a row at `width` columns. False when it is already on the bottom row.
+    pub fn down(&mut self, width: usize) -> bool {
+        let layout = self.layout(width);
+        let (row, col) = layout.cursor;
+        if row + 1 >= layout.rows.len() {
+            return false;
+        }
+        self.place(&layout, row + 1, col);
+        true
+    }
+}
+
+/// The text of the input as it is drawn.
+#[derive(Debug)]
+pub(crate) struct Layout {
+    pub rows: Vec<String>,
+    /// Each row's first char and the furthest the cursor can go on it.
+    spans: Vec<(usize, usize)>,
+    /// Row and display column of the cursor.
+    pub cursor: (usize, usize),
+}
+
+/// Char ranges of one line's rows at `width` columns, breaking after spaces where possible.
+/// Ranges are contiguous, so a cursor position always falls in one of them.
+fn wrap_line(chars: &[char], width: usize) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut row_w = 0;
+    // Where the row could break: just after its last space.
+    let mut brk = None;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        let cw = c.width().unwrap_or(0);
+        if row_w + cw > width && i > start {
+            if c == ' ' {
+                // A space past the edge hangs off the row instead of starting the next one.
+                out.push((start, i + 1));
+                start = i + 1;
+                row_w = 0;
+                brk = None;
+                i += 1;
+                continue;
+            }
+            let at = brk.unwrap_or(i);
+            out.push((start, at));
+            start = at;
+            row_w = chars[at..i].iter().map(|c| c.width().unwrap_or(0)).sum();
+            brk = None;
+        }
+        row_w += cw;
+        if c == ' ' {
+            brk = Some(i + 1);
+        }
+        i += 1;
+    }
+    out.push((start, chars.len()));
+    out
 }
 
 #[cfg(test)]
@@ -150,7 +273,7 @@ mod tests {
         i.backspace();
         assert_eq!(i.text(), "hélo");
         i.insert('\n');
-        assert_eq!(i.cursor_line_col(), (1, 0));
+        assert_eq!(i.layout(10).cursor, (1, 0));
         assert_eq!(i.submit(), "hél\no");
         i.insert_str("second");
         i.submit();
@@ -161,5 +284,61 @@ mod tests {
         i.history_next();
         i.history_next();
         assert!(i.is_empty());
+    }
+    #[test]
+    fn layout_wraps_at_spaces_and_follows_the_cursor() {
+        let mut i = Input::default();
+        i.insert_str("hello brave new world");
+        let l = i.layout(10);
+        assert_eq!(l.rows, ["hello ", "brave new ", "world"]);
+        assert_eq!(l.cursor, (2, 5));
+        i.home();
+        assert_eq!(i.layout(10).cursor, (0, 0));
+        // The cursor just after a wrapped space starts the next row.
+        for _ in 0..6 {
+            i.right();
+        }
+        assert_eq!(i.layout(10).cursor, (1, 0));
+
+        // A word longer than the row is hard-broken, and a full row pushes the cursor down.
+        i.set("abcdef");
+        let l = i.layout(3);
+        assert_eq!(l.rows, ["abc", "def", ""]);
+        assert_eq!(l.cursor, (2, 0));
+
+        i.set("ab\ncd");
+        assert_eq!(i.layout(5).rows, ["ab", "cd"]);
+        assert_eq!(i.layout(5).cursor, (1, 2));
+    }
+
+    #[test]
+    fn up_down_and_place_move_between_rows() {
+        let mut i = Input::default();
+        // Rows at 10 columns: "hello ", "brave new ", "world".
+        i.insert_str("hello brave new world");
+        assert!(i.up(10));
+        assert_eq!(i.layout(10).cursor, (1, 5));
+        assert!(i.up(10));
+        assert_eq!(i.layout(10).cursor, (0, 5));
+        assert!(!i.up(10));
+        assert!(i.down(10));
+        assert!(i.down(10));
+        assert!(!i.down(10));
+        assert_eq!(i.layout(10).cursor, (2, 5));
+
+        // Past the end of a wrapped row stops before the next row's first char.
+        let layout = i.layout(10);
+        i.place(&layout, 0, 40);
+        assert_eq!(i.layout(10).cursor, (0, 5));
+        i.place(&layout, 2, 2);
+        assert_eq!(i.layout(10).cursor, (2, 2));
+        i.place(&layout, 9, 0);
+        assert_eq!(i.layout(10).cursor, (2, 0));
+
+        // Wide chars: a click on the second half of one lands before it.
+        i.set("a日b");
+        let layout = i.layout(10);
+        i.place(&layout, 0, 2);
+        assert_eq!(i.layout(10).cursor, (0, 1));
     }
 }
