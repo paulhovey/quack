@@ -157,6 +157,7 @@ fn local(config: &Loaded) -> Vec<DoctorCheck> {
     out.push(hooks_check(config));
     out.push(agents_check(config));
     out.push(lsp_check(config));
+    out.push(grammars_check(config));
 
     let instructions = crate::env::instructions(config);
     out.push(check(
@@ -281,6 +282,40 @@ fn lsp_check(config: &Loaded) -> DoctorCheck {
             installed.join(", ")
         ),
     )
+}
+
+fn grammars_check(config: &Loaded) -> DoctorCheck {
+    use quack_tools::grammar::Grammars;
+    let g = Grammars::from_layers(config.item_layers().iter().map(|(_, d)| d.as_path()));
+    let overrides = g.overrides();
+    let problems = g.check();
+    if !Grammars::compiled_in() {
+        let mut detail =
+            "not in this build (feature lang-common): no outlines, plain code".to_owned();
+        if !overrides.is_empty() {
+            detail.push_str(&format!(
+                "; {} query files in grammars/ are unused",
+                overrides.len()
+            ));
+        }
+        return check("grammars", CheckStatus::Info, detail);
+    }
+    if !problems.is_empty() {
+        return check("grammars", CheckStatus::Warn, problems.join("\n"));
+    }
+    let detail = if overrides.is_empty() {
+        format!(
+            "{} built in, no overrides",
+            quack_tools::grammar::LANGUAGES.len()
+        )
+    } else {
+        let files: Vec<String> = overrides
+            .iter()
+            .map(|(lang, file, _)| format!("{lang}/{file}"))
+            .collect();
+        format!("overrides: {}", files.join(", "))
+    };
+    check("grammars", CheckStatus::Ok, detail)
 }
 
 fn sandbox_check(config: &Loaded) -> DoctorCheck {

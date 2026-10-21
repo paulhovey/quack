@@ -8,6 +8,7 @@ mod app;
 mod charts;
 mod commands;
 mod fuzzy;
+mod highlight;
 mod input;
 mod markdown;
 mod modal;
@@ -81,6 +82,7 @@ async fn event_loop(
     let mut input = EventStream::new();
     // `ui.mouse`: capture the mouse for the wheel and input clicks; followed across `/reload`.
     let mut mouse = false;
+    let mut highlighted = app.take_highlight_results();
     let mut tick = tokio::time::interval(FRAME);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     terminal.draw(|f| ui::draw(f, app))?;
@@ -105,6 +107,12 @@ async fn event_loop(
                 Err(RecvError::Lagged(n)) => tracing::warn!(skipped = n, "ui lagged behind engine events"),
                 Err(RecvError::Closed) => break,
             },
+            Some(done) = async {
+                match highlighted.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => app.on_highlighted(done),
             _ = tick.tick() => {
                 app.on_tick();
                 if app.take_dirty() {

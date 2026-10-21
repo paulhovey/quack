@@ -56,7 +56,9 @@ pub(crate) fn prune_now(ctx: &TurnCtx, history: &mut [Message]) {
         stale: &|p| s.tool_ctx.reads.is_stale(std::path::Path::new(p)),
         outline: &|p, text| {
             let path = std::path::Path::new(p);
-            quack_tools::outline::outline(path, text)
+            s.tool_ctx
+                .grammars
+                .outline(path, text)
                 .filter(|o| !o.symbols.is_empty())
                 .map(|o| o.render(&quack_tools::paths::display(root, path)))
         },

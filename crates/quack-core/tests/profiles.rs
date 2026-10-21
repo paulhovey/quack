@@ -281,7 +281,12 @@ async fn profiles_are_listed_previewed_and_switched() {
     );
     let codex = profiles.iter().find(|p| p.id == "codex").expect("codex");
     assert_eq!(codex.edit_format, "apply_patch");
-    assert!(profiles.iter().any(|p| p.matches && p.id == "generic"));
+    let generic = profiles
+        .iter()
+        .find(|p| p.id == "generic")
+        .expect("generic");
+    assert_eq!(generic.edit_format, "str_replace");
+    assert!(generic.matches);
 
     engine
         .submit(Op::SetProfile {

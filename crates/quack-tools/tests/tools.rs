@@ -27,6 +27,7 @@ fn ctx(root: &std::path::Path) -> ToolCtx {
         spawn: None,
         edit_format: quack_config::settings::EditFormat::StrReplace,
         outline_above: 0,
+        grammars: quack_tools::grammar::Grammars::builtin(),
     }
 }
 

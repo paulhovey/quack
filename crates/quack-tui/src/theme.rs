@@ -108,6 +108,22 @@ impl Theme {
         }
     }
 
+    /// Code highlighting for a highlight name (`keyword`, `string.special`, …), from the
+    /// theme's own colours so it follows light, dark and `NO_COLOR`.
+    pub fn syntax(&self, kind: &str) -> Style {
+        let family = kind.split('.').next().unwrap_or(kind);
+        match family {
+            "comment" => self.dim.add_modifier(Modifier::ITALIC),
+            "keyword" | "operator" => self.magenta,
+            "string" | "escape" => self.ok,
+            "function" | "constructor" => self.accent,
+            "type" | "tag" | "attribute" | "module" => self.warn,
+            "number" | "constant" | "label" => self.error.remove_modifier(Modifier::BOLD),
+            "variable" | "property" if kind.ends_with("builtin") => self.magenta,
+            _ => Style::new(),
+        }
+    }
+
     /// A filled label: the style's colour as background. Without colour, reversed.
     pub fn pill(&self, style: Style) -> Style {
         match style.fg {

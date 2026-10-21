@@ -295,9 +295,10 @@ fn transcript_rows(app: &App, width: usize) -> Vec<Line<'static>> {
             Entry::Assistant(s) => {
                 let lead_w = 2 + app.glyphs.assistant.width();
                 let body_w = width.saturating_sub(lead_w);
-                for (i, row) in crate::markdown::render(s, body_w, t, app.info.ui.ascii)
-                    .into_iter()
-                    .enumerate()
+                for (i, row) in
+                    crate::markdown::render(s, body_w, t, app.info.ui.ascii, Some(&app.highlights))
+                        .into_iter()
+                        .enumerate()
                 {
                     let mut spans = assistant_lead(app, i == 0);
                     spans.extend(row);

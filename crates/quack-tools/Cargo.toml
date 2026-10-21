@@ -26,20 +26,23 @@ similar = "3.2.0"
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
-# Outlines for `index` and large reads (feature `lang-common`).
+# Outlines for `index` and large reads, shell command parsing for permissions, and
+# highlighting in the TUI (feature `lang-common`).
 tree-sitter = { version = "0.27.1", optional = true }
+tree-sitter-bash = { version = "0.25.1", optional = true }
 tree-sitter-c = { version = "0.24.2", optional = true }
 tree-sitter-cpp = { version = "0.23.4", optional = true }
 tree-sitter-go = { version = "0.25.0", optional = true }
+tree-sitter-highlight = { version = "0.27.1", optional = true }
 tree-sitter-javascript = { version = "0.25.0", optional = true }
 tree-sitter-python = { version = "0.25.0", optional = true }
 tree-sitter-rust = { version = "0.24.2", optional = true }
 tree-sitter-typescript = { version = "0.23.2", optional = true }
 
 [features]
-lang-common = ["dep:tree-sitter", "dep:tree-sitter-c", "dep:tree-sitter-cpp", "dep:tree-sitter-go",
-               "dep:tree-sitter-javascript", "dep:tree-sitter-python", "dep:tree-sitter-rust",
-               "dep:tree-sitter-typescript"]
+lang-common = ["dep:tree-sitter", "dep:tree-sitter-bash", "dep:tree-sitter-c", "dep:tree-sitter-cpp",
+               "dep:tree-sitter-go", "dep:tree-sitter-highlight", "dep:tree-sitter-javascript",
+               "dep:tree-sitter-python", "dep:tree-sitter-rust", "dep:tree-sitter-typescript"]
 
 [dev-dependencies]
 tempfile.workspace = true

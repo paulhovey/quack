@@ -109,10 +109,16 @@ Everything below works today. Planned work is listed separately at the end.
 
 - `read`, `write`, `glob`, `grep`, `list_dir`, `shell`, `lsp` and `index`.
 - `index` outlines a file (functions, types, methods with their line ranges, nested) or a
-  whole folder, for Rust, Python, JavaScript, TypeScript, Go, C and C++ (tree-sitter). `read` of a
+  whole folder, for Rust, Python, JavaScript, TypeScript, Go (with receiver types, e.g. `Scope.Define`), C, C++ and shell scripts (tree-sitter). `read` of a
   large source file without a range returns that outline instead of the whole file, and
   `read` with `symbol = "Type::method"` reads one definition. `[tools] read_outline_tokens`
   sets the size (2,000 tokens; 0 turns it off).
+- Your own tree-sitter queries without recompiling: put `tags.scm` (outlines) or
+  `highlights.scm` (TUI colours) in `grammars/<lang>/` of the user config dir or a trusted
+  project's `.quack/`. A file replaces the built-in query, or adds to it when its first
+  line is `; extends`, so a project can outline a framework's macros (`route!(index)`) as
+  definitions. A query that doesn't compile falls back to the built-in one, and
+  `quack doctor` says why.
 - A `todo` plan: the model keeps a checklist for multi-step work, and the current plan is
   shown to it again at every step, so it stays on track through long tasks. A line above
   the input shows progress and the step in hand; `/todo` expands it into the whole list.
@@ -128,10 +134,14 @@ Everything below works today. Planned work is listed separately at the end.
   lines. CRLF line endings and BOMs are kept, and a file changed since the agent read it is
   not overwritten.
 - Edit formats, set by `[tools] edit_format` or by the model's profile:
-  - `str_replace` (the default): the `edit` tool above.
-  - `hashline`: `read` tags each line with a short content hash, and edits name lines by
-    tag instead of retyping old text. Tags follow lines that moved, and a stale tag is
-    refused with a fresh view of that area.
+  - `hashline`: `read` and `grep` put a `[path#tag]` header over
+    each file's numbered lines, and edits name lines by number with that tag instead of
+    retyping old text. `block` edits name a line and take its whole function or class,
+    so no end line has to be counted. Numbers from an earlier read follow the lines that
+    moved; lines that changed since, or that no output showed, are refused with a fresh
+    view of that area (the retry then works). A lone off-by-one range that orphans a
+    closing bracket is mended when that is what makes the file parse again.
+  - `str_replace`: the `edit` tool above (replace unique snippet).
   - `apply_patch`: the Codex patch format, adding, deleting, moving and changing several
     files in one call.
   - `search_replace_blocks`: SEARCH/REPLACE blocks under each file's path (`edit_blocks`).
@@ -169,7 +179,10 @@ Everything below works today. Planned work is listed separately at the end.
 - Allow and deny rules for shell commands, edits, reads and MCP tools, on top of a built-in
   deny floor that cannot be removed.
 - Compound commands are split: in `git status && rm -rf x` the `rm` still needs approval, and
-  deny rules apply even in `full-auto`.
+  deny rules apply even in `full-auto`. Commands are parsed with tree-sitter-bash, so those
+  inside subshells, `if`/`for`/`while` bodies, `$(…)`, backticks, heredocs and literal
+  `bash -c '…'` scripts are checked one by one; a line that doesn't parse, or runs a
+  computed command name (`$cmd -rf x`), never matches an allow rule.
 - Every change shows a diff in the approval box.
 - Project trust: a cloned repo's `.quack/` folder runs nothing until you trust it. The prompt
   shows what it would add, and you are asked again when those files change. Also
@@ -257,7 +270,18 @@ Everything below works today. Planned work is listed separately at the end.
 - Local (stdio) and remote (streamable HTTP) servers, one TOML file each.
 - Large tool sets are deferred and found with a `tool_search` tool, so they do not fill the
   context.
-- `/mcp` shows each server's state. Servers restart when they crash.
+- A server's prompts are slash commands: `/github:review 12`, or `/github:review pr=12
+  focus=tests` to name the arguments. `/commands` lists them.
+- The model can list a server's resources and read them (`list_mcp_resources`,
+  `read_mcp_resource`). Reads are allowed unless a rule such as
+  `mcp:github/resources/read` says otherwise.
+- A server can ask you to fill in a short form while a tool runs (elicitation): each field
+  is a question, as when the model asks. Skip a required field or press Ctrl-S to decline.
+- A server can ask your model for a reply (sampling). Each request asks for approval as
+  `mcp:<server>/sampling`; an allow rule with that name lets it through without asking.
+  The tokens count in `/stats`. Headless runs decline both.
+- `/mcp` shows each server's state, tools, prompts and resources. Servers restart when they
+  crash.
 
 ### Hooks
 
@@ -297,7 +321,9 @@ env = { JIRA_URL = "https://jira.example.com", JIRA_TOKEN = { keyring = "jira" }
 
 ### Interface
 
-- A full-screen terminal UI with markdown rendering and an ASCII mode.
+- A full-screen terminal UI with markdown rendering and an ASCII mode. Code blocks are
+  syntax-highlighted with the same tree-sitter grammars once their closing fence arrives;
+  large ones are highlighted on a background thread and show plain until then.
 - A scrollable history with a scrollbar: PageUp/PageDown by page, Shift-Up/Down by line,
   Ctrl-Home/Ctrl-End to the top or the latest. The view holds still while a reply streams
   in below. The wheel scrolls and a click places the input cursor; this takes over the
@@ -335,7 +361,7 @@ Not available yet:
 - Renaming symbols through the language server.
 - `/fork` and `/export`.
 - Automatic reload when config files change.
-- MCP prompts, resources and OAuth.
+- MCP OAuth.
 
 See the [roadmap](docs/plan/roadmap.md).
 

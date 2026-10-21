@@ -652,25 +652,54 @@ fn build_client(
         .connect_timeout(Duration::from_secs(http.timeout_connect_secs.max(1)))
         .read_timeout(Duration::from_secs(http.timeout_idle_secs.max(1)));
 
+    let env_str = |key: &str| {
+        env(key)
+            .or_else(|| std::env::var_os(key))
+            .and_then(|v| v.into_string().ok())
+            .filter(|s| !s.is_empty())
+    };
+
     let proxy = Some(http.proxy.as_str())
         .filter(|p| !p.is_empty())
-        .or(Some(network.proxy.as_str()).filter(|p| !p.is_empty()));
-    if let Some(p) = proxy {
+        .map(str::to_owned)
+        .or_else(|| Some(network.proxy.clone()).filter(|p| !p.is_empty()))
+        .or_else(|| {
+            [
+                "HTTPS_PROXY",
+                "https_proxy",
+                "HTTP_PROXY",
+                "http_proxy",
+                "ALL_PROXY",
+                "all_proxy",
+            ]
+            .into_iter()
+            .find_map(env_str)
+        });
+    if let Some(ref p) = proxy {
         b = b.proxy(reqwest::Proxy::all(p).map_err(|e| config(format!("proxy `{p}`: {e}")))?);
     }
 
     let mut roots = Vec::new();
-    for ca in [
-        network.ca_bundle.as_str(),
-        file.tls.ca_file.as_deref().unwrap_or(""),
-    ] {
-        if !ca.is_empty() {
-            let pem = read("CA file", ca)?;
-            roots.extend(
-                reqwest::Certificate::from_pem_bundle(&pem)
-                    .map_err(|e| config(format!("CA file `{ca}`: {e}")))?,
-            );
-        }
+    let mut ca_files = Vec::new();
+    if !network.ca_bundle.is_empty() {
+        ca_files.push(network.ca_bundle.clone());
+    }
+    if let Some(ca) = file.tls.ca_file.as_deref().filter(|s| !s.is_empty()) {
+        ca_files.push(ca.to_owned());
+    }
+    if ca_files.is_empty() {
+        ca_files.extend(
+            ["SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"]
+                .into_iter()
+                .find_map(env_str),
+        );
+    }
+    for ca in &ca_files {
+        let pem = read("CA file", ca)?;
+        roots.extend(
+            reqwest::Certificate::from_pem_bundle(&pem)
+                .map_err(|e| config(format!("CA file `{ca}`: {e}")))?,
+        );
     }
     if !roots.is_empty() {
         b = b.tls_certs_merge(roots);
@@ -696,4 +725,45 @@ fn build_client(
         b = b.tls_danger_accept_invalid_certs(true);
     }
     b.build().map_err(|e| config(format!("HTTP client: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::ffi::OsString;
+
+    #[test]
+    fn proxy_and_ca_bundle_from_env() {
+        let file: ProviderFile =
+            serde_json::from_value(serde_json::json!({ "base_url": "https://api.example.com" }))
+                .expect("provider file");
+        let network = NetworkSettings::default();
+
+        // Default empty env succeeds.
+        let empty_env: HashMap<String, OsString> = HashMap::new();
+        assert!(build_client(&file, &network, &|k| empty_env.get(k).cloned()).is_ok());
+
+        // Environment proxy is picked up.
+        let mut proxy_env: HashMap<String, OsString> = HashMap::new();
+        proxy_env.insert("HTTPS_PROXY".into(), "http://127.0.0.1:8080".into());
+        assert!(build_client(&file, &network, &|k| proxy_env.get(k).cloned()).is_ok());
+
+        // Invalid proxy URL errors clearly.
+        let mut bad_proxy_env: HashMap<String, OsString> = HashMap::new();
+        bad_proxy_env.insert("HTTPS_PROXY".into(), "not a valid uri".into());
+        let err = build_client(&file, &network, &|k| bad_proxy_env.get(k).cloned())
+            .expect_err("invalid proxy must fail");
+        assert!(err.message.contains("proxy `not a valid uri`"), "{err:?}");
+
+        // CA bundle in environment pointing to non-existent file errors clearly.
+        let mut ca_env: HashMap<String, OsString> = HashMap::new();
+        ca_env.insert("SSL_CERT_FILE".into(), "/nonexistent/ca.pem".into());
+        let err = build_client(&file, &network, &|k| ca_env.get(k).cloned())
+            .expect_err("missing ca must fail");
+        assert!(
+            err.message.contains("CA file `/nonexistent/ca.pem`"),
+            "{err:?}"
+        );
+    }
 }

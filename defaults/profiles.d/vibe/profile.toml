@@ -2,8 +2,11 @@
 description = "Mistral Vibe-shaped tools (read_file, write_file, edit, bash, grep, todo) for Mistral coding models"
 source = "Original prompt text (quack project, Apache-2.0). Only the tool names and parameter shapes follow mistralai/mistral-vibe (Apache-2.0); no Vibe text is used"
 
-# Not chosen automatically until the eval shows it beats `generic` for Mistral
-# (docs/plan/03-model-profiles.md#evaluating-profiles). Proposed:
+# Measured once (2026-10-21, openrouter/mistralai/mistral-large-4-0, hard suite,
+# single pass): 14/14 like `generic`, but 172 vs 236 steps, $0.94 vs $1.70, parse
+# failures 0 vs 12, edit failures 1 vs 23; eval-compare calls steps, cost and prompt
+# tokens clearly lower. [match] stays empty until --repeat 3 confirms it (about $8
+# at 2026-10-21 prices). Proposed:
 #   model = ["*mistral-large-4*", "*mistral-codestral*"]
 #   priority = 50
 # Use it now with `profile = "vibe"` on a model.

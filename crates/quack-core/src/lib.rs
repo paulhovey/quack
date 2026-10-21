@@ -12,6 +12,7 @@ mod handoff;
 mod hooks;
 mod lsp;
 mod mcp;
+mod mcp_ask;
 mod models;
 mod sandbox;
 mod session;
@@ -24,3 +25,5 @@ pub use engine::{Engine, EngineHandle};
 pub use session::{Resume, list_sessions};
 
 pub use quack_protocol as protocol;
+/// Grammars and syntax highlighting, for clients that show code.
+pub use quack_tools::grammar;

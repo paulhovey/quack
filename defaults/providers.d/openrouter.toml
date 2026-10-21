@@ -5,3 +5,35 @@ name = "OpenRouter"
 group = "Open-model services"
 base_url = "https://openrouter.ai/api/v1"
 api_key = { env = "OPENROUTER_API_KEY" }
+
+# Prices: US dollars per million tokens. The rest of the catalog also arrives
+# through /models discovery; entries here pin context limits and the prices
+# quack costs evals with (DeepSeek's is the peak weekday rate; OpenRouter
+# halves it on weekends and off-peak UTC hours).
+
+[[models]]
+id = "z-ai/glm-5.3-flash"
+context_window = 1048576
+max_output = 943718
+cost = { input = 0.047, output = 0.12, cached_input = 0.006 }
+
+[[models]]
+id = "deepseek/deepseek-v4.1-flash-1017"
+context_window = 1048576
+max_output = 393216
+cost = { input = 0.3, output = 1.2, cached_input = 0.006 }
+
+[[models]]
+id = "mistralai/mistral-large-4-0"
+context_window = 1048576
+max_output = 262144
+cost = { input = 1.36, output = 4.18, cached_input = 0.14 }
+
+# Muse Spark's model card recommends temperature 1.0, top_p 1.0, top_k off,
+# reasoning effort high or xhigh (the server default) for coding and agents.
+[[models]]
+id = "meta/muse-spark-open"
+context_window = 1048576
+max_output = 943718
+sampling = { temperature = 1.0, top_p = 1.0 }
+cost = { input = 1.25, output = 4.25, cached_input = 0.15 }

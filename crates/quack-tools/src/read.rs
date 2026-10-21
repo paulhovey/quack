@@ -4,7 +4,6 @@ use futures::future::BoxFuture;
 use quack_protocol::ApprovalRequest;
 use serde_json::{Value, json};
 
-use crate::outline::outline;
 use crate::paths;
 use crate::registry::{Subject, Tool, ToolCtx, ToolKind, ToolOutput, arg_str, opt_str, opt_u64};
 use crate::text::{TextFile, io_msg, looks_binary};
@@ -34,7 +33,7 @@ impl Tool for Read {
             ""
         };
         let prefix = if ctx.hashline() {
-            "`<line>:<tag>|`, the tags edit_hashline uses"
+            "their line numbers, under a `[path#tag]` header whose tag edit_hashline takes"
         } else {
             "their line numbers"
         };
@@ -113,7 +112,9 @@ fn read(args: &Value, ctx: &ToolCtx) -> Result<ToolOutput, String> {
         .unwrap_or(DEFAULT_LIMIT),
     );
     if let Some(symbol) = opt_str(args, &["symbol", "name"]) {
-        let o = outline(&path, &file.text)
+        let o = ctx
+            .grammars
+            .outline(&path, &file.text)
             .ok_or_else(|| format!("no outline for {shown}; read it with offset/limit"))?;
         let s = o.find(symbol).ok_or_else(|| {
             format!("no definition `{symbol}` in {shown}; `index` lists what is there")
@@ -122,8 +123,15 @@ fn read(args: &Value, ctx: &ToolCtx) -> Result<ToolOutput, String> {
     } else if !ranged
         && ctx.outline_above > 0
         && file.text.len() > ctx.outline_above
-        && let Some(o) = outline(&path, &file.text).filter(|o| !o.symbols.is_empty())
+        && let Some(o) = ctx
+            .grammars
+            .outline(&path, &file.text)
+            .filter(|o| !o.symbols.is_empty())
     {
+        if ctx.hashline() {
+            let tag = crate::hashline::file_tag(&file.text);
+            ctx.reads.saw(&path, &tag, &file.text, (1, total.max(1)));
+        }
         let tokens = file.text.len() * 2 / 7;
         let mut out = o.render(&shown);
         out.push_str(&format!(
@@ -136,7 +144,13 @@ fn read(args: &Value, ctx: &ToolCtx) -> Result<ToolOutput, String> {
         ));
     }
     if total == 0 {
-        return Ok(ToolOutput::ok(format!("({shown} is empty)"), "empty file"));
+        let mut out = format!("({shown} is empty)");
+        if ctx.hashline() {
+            let tag = crate::hashline::file_tag(&file.text);
+            ctx.reads.saw(&path, &tag, &file.text, (0, 0));
+            out = format!("{}\n{out}", crate::hashline::header(&shown, &tag));
+        }
+        return Ok(ToolOutput::ok(out, "empty file"));
     }
     if offset > total {
         return Err(format!(
@@ -144,20 +158,24 @@ fn read(args: &Value, ctx: &ToolCtx) -> Result<ToolOutput, String> {
         ));
     }
     let end = (offset - 1 + limit).min(total);
-    let width = end.to_string().len().max(4);
     let mut out = String::new();
-    for (i, line) in lines[offset - 1..end].iter().enumerate() {
-        let n = offset + i;
-        if ctx.hashline() {
-            // Long lines stay whole: an edit may need to name them.
-            out.push_str(&format!("{n}:{}|{line}\n", crate::hashline::tag(line)));
-            continue;
-        }
-        if line.chars().count() > MAX_LINE_CHARS {
-            let cut: String = line.chars().take(MAX_LINE_CHARS).collect();
-            out.push_str(&format!("{n:>width$}\t{cut}… [line truncated]\n"));
-        } else {
-            out.push_str(&format!("{n:>width$}\t{line}\n"));
+    if ctx.hashline() {
+        // Long lines stay whole: an edit replaces them whole.
+        let tag = crate::hashline::file_tag(&file.text);
+        ctx.reads.saw(&path, &tag, &file.text, (offset, end));
+        out.push_str(&crate::hashline::header(&shown, &tag));
+        out.push('\n');
+        out.push_str(&crate::hashline::numbered(&lines, offset - 1, end));
+    } else {
+        let width = end.to_string().len().max(4);
+        for (i, line) in lines[offset - 1..end].iter().enumerate() {
+            let n = offset + i;
+            if line.chars().count() > MAX_LINE_CHARS {
+                let cut: String = line.chars().take(MAX_LINE_CHARS).collect();
+                out.push_str(&format!("{n:>width$}\t{cut}… [line truncated]\n"));
+            } else {
+                out.push_str(&format!("{n:>width$}\t{line}\n"));
+            }
         }
     }
     if offset > 1 || end < total {

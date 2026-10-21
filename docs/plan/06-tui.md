@@ -146,6 +146,7 @@ The **approval dialog** shows a diff view for edits (side-by-side at 160 columns
 - **Virtualized transcript**: each message caches its rendered `Vec<Line>` keyed by width. Only visible messages are laid out. A resize invalidates layout lazily.
 - **Incremental markdown**: during streaming, only the trailing open block is re-parsed. Earlier blocks are frozen.
 - **Highlighting**: `tree-sitter-highlight`, reusing the compiled grammars. Highlighting runs off-thread for large code blocks, which render plain first and are highlighted when ready.
+  - *As implemented (2026-10-21)*: `quack-tui/src/highlight.rs` keeps a cache of highlighted runs keyed by language and code. `draw` only reads it. The app fills it from `AssistantDelta`, `AssistantRewrite`, `SessionResumed` and `/reload`, for closed fences only (`markdown::code_blocks`), so a block still streaming in stays plain. A block is highlighted on the spot when it is under 8 KiB and its language's queries are already compiled. Otherwise it goes to `spawn_blocking` (the first block in a language compiles its queries, about 25 ms on average in a release build) and comes back over a channel the event loop selects on. Blocks over 256 KiB stay plain. Fence tags map to languages by name or extension (`rust,ignore`, `py`, `sh`). Colours come from the theme's existing styles (`Theme::syntax`), so light, dark and `NO_COLOR` follow. Diffs and tool output are not highlighted yet.
 - **No blocking I/O on the render path.** Everything goes through the engine or a background task.
 
 ## Keybindings

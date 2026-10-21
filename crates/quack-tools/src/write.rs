@@ -135,6 +135,7 @@ impl Tool for Write {
                 }
                 std::fs::write(&p.path, &p.encoded).map_err(|e| io_msg(&p.path, &e))?;
                 ctx.reads.record(&p.path);
+                crate::hashline::saw_whole(ctx, &p.path, &p.after);
                 let before = p.before.as_deref().unwrap_or("");
                 let (add, del) = diff_stats(before, &p.after);
                 let verb = if p.before.is_some() {

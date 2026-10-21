@@ -4,6 +4,7 @@
 mod ask;
 mod blocks;
 mod edit;
+pub mod grammar;
 mod hashline;
 mod index;
 mod lsp;

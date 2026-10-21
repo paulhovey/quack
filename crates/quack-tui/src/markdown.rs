@@ -1,13 +1,15 @@
 //! Markdown to styled, wrapped rows for assistant messages.
 //!
 //! Headings, emphasis, inline code, fenced code (not wrapped, truncated instead), lists,
-//! block quotes and rules. Syntax highlighting comes with tree-sitter in M2.
+//! block quotes and rules. Code in a known language is highlighted once `highlight.rs` has
+//! it, and plain until then.
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use crate::highlight::Highlights;
 use crate::theme::Theme;
 
 /// One logical line before wrapping.
@@ -24,6 +26,10 @@ struct Logical {
 
 struct Builder<'t> {
     theme: &'t Theme,
+    highlights: Option<&'t Highlights>,
+    /// The open code block's info string and text, emitted at its end.
+    code_tag: String,
+    code_buf: String,
     out: Vec<Logical>,
     cur: Option<Logical>,
     styles: Vec<Style>,
@@ -89,26 +95,55 @@ impl Builder<'_> {
     }
 
     fn text(&mut self, t: &str) {
-        let style = self.style();
         if self.code {
-            for (i, l) in t.split('\n').enumerate() {
-                if i > 0 {
-                    self.flush();
-                }
-                if l.is_empty() && i > 0 && t.ends_with('\n') && i == t.split('\n').count() - 1 {
-                    continue;
-                }
-                let bar = format!("{}▏ ", self.indent());
-                let line = self.line();
-                line.first.clone_from(&bar);
-                line.rest.clone_from(&bar);
-                line.nowrap = true;
-                line.spans.push((l.to_owned(), style));
-            }
-            self.flush();
+            self.code_buf.push_str(t);
             return;
         }
+        let style = self.style();
         self.line().spans.push((t.to_owned(), style));
+    }
+
+    /// The finished code block, one unwrapped row per line, highlighted when ready.
+    fn code_block(&mut self) {
+        let code = std::mem::take(&mut self.code_buf);
+        let tag = std::mem::take(&mut self.code_tag);
+        let plain = self.style();
+        let mut lines: Vec<Vec<(String, Style)>> = vec![Vec::new()];
+        let runs = self.highlights.and_then(|h| h.get(&tag, &code));
+        let pieces: Vec<(&str, Style)> = match runs {
+            Some(runs) => runs
+                .iter()
+                .filter_map(|(r, kind)| {
+                    let style = kind.map_or(plain, |k| plain.patch(self.theme.syntax(k)));
+                    Some((code.get(r.clone())?, style))
+                })
+                .collect(),
+            None => vec![(code.as_str(), plain)],
+        };
+        for (text, style) in pieces {
+            for (i, part) in text.split('\n').enumerate() {
+                if i > 0 {
+                    lines.push(Vec::new());
+                }
+                if !part.is_empty()
+                    && let Some(line) = lines.last_mut()
+                {
+                    line.push((part.to_owned(), style));
+                }
+            }
+        }
+        if code.ends_with('\n') {
+            lines.pop();
+        }
+        for spans in lines {
+            let bar = format!("{}▏ ", self.indent());
+            let line = self.line();
+            line.first.clone_from(&bar);
+            line.rest.clone_from(&bar);
+            line.nowrap = true;
+            line.spans = spans;
+            self.flush();
+        }
     }
 
     fn event(&mut self, ev: Event<'_>) {
@@ -135,6 +170,7 @@ impl Builder<'_> {
                         && !lang.is_empty()
                     {
                         let lang = lang.to_string();
+                        self.code_tag.clone_from(&lang);
                         self.line().spans.push((lang, t.dim));
                         self.flush();
                     }
@@ -193,6 +229,7 @@ impl Builder<'_> {
                     self.blank();
                 }
                 TagEnd::CodeBlock => {
+                    self.code_block();
                     self.code = false;
                     self.styles.pop();
                     self.blank();
@@ -232,15 +269,53 @@ impl Builder<'_> {
     }
 }
 
+/// The fenced code blocks of `text` that are closed, as `(info string, code)`. A block
+/// still streaming in is left out.
+pub(crate) fn code_blocks(text: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut open: Option<(String, String)> = None;
+    for (ev, range) in Parser::new_ext(text, Options::empty()).into_offset_iter() {
+        match ev {
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(tag))) => {
+                open = Some((tag.to_string(), String::new()));
+            }
+            Event::Text(t) => {
+                if let Some((_, code)) = &mut open {
+                    code.push_str(&t);
+                }
+            }
+            Event::End(TagEnd::CodeBlock) => {
+                let src = text.get(range).unwrap_or_default().trim_end();
+                let fence = src.lines().next().unwrap_or_default().trim_start();
+                let fence = &fence[..fence.len() - fence.trim_start_matches(['`', '~']).len()];
+                let closed = src.lines().count() > 1
+                    && src
+                        .lines()
+                        .last()
+                        .is_some_and(|l| l.trim().starts_with(fence) && !fence.is_empty());
+                if let Some(block) = open.take().filter(|_| closed) {
+                    out.push(block);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Render markdown into rows of at most `width` columns. `ascii` swaps box-drawing glyphs.
 pub(crate) fn render(
     text: &str,
     width: usize,
     theme: &Theme,
     ascii: bool,
+    highlights: Option<&Highlights>,
 ) -> Vec<Vec<Span<'static>>> {
     let mut b = Builder {
         theme,
+        highlights,
+        code_tag: String::new(),
+        code_buf: String::new(),
         out: Vec::new(),
         cur: None,
         styles: Vec::new(),
@@ -378,7 +453,7 @@ mod tests {
     fn lists_code_and_wrapping() {
         let theme = Theme::resolve("dark", false);
         let md = "# Plan\n\nFix the **bug** in `add`:\n\n- read the file\n- change `-` to `+` and run the tests again afterwards\n\n```rust\nfn add(a: i32, b: i32) -> i32 { a + b }\n```\n";
-        let rows = plain(&render(md, 30, &theme, false));
+        let rows = plain(&render(md, 30, &theme, false, None));
         assert_eq!(
             rows,
             [
@@ -399,7 +474,54 @@ mod tests {
     #[test]
     fn ordered_and_nested_lists() {
         let theme = Theme::resolve("dark", false);
-        let rows = plain(&render("1. one\n2. two\n   - inner\n", 40, &theme, true));
+        let rows = plain(&render(
+            "1. one\n2. two\n   - inner\n",
+            40,
+            &theme,
+            true,
+            None,
+        ));
         assert_eq!(rows, ["1. one", "2. two", "  * inner"]);
+    }
+
+    #[test]
+    fn only_closed_fences_are_code_blocks() {
+        let done = "text\n\n```rust\nfn a() {}\n```\n\n~~~py\nx = 1\n~~~\n";
+        assert_eq!(
+            code_blocks(done),
+            [
+                ("rust".to_owned(), "fn a() {}\n".to_owned()),
+                ("py".to_owned(), "x = 1\n".to_owned()),
+            ]
+        );
+        assert_eq!(code_blocks("```rust\nfn a() {}\n"), []);
+        assert_eq!(code_blocks("```rust\nfn a() {}\n``"), []);
+    }
+
+    #[test]
+    fn code_is_highlighted_once_ready() {
+        use std::sync::Arc;
+
+        use quack_core::grammar::Grammars;
+        if !Grammars::compiled_in() {
+            return;
+        }
+        let theme = Theme::resolve("dark", false);
+        let md = "```rust\nlet s = \"hi\"; // note\n```\n";
+        let mut h = Highlights::new(Arc::new(Grammars::default()));
+        let style_of = |rows: &[Vec<Span<'static>>], text: &str| {
+            rows.iter()
+                .flatten()
+                .find(|s| s.content.contains(text))
+                .map(|s| s.style)
+        };
+        let before = render(md, 40, &theme, false, Some(&h));
+        assert_eq!(style_of(&before, "let"), Some(Style::new()));
+        assert!(h.scan(md));
+        let after = render(md, 40, &theme, false, Some(&h));
+        assert_eq!(plain(&after), plain(&before));
+        assert_eq!(style_of(&after, "let"), Some(theme.syntax("keyword")));
+        assert_eq!(style_of(&after, "\"hi\""), Some(theme.syntax("string")));
+        assert_eq!(style_of(&after, "// note"), Some(theme.syntax("comment")));
     }
 }

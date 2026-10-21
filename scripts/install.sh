@@ -15,6 +15,7 @@ version=latest
 plucked=0
 archive=
 source_dir=
+target=
 uninstall=0
 
 usage() {
@@ -31,6 +32,8 @@ Usage: install.sh [options]
   --archive FILE       Install from a downloaded quack-*.tar.gz instead of downloading.
   --from-source [DIR]  Build with cargo from a checkout (default: the one holding this
                        script) and install that.
+  --target TRIPLE      Target triple to build for with --from-source (e.g.
+                       x86_64-unknown-linux-musl).
   --uninstall          Remove the binary and the defaults from the prefix. Your config,
                        sessions and memory are kept.
   -h, --help           Show this help.
@@ -57,6 +60,8 @@ while [ $# -gt 0 ]; do
       if [ $# -ge 2 ] && [ "${2#-}" = "$2" ]; then source_dir=$2; shift
       else source_dir=$(cd "$(dirname "$0")/.." 2>/dev/null && pwd) || die "can't find the checkout"
       fi ;;
+    --target) [ $# -ge 2 ] || die "--target needs a triple"; target=$2; shift ;;
+    --target=*) target=${1#*=} ;;
     --uninstall) uninstall=1 ;;
     -h | --help) usage; exit 0 ;;
     *) die "unknown option $1 (see --help)" ;;
@@ -84,8 +89,13 @@ if [ -n "$source_dir" ]; then
   [ -f "$source_dir/Cargo.toml" ] || die "$source_dir is not a quack checkout"
   command -v cargo >/dev/null || die "cargo is needed for --from-source (https://rustup.rs)"
   say "building from $source_dir"
-  (cd "$source_dir" && cargo build --release --locked -p quack-cli) || die "build failed"
-  new_bin=$source_dir/target/release/quack
+  if [ -n "$target" ]; then
+    (cd "$source_dir" && cargo build --release --locked -p quack-cli --target "$target") || die "build failed"
+    new_bin=$source_dir/target/$target/release/quack
+  else
+    (cd "$source_dir" && cargo build --release --locked -p quack-cli) || die "build failed"
+    new_bin=$source_dir/target/release/quack
+  fi
   new_defaults=$source_dir/defaults
 else
   if [ -z "$archive" ]; then

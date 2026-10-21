@@ -219,10 +219,17 @@ impl Tool for Grep {
     fn kind(&self) -> ToolKind {
         ToolKind::ReadOnly
     }
-    fn description(&self, _ctx: &ToolCtx) -> String {
-        "Search file contents with a regular expression (Rust regex syntax). Returns \
-         `path:line: text` for each match. Use `glob` to limit the files searched, e.g. `*.rs`."
-            .into()
+    fn description(&self, ctx: &ToolCtx) -> String {
+        let shape = if ctx.hashline() {
+            "`path:line: text` for each match, under a `[path#tag]` header per file whose tag \
+             edit_hashline takes"
+        } else {
+            "`path:line: text` for each match"
+        };
+        format!(
+            "Search file contents with a regular expression (Rust regex syntax). Returns \
+             {shape}. Use `glob` to limit the files searched, e.g. `*.rs`."
+        )
     }
     fn schema(&self) -> Value {
         json!({
@@ -251,6 +258,9 @@ impl Tool for Grep {
     fn run<'a>(&'a self, args: Value, ctx: &'a ToolCtx) -> BoxFuture<'a, ToolOutput> {
         let dir = base(&args, ctx);
         let root = ctx.root.clone();
+        // With hashline edits, each file's matches carry its tag: models edit straight
+        // from grep output, and without a tag they invent one.
+        let reads = ctx.hashline().then(|| ctx.reads.clone());
         Box::pin(blocking(move || {
             let pattern = arg_str(&args, &["pattern", "regex", "query"])?;
             let re = regex::RegexBuilder::new(pattern)
@@ -300,6 +310,12 @@ impl Tool for Grep {
                     continue;
                 }
                 let text = String::from_utf8_lossy(&bytes);
+                let shown_path = paths::display(&root, &path);
+                // The tag hashes the text as the edit tools load it.
+                let tagged = reads.as_ref().and_then(|reads| {
+                    let file = crate::text::TextFile::from_bytes(&bytes)?;
+                    Some((reads, crate::hashline::file_tag(&file.text), file.text))
+                });
                 let mut in_file = false;
                 for (i, line) in text.lines().enumerate() {
                     if !re.is_match(line) {
@@ -309,19 +325,24 @@ impl Tool for Grep {
                     if !in_file {
                         in_file = true;
                         files += 1;
+                        if let Some((_, tag, _)) = &tagged
+                            && matches <= MAX_GREP
+                        {
+                            out.push_str(&crate::hashline::header(&shown_path, tag));
+                            out.push('\n');
+                        }
                     }
                     if matches <= MAX_GREP {
+                        if let Some((reads, tag, text)) = &tagged {
+                            reads.saw(&path, tag, text, (i + 1, i + 1));
+                        }
                         let line = line.trim_end();
                         let shown = if line.chars().count() > MAX_GREP_LINE {
                             format!("{}…", line.chars().take(MAX_GREP_LINE).collect::<String>())
                         } else {
                             line.to_owned()
                         };
-                        out.push_str(&format!(
-                            "{}:{}: {shown}\n",
-                            paths::display(&root, &path),
-                            i + 1
-                        ));
+                        out.push_str(&format!("{shown_path}:{}: {shown}\n", i + 1));
                     }
                 }
             }

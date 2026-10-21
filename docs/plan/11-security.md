@@ -59,6 +59,18 @@ A small hand-written splitter (`quack-tools/src/shell_split.rs`, no new crates) 
 - **Opaque lines get no allow rule** but are still checked against deny rules as a whole: backticks, subshells `( )`, `{ }`, heredocs, `<( )`, `$(( ))`, `if`/`for`/`while`/`case`, and comments. They ask, or run in `full-auto`.
 - **Not yet:** `bash -c "…"`, `eval` and `Invoke-Expression` are not looked into, so deny rules don't see inside them. Redirect targets aren't treated as edits to those paths. There is no PowerShell-specific reading; a PowerShell backtick escape makes the line opaque, which only ever asks more.
 
+#### tree-sitter-bash (2026-10-21)
+
+With `lang-common` (the default build), `shell_split.rs` parses the line with tree-sitter-bash and keeps the same `Split { parts, writes }` interface, so the rules above are unchanged. The hand-written splitter remains for builds without the grammars.
+
+- **Every `command` node anywhere in the tree is a part**, inner ones first: the bodies of subshells, `{ }`, `if`/`while`/`until`/`for`/`case` and function definitions, `$(…)` and backticks (also inside strings and unquoted heredoc bodies), `<(…)`, and pipelines that follow a heredoc start. Bare assignments, `declaration_command` (`export`, `local`), `unset` and `[[ … ]]` are parts too. Comments are dropped. `[`, `[[`, `test`, `true` and `false` joined the read-only list, so a test in a condition doesn't make a line ask.
+- **Literal scripts are looked into**: `sh`/`bash`/`dash`/`zsh`/`ksh` with flags ending in one that holds `c` (`-c`, `-lc`), followed by a quoted or plain literal and literal arguments, and `eval` with literal arguments. Their commands replace the wrapper, so `bash -c 'git status && rm -rf x'` is checked as `git status` and `rm -rf x`. A script with an expansion in it stays the wrapper command, which no read-only rule covers.
+- **Opaque (`None`)**: a tree with an `ERROR` or `MISSING` node, a computed command name (`$cmd`, `$(which rm)`, `"$X"`), and nesting deeper than 8 scripts.
+- **Writes** are found on every `file_redirect` in the tree: a `>`-family operator to anything but `/dev/null`/`NUL`/`$null`, a stream (`2>&1`) or a close (`>&-`).
+- A heredoc shows in its part as `<<EOF`. Its body is data, but `cat <<EOF | sh` still has `sh` as a part, which asks.
+- The bash grammar reads every shell, PowerShell included, as before. A PowerShell form that bash can't parse is opaque, which asks more, never less.
+- Tests: `shell_split.rs` runs the hand-written cases against both splitters, plus compound forms, heredocs, literal scripts and opaque forms against the AST one.
+
 ## OS sandboxing (`quack-sandbox`)
 
 Sandboxing applies to `shell` commands and, optionally, stdio MCP/LSP servers (`sandbox = true` in their TOML). Policies:

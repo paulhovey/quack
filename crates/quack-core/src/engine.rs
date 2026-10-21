@@ -7,10 +7,10 @@ use quack_config::hooks::HookEvent;
 use quack_config::settings::PermissionMode;
 use quack_config::{LayerKind, Loaded};
 use quack_lsp::LspManager;
-use quack_mcp::McpManager;
+use quack_mcp::{McpManager, ServerAsk};
 use quack_protocol::{
-    EngineError, EngineErrorKind, Event, InputItem, InstructionFile, Op, SessionId, SessionInfo,
-    SessionSummary, TurnId, WriteScope,
+    CallId, EngineError, EngineErrorKind, Event, InputItem, InstructionFile, Op, SessionId,
+    SessionInfo, SessionSummary, TurnId, WriteScope,
 };
 use quack_providers::Message;
 use quack_tools::Permissions;
@@ -168,6 +168,9 @@ pub struct Engine {
     pool: Option<Arc<crate::agent::Pool>>,
     /// Sub-agent runs in this session, for their ids.
     agent_runs: Arc<std::sync::atomic::AtomicU64>,
+    /// Where MCP servers' forms and sampling requests arrive, and how many have.
+    asks: mpsc::Sender<ServerAsk>,
+    asked: u64,
 }
 
 impl Engine {
@@ -182,6 +185,7 @@ impl Engine {
         let (tx, events) = broadcast::channel(EVENT_CAPACITY);
         let (ops, ops_rx) = mpsc::channel(OP_CAPACITY);
         let (config_tx, config_rx) = watch::channel(config.clone());
+        let (asks, asks_rx) = mpsc::channel(8);
         let session = SessionInfo {
             id: new_session_id(),
             cwd: config.dirs.workspace_root.display().to_string(),
@@ -216,6 +220,8 @@ impl Engine {
             start_context: None,
             pool: None,
             agent_runs: Arc::default(),
+            asks,
+            asked: 0,
             mcp: crate::mcp::Mcp::new(McpManager::new(
                 Vec::new(),
                 PathBuf::new(),
@@ -223,7 +229,7 @@ impl Engine {
             )),
             lsp: LspManager::empty(),
         };
-        let task = tokio::spawn(engine.run(ops_rx));
+        let task = tokio::spawn(engine.run(ops_rx, asks_rx));
         EngineHandle {
             ops,
             events,
@@ -238,7 +244,7 @@ impl Engine {
         let _ = self.tx.send(event);
     }
 
-    async fn run(mut self, mut ops: mpsc::Receiver<Op>) {
+    async fn run(mut self, mut ops: mpsc::Receiver<Op>, mut asks: mpsc::Receiver<ServerAsk>) {
         self.emit(Event::SessionConfigured {
             session: self.session.clone(),
         });
@@ -293,6 +299,7 @@ impl Engine {
                     }
                     self.next_queued(&done_tx, &reload_tx);
                 }
+                Some(ask) = asks.recv() => self.on_server_ask(ask),
                 op = ops.recv() => {
                     let Some(op) = op else { break };
                     if !self.handle(op, &done_tx, &reload_tx) {
@@ -382,9 +389,75 @@ impl Engine {
             self.config.settings.network.clone(),
             crate::sandbox::server_policy(&self.config),
         );
+        manager.set_asker(self.asks.clone());
         manager.start();
         crate::mcp::report(manager.clone(), self.tx.clone());
         self.mcp = crate::mcp::Mcp::new(manager);
+    }
+
+    /// An MCP server asks the user to fill in a form, or the model for a reply. Both wait
+    /// in the background; an interrupt of the running turn ends them.
+    fn on_server_ask(&mut self, ask: ServerAsk) {
+        self.asked += 1;
+        let call_id = CallId(format!("mcp-ask-{}", self.asked));
+        let cancel = self
+            .running
+            .as_ref()
+            .map_or_else(CancellationToken::new, |(_, c)| c.clone());
+        match ask {
+            ServerAsk::Elicit {
+                server,
+                form,
+                mut reply,
+            } => {
+                let (otx, orx) = tokio::sync::oneshot::channel();
+                if let Ok(mut pending) = self.questions.lock() {
+                    pending.insert(call_id.0.clone(), otx);
+                }
+                self.emit(Event::Questions {
+                    call_id: call_id.clone(),
+                    questions: crate::mcp_ask::questions(&server, &form),
+                });
+                let (questions, tx) = (self.questions.clone(), self.tx.clone());
+                tokio::spawn(async move {
+                    let answers =
+                        crate::mcp_ask::answers(&questions, &call_id.0, orx, &cancel, &mut reply)
+                            .await;
+                    let (result, why) = crate::mcp_ask::elicited(&form, answers);
+                    if let Some(message) = why {
+                        let _ = tx.send(Event::Warning { message });
+                    }
+                    let _ = reply.send(result);
+                });
+            }
+            ServerAsk::Sample {
+                server,
+                request,
+                mut reply,
+            } => {
+                let Some(c) = &self.convo else {
+                    let _ = reply.send(Err("no model is ready yet".into()));
+                    return;
+                };
+                let sampler = crate::mcp_ask::Sampler {
+                    tx: self.tx.clone(),
+                    approvals: self.approvals.clone(),
+                    perms: c.perms.clone(),
+                    setup: c.setup.clone(),
+                    stats: self.stats.clone(),
+                    log: self.log.clone(),
+                    cancel,
+                    call_id,
+                };
+                tokio::spawn(async move {
+                    let result = tokio::select! {
+                        r = sampler.run(&server, request) => r,
+                        () = reply.closed() => return,
+                    };
+                    let _ = reply.send(result);
+                });
+            }
+        }
     }
 
     fn on_started(&mut self, outcome: StartupOutcome) {
@@ -1754,6 +1827,39 @@ impl Engine {
             .collect::<Vec<_>>()
             .join("\n");
 
+        // `/<server>:<prompt> args` runs an MCP prompt, unless a skill or custom command
+        // has that name. Arguments are checked here; the prompt is fetched in the turn.
+        let shadowed = |setup: &Setup| {
+            let name = prompt
+                .strip_prefix('/')
+                .and_then(|r| r.split_whitespace().next())
+                .unwrap_or_default();
+            setup.tool_ctx.skills.iter().any(|s| s.name == name)
+                || setup.commands.iter().any(|c| c.name == name)
+        };
+        let mcp_prompt = match &self.convo {
+            Some(c) if !shadowed(&c.setup) => crate::mcp::prompt_call(&self.mcp.manager, &prompt),
+            _ => None,
+        };
+        let mcp_prompt = match mcp_prompt {
+            Some(Err(message)) => {
+                self.emit(Event::TurnStarted { turn });
+                self.emit(Event::Error {
+                    error: EngineError {
+                        kind: EngineErrorKind::Config,
+                        message: message.clone(),
+                    },
+                });
+                self.emit(Event::TurnAborted {
+                    turn,
+                    reason: message,
+                });
+                return;
+            }
+            Some(Ok(call)) => Some(call),
+            None => None,
+        };
+
         let Some(convo) = &mut self.convo else {
             let message = match &self.problem {
                 Some(p) => format!("No model is ready: {p}"),
@@ -1782,21 +1888,31 @@ impl Engine {
         let perms = convo.perms.clone();
         let nested = convo.nested.clone();
         let typed = prompt.clone();
-        let (prompt, skill_error) = expand_skill(&setup, prompt);
-        let prompt = if self.notes.is_empty() {
-            prompt
+        let (prompt, skill_error) = if mcp_prompt.is_some() {
+            (prompt, None)
         } else {
-            format!("{}\n\n{prompt}", std::mem::take(&mut self.notes).join("\n"))
+            expand_skill(&setup, prompt)
         };
+        let notes = (!self.notes.is_empty()).then(|| std::mem::take(&mut self.notes).join("\n"));
         if let Some(e) = skill_error {
             self.warn(e);
         }
         // Plan mode asks for a plan at the end of the message, after the cached prefix.
-        let prompt = if perms.lock().is_ok_and(|p| p.plan) {
-            format!("{prompt}\n\n{}", plan_note(&setup))
-        } else {
-            prompt
+        let plan = perms
+            .lock()
+            .is_ok_and(|p| p.plan)
+            .then(|| plan_note(&setup));
+        let compose = move |body: String| {
+            let body = match notes {
+                Some(n) => format!("{n}\n\n{body}"),
+                None => body,
+            };
+            match plan {
+                Some(p) => format!("{body}\n\n{p}"),
+                None => body,
+            }
         };
+        let manager = self.mcp.manager.clone();
         self.ensure_log();
         self.turns += 1;
         if self.title.is_none() {
@@ -1832,12 +1948,34 @@ impl Engine {
             pool,
             prompt_lock: Arc::default(),
         };
-        let prompt = turn::Prompt {
-            text: prompt,
-            typed,
-            start: self.start_context.take(),
-        };
+        let start = self.start_context.take();
         tokio::spawn(async move {
+            let body = match mcp_prompt {
+                None => prompt,
+                Some((server, name, args)) => {
+                    match manager.get_prompt(&server, &name, args).await {
+                        Ok(text) => text,
+                        Err(e) => {
+                            let reason = format!("/{server}:{name}: {e}");
+                            ctx.emit(Event::TurnStarted { turn });
+                            ctx.emit(Event::Error {
+                                error: EngineError {
+                                    kind: EngineErrorKind::Config,
+                                    message: reason.clone(),
+                                },
+                            });
+                            ctx.emit(Event::TurnAborted { turn, reason });
+                            let _ = done.send((turn, history)).await;
+                            return;
+                        }
+                    }
+                }
+            };
+            let prompt = turn::Prompt {
+                text: compose(body),
+                typed,
+                start,
+            };
             let history = turn::run(ctx, history, prompt).await;
             let _ = done.send((turn, history)).await;
         });

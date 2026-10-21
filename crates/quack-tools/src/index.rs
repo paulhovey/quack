@@ -5,7 +5,7 @@ use futures::future::BoxFuture;
 use quack_protocol::ApprovalRequest;
 use serde_json::{Value, json};
 
-use crate::outline::{language_of, outline};
+use crate::outline::language_of;
 use crate::paths;
 use crate::registry::{Subject, Tool, ToolCtx, ToolKind, ToolOutput, opt_str};
 use crate::search::{blocking, walker};
@@ -79,12 +79,13 @@ impl Tool for Index {
 
     fn run<'a>(&'a self, args: Value, ctx: &'a ToolCtx) -> BoxFuture<'a, ToolOutput> {
         let root = ctx.root.clone();
+        let grammars = ctx.grammars.clone();
         let path = opt_str(&args, PATH).map_or_else(|| root.clone(), |p| paths::resolve(&root, p));
         Box::pin(blocking(move || {
             let shown = paths::display(&root, &path);
             if path.is_file() {
                 let text = load(&path).ok_or_else(|| format!("{shown} is not a text file"))?;
-                let o = outline(&path, &text).ok_or_else(|| {
+                let o = grammars.outline(&path, &text).ok_or_else(|| {
                     format!("no outline for {shown}: its language is not supported; use `read`")
                 })?;
                 let n = o.symbols.len();
@@ -104,7 +105,7 @@ impl Tool for Index {
                     left += 1;
                     continue;
                 }
-                let Some(o) = load(p).and_then(|t| outline(p, &t)) else {
+                let Some(o) = load(p).and_then(|t| grammars.outline(p, &t)) else {
                     continue;
                 };
                 files += 1;

@@ -56,6 +56,12 @@ const READ_ONLY_COMMANDS: &[&str] = &[
     "pwd",
     "which",
     "where",
+    // Tests, which the bash parser now finds inside `if` and `while` conditions.
+    "[",
+    "[[",
+    "test",
+    "true",
+    "false",
     "Get-ChildItem",
     "Get-Content",
     "Select-String",

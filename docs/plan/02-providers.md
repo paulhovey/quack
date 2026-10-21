@@ -346,11 +346,11 @@ Sources: Mistral's own harness (`mistralai/mistral-vibe`, commit `4ae5c59`, 2026
 | Retries 429, 500, 502, 503, 504, 520 | 520 added |
 | `cached_tokens` under `usage.prompt_tokens_details` | Already read |
 
-No Mistral profile was added. The generic profile already uses the same tool shapes as Vibe (exact-string `edit`, `read` with offset and limit). Temperature is left to the server, whose default "varies depending on the model" per Mistral's docs; Vibe uses 1.0 with thinking for its default model, but Mistral has published no value for Large 4. To set it anyway, list the model with `sampling.temperature` in the provider file.
+The `vibe` profile (2026-10-20) follows Vibe's tool names and keeps the exact-string `edit`. Measured live through OpenRouter on 2026-10-21 ([roadmap](roadmap.md)): both pass the hard suite 14/14 on mistral-large-4-0, but `generic`, which then defaulted to the first, per-line hashline, hit 12 parse and 23 edit failures where `vibe` hit 0 and 1. `generic` is back on `str_replace` since the same day. Temperature is left to the server, whose default "varies depending on the model" per Mistral's docs; Vibe uses 1.0 with thinking for its default model, but Mistral has published no value for Large 4. To set it anyway, list the model with `sampling.temperature` in the provider file.
 
 ### Not done yet
 
-- Not run against the live API: there is no Mistral key in the test environment. The request shape is covered by unit tests against what Vibe sends and the API reference.
+- Not run against Mistral's own API: there is no Mistral key in the test environment. The request shape is covered by unit tests against what Vibe sends and the API reference. The model itself ran live through OpenRouter on 2026-10-21, but that path is plain `openai-chat` and does not exercise this dialect.
 - Images: Large 4 accepts them, but we send no images yet.
 - Self-hosting the open weights, when they ship: vLLM with `--tokenizer-mode mistral --config-format mistral --load-format mistral --enable-auto-tool-choice --tool-call-parser mistral`. At about 1T parameters this needs several GPUs. Check these flags against the release and add them to setup's vLLM note.
 - A budget-capped eval subset through the API ([13](13-testing-and-evals.md)) before calling it verified.

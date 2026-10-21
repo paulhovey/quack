@@ -2219,7 +2219,8 @@ pub(crate) fn custom_commands(commands: &[quack_protocol::CommandInfo], theme: &
             "Put a markdown prompt in commands/ in your config folder (or .quack/commands in \
              a trusted project): commands/review.md is /review, commands/test/flaky.md is \
              /test:flaky. {{ args }} in the file becomes what you type after the name; \
-             front matter can give a `description` and `args`.",
+             front matter can give a `description` and `args`. Prompts of connected MCP \
+             servers show here too, as /<server>:<prompt>.",
             theme,
         )]
     } else {
@@ -2228,7 +2229,7 @@ pub(crate) fn custom_commands(commands: &[quack_protocol::CommandInfo], theme: &
             .map(|c| ModalItem {
                 label: format!("/{}", c.name),
                 hint: c.source.clone(),
-                detail: vec![
+                detail: [
                     Line::styled(
                         format!("/{} {}", c.name, c.args).trim_end().to_owned(),
                         theme.accent,
@@ -2237,10 +2238,15 @@ pub(crate) fn custom_commands(commands: &[quack_protocol::CommandInfo], theme: &
                     Line::raw(c.description.clone()),
                     Line::raw(""),
                     field(theme, "from", c.source.clone()),
-                    field(theme, "file", c.path.clone()),
+                ]
+                .into_iter()
+                // MCP prompts have no file.
+                .chain((!c.path.is_empty()).then(|| field(theme, "file", c.path.clone())))
+                .chain([
                     Line::raw(""),
                     Line::styled("⏎ type it with a request", theme.dim),
-                ],
+                ])
+                .collect(),
                 action: Some(format!("/{} ", c.name)),
                 run: false,
                 alt: None,
@@ -2304,6 +2310,20 @@ pub(crate) fn mcp(servers: Option<&[quack_protocol::McpServerInfo]>, theme: &The
                     ));
                     detail.push(Line::raw(""));
                     detail.extend(s.tools.iter().map(|t| Line::raw(format!("  {t}"))));
+                    if !s.prompts.is_empty() {
+                        detail.push(Line::raw(""));
+                        detail.push(field(theme, "prompts", s.prompts.len().to_string()));
+                        detail.extend(
+                            s.prompts
+                                .iter()
+                                .map(|p| Line::raw(format!("  /{}:{p}", s.id))),
+                        );
+                    }
+                    if !s.resources.is_empty() {
+                        detail.push(Line::raw(""));
+                        detail.push(field(theme, "resources", s.resources.len().to_string()));
+                        detail.extend(s.resources.iter().map(|r| Line::raw(format!("  {r}"))));
+                    }
                 }
                 if !s.log.is_empty() {
                     detail.push(Line::raw(""));

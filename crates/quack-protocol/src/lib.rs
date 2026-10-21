@@ -204,6 +204,11 @@ pub enum Event {
     Commands {
         commands: Vec<CommandInfo>,
     },
+    /// Prompts of the ready MCP servers, run as `/<server>:<prompt> args`. Sent again
+    /// whenever the list changes (a server connects, stops or re-lists).
+    McpPrompts {
+        prompts: Vec<CommandInfo>,
+    },
     /// The installed profiles, previewed for the current model.
     Profiles {
         /// The profile in use.
@@ -636,6 +641,12 @@ pub struct McpServerInfo {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub error: String,
     pub tools: Vec<String>,
+    /// Prompts the user can run as `/<server>:<prompt>`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prompts: Vec<String>,
+    /// Resource URIs and URI templates the model can read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<String>,
     /// Whether its tools are behind `tool_search` to save context.
     pub deferred: bool,
     /// Estimated tokens of its tool definitions.

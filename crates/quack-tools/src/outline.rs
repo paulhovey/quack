@@ -6,6 +6,10 @@
 
 use std::path::Path;
 
+use crate::grammar::Grammars;
+#[cfg(feature = "lang-common")]
+pub(crate) use imp::builtin_tags;
+
 /// One definition: a function, type, module, `impl` block, …
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Symbol {
@@ -79,9 +83,9 @@ impl Outline {
                 let mut path: Vec<&str> = self.symbols[..*i]
                     .iter()
                     .filter(|p| p.start <= s.start && p.end >= s.end)
-                    .flat_map(|p| p.name.split("::"))
+                    .flat_map(|p| p.name.split([':', '.']))
                     .collect();
-                path.extend(s.name.split("::"));
+                path.extend(s.name.split([':', '.']));
                 let Some((own, above)) = path.split_last() else {
                     return false;
                 };
@@ -116,6 +120,7 @@ pub fn language_of(path: &Path) -> Option<&'static str> {
         "ts" | "mts" | "cts" => "typescript",
         "tsx" => "tsx",
         "go" => "go",
+        "sh" | "bash" => "bash",
         "c" => "c",
         "cc" | "cpp" | "cxx" | "c++" | "hpp" | "hh" | "hxx" | "h++" | "ipp" | "tpp" | "inl" => {
             "cpp"
@@ -131,10 +136,33 @@ pub fn supported(path: &Path) -> bool {
     cfg!(feature = "lang-common") && language_of(path).is_some()
 }
 
-/// The outline of `text`, if its language has a grammar in this build.
+/// The outline of `text` with the built-in queries, if its language has a grammar in this
+/// build. Tools use [`Grammars::outline`], which follows `grammars/` overrides.
 pub fn outline(path: &Path, text: &str) -> Option<Outline> {
+    Grammars::builtin().outline(path, text)
+}
+
+impl Grammars {
+    /// The outline of `text`, if its language has a grammar in this build.
+    pub fn outline(&self, path: &Path, text: &str) -> Option<Outline> {
+        outline_with(self, path, text)
+    }
+}
+
+/// Where an edit from `before` to `after` breaks the syntax: the first line (1-based) of
+/// a parse error in `after`, when `before` parsed cleanly. `None` otherwise, or when the
+/// file's language has no grammar in this build.
+pub(crate) fn new_syntax_error(path: &Path, before: &str, after: &str) -> Option<usize> {
     let language = language_of(path)?;
-    let mut symbols = imp::symbols(language, text)?;
+    if !imp::error_lines(language, before)?.is_empty() {
+        return None;
+    }
+    imp::error_lines(language, after)?.first().copied()
+}
+
+fn outline_with(g: &Grammars, path: &Path, text: &str) -> Option<Outline> {
+    let language = language_of(path)?;
+    let mut symbols = imp::symbols(g, language, text)?;
     symbols.sort_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
     // Several patterns can match one definition.
     symbols.dedup_by(|b, a| a.start == b.start && a.end == b.end && a.name == b.name);
@@ -157,11 +185,11 @@ pub fn outline(path: &Path, text: &str) -> Option<Outline> {
 
 #[cfg(feature = "lang-common")]
 mod imp {
-    use std::sync::OnceLock;
+    #[cfg(test)]
+    use tree_sitter::Query;
+    use tree_sitter::{Parser, QueryCursor, StreamingIterator};
 
-    use tree_sitter::{Language, Parser, Query, QueryCursor, StreamingIterator};
-
-    use super::Symbol;
+    use super::{Grammars, Symbol};
 
     const SIGNATURE_CHARS: usize = 100;
 
@@ -195,6 +223,18 @@ mod imp {
     /// `impl` blocks are references in the Rust query; they hold the methods, so they are
     /// shown as definitions.
     const RUST_EXTRA: &str = "(impl_item type: (_) @name) @definition.impl\n";
+
+    /// Python: decorated functions and classes span their decorators.
+    const PYTHON_EXTRA: &str = r#"
+(decorated_definition definition: (function_definition name: (identifier) @name)) @definition.function
+(decorated_definition definition: (class_definition name: (identifier) @name)) @definition.class
+"#;
+
+    /// TypeScript / TSX: type aliases and enums are missing from the upstream tags query.
+    const TS_EXTRA: &str = r#"
+(type_alias_declaration name: (type_identifier) @name) @definition.type
+(enum_declaration name: (identifier) @name) @definition.enum
+"#;
 
     // The C and C++ grammars' own `tags.scm` capture a function's declarator (its name and
     // parameters) rather than the definition, so every function would be one line long;
@@ -245,119 +285,109 @@ mod imp {
 (declaration declarator: (function_declarator declarator: (destructor_name) @name)) @definition.method
 "#;
 
-    struct Grammar {
-        language: Language,
-        query: Query,
-    }
+    /// Go: functions, methods with their receiver type, interface methods, and types.
+    const GO_TAGS: &str = r#"
+(function_declaration
+  name: (identifier) @name) @definition.function
+(method_declaration
+  receiver: (parameter_list
+    (parameter_declaration
+      type: [
+        (type_identifier) @receiver
+        (pointer_type (type_identifier) @receiver)
+        (pointer_type (generic_type type: (type_identifier) @receiver))
+        (generic_type type: (type_identifier) @receiver)
+      ]))
+  name: (field_identifier) @name) @definition.method
+(method_declaration
+  name: (field_identifier) @name) @definition.method
+(method_elem
+  name: (field_identifier) @name) @definition.method
+(type_spec
+  name: (type_identifier) @name) @definition.type
+"#;
 
-    fn build(language: Language, queries: &[&str]) -> Option<Grammar> {
-        // A query that does not fit the grammar is dropped, not fatal.
-        let src = queries.concat();
-        let query = Query::new(&language, &src)
-            .or_else(|_| Query::new(&language, queries.last().copied().unwrap_or_default()))
-            .map_err(|e| tracing::warn!(error = %e, "tags query does not compile"))
-            .ok()?;
-        Some(Grammar { language, query })
-    }
+    /// Shell scripts: functions.
+    const BASH_TAGS: &str = "(function_definition name: (word) @name) @definition.function\n";
 
-    /// Each language with a grammar: its parser and its definition queries.
-    const LANGUAGES: [&str; 8] = [
-        "rust",
-        "python",
-        "javascript",
-        "typescript",
-        "tsx",
-        "go",
-        "c",
-        "cpp",
-    ];
-
-    fn sources(name: &str) -> Option<(Language, &'static [&'static str])> {
+    /// Each language's built-in definition queries, joined in order.
+    pub(crate) fn builtin_tags(name: &str) -> Option<&'static [&'static str]> {
         Some(match name {
-            "rust" => (
-                tree_sitter_rust::LANGUAGE.into(),
-                &[tree_sitter_rust::TAGS_QUERY, RUST_EXTRA],
-            ),
-            "python" => (
-                tree_sitter_python::LANGUAGE.into(),
-                &[tree_sitter_python::TAGS_QUERY],
-            ),
-            "javascript" => (
-                tree_sitter_javascript::LANGUAGE.into(),
-                &[tree_sitter_javascript::TAGS_QUERY],
-            ),
-            "typescript" => (
-                tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-                &[
-                    tree_sitter_javascript::TAGS_QUERY,
-                    tree_sitter_typescript::TAGS_QUERY,
-                ],
-            ),
-            "tsx" => (
-                tree_sitter_typescript::LANGUAGE_TSX.into(),
-                &[
-                    tree_sitter_javascript::TAGS_QUERY,
-                    tree_sitter_typescript::TAGS_QUERY,
-                ],
-            ),
-            "go" => (
-                tree_sitter_go::LANGUAGE.into(),
-                &[tree_sitter_go::TAGS_QUERY],
-            ),
-            "c" => (tree_sitter_c::LANGUAGE.into(), &[C_COMMON, C_TAGS]),
-            "cpp" => (tree_sitter_cpp::LANGUAGE.into(), &[C_COMMON, CPP_TAGS]),
+            "rust" => &[tree_sitter_rust::TAGS_QUERY, RUST_EXTRA],
+            "python" => &[PYTHON_EXTRA, tree_sitter_python::TAGS_QUERY],
+            "javascript" => &[tree_sitter_javascript::TAGS_QUERY],
+            "typescript" | "tsx" => &[
+                tree_sitter_javascript::TAGS_QUERY,
+                tree_sitter_typescript::TAGS_QUERY,
+                TS_EXTRA,
+            ],
+            "go" => &[GO_TAGS],
+            "c" => &[C_COMMON, C_TAGS],
+            "cpp" => &[C_COMMON, CPP_TAGS],
+            "bash" => &[BASH_TAGS],
             _ => return None,
         })
     }
 
-    fn grammar(name: &str) -> Option<&'static Grammar> {
-        static BUILT: [OnceLock<Option<Grammar>>; LANGUAGES.len()] =
-            [const { OnceLock::new() }; LANGUAGES.len()];
-        let name = if name == "c/c++" { "cpp" } else { name };
-        let i = LANGUAGES.iter().position(|l| *l == name)?;
-        BUILT[i]
-            .get_or_init(|| {
-                let (language, queries) = sources(name)?;
-                build(language, queries)
-            })
-            .as_ref()
-    }
-
-    /// Each language's queries that do not compile as a whole (`build` would quietly fall
-    /// back to the last one).
+    /// Each language's queries that do not compile as a whole (the registry would quietly
+    /// fall back to the last one).
     #[cfg(test)]
     pub(super) fn query_errors() -> Vec<String> {
-        LANGUAGES
+        crate::grammar::LANGUAGES
             .iter()
             .filter_map(|name| {
-                let (language, queries) = sources(name)?;
-                Query::new(&language, &queries.concat())
+                let language = crate::grammar::language(name)?;
+                Query::new(&language, &builtin_tags(name)?.concat())
                     .err()
                     .map(|e| format!("{name}: {e}"))
             })
             .collect()
     }
 
-    pub(super) fn symbols(language: &str, text: &str) -> Option<Vec<Symbol>> {
-        let g = grammar(language)?;
+    /// The lines (1-based, sorted) where the parse has an error or a missing node.
+    pub(super) fn error_lines(language: &str, text: &str) -> Option<Vec<usize>> {
+        let name = if language == "c/c++" { "cpp" } else { language };
         let mut parser = Parser::new();
-        parser.set_language(&g.language).ok()?;
+        parser.set_language(&crate::grammar::language(name)?).ok()?;
         let tree = parser.parse(text, None)?;
-        let names = g.query.capture_names();
+        let mut out = Vec::new();
+        let mut stack = vec![tree.root_node()];
+        let mut cursor = tree.walk();
+        while let Some(node) = stack.pop() {
+            if node.is_error() || node.is_missing() {
+                out.push(node.start_position().row + 1);
+            } else if node.has_error() {
+                stack.extend(node.children(&mut cursor));
+            }
+        }
+        out.sort_unstable();
+        Some(out)
+    }
+
+    pub(super) fn symbols(g: &Grammars, language: &str, text: &str) -> Option<Vec<Symbol>> {
+        let (lang, query) = g.tags(language)?;
+        let mut parser = Parser::new();
+        parser.set_language(lang).ok()?;
+        let tree = parser.parse(text, None)?;
+        let names = query.capture_names();
         let mut cursor = QueryCursor::new();
-        let mut matches = cursor.matches(&g.query, tree.root_node(), text.as_bytes());
+        let mut matches = cursor.matches(query, tree.root_node(), text.as_bytes());
         let mut out = Vec::new();
         // One symbol per definition and pattern: a C++ parse confused by macros can give a
         // node several names (an initializer list read as declarators); the first is kept.
         // Different patterns may still name one node (Rust's `impl Trait for Type`).
         let mut seen = std::collections::HashSet::new();
+        let mut qualified = std::collections::HashSet::new();
         while let Some(m) = matches.next() {
             let mut def = None;
             let mut name = None;
+            let mut receiver = None;
             for c in m.captures() {
                 let capture = names[c.index as usize];
                 if capture == "name" {
                     name = Some(c.node);
+                } else if capture == "receiver" {
+                    receiver = Some(c.node);
                 } else if let Some(kind) = capture
                     .strip_prefix("definition.")
                     .or_else(|| (capture == "reference.implementation").then_some("impl"))
@@ -368,15 +398,33 @@ mod imp {
             let (Some((kind, node)), Some(name_node)) = (def, name) else {
                 continue;
             };
+            if qualified.contains(&node.id()) {
+                continue;
+            }
+            if node
+                .parent()
+                .is_some_and(|p| p.kind() == "decorated_definition")
+            {
+                continue;
+            }
             let Ok(name) = name_node.utf8_text(text.as_bytes()) else {
                 continue;
             };
+            let (name, is_qualified) =
+                if let Some(r) = receiver.and_then(|n| n.utf8_text(text.as_bytes()).ok()) {
+                    (format!("{r}::{name}"), true)
+                } else {
+                    (name.to_owned(), false)
+                };
             if !seen.insert((node.id(), m.pattern_index)) {
                 continue;
             }
+            if is_qualified {
+                qualified.insert(node.id());
+            }
             let (start, end) = (node.start_position(), node.end_position());
             out.push(Symbol {
-                name: name.to_owned(),
+                name,
                 kind: kind.to_owned(),
                 start: start.row + 1,
                 // A node that takes its line's newline (`#define`) ends on the line before.
@@ -395,9 +443,13 @@ mod imp {
 
 #[cfg(not(feature = "lang-common"))]
 mod imp {
-    use super::Symbol;
+    use super::{Grammars, Symbol};
 
-    pub(super) fn symbols(_language: &str, _text: &str) -> Option<Vec<Symbol>> {
+    pub(super) fn symbols(_g: &Grammars, _language: &str, _text: &str) -> Option<Vec<Symbol>> {
+        None
+    }
+
+    pub(super) fn error_lines(_language: &str, _text: &str) -> Option<Vec<usize>> {
         None
     }
 }
@@ -438,16 +490,25 @@ mod tests {
 
     #[test]
     fn other_languages_parse() {
-        let py = "class A:\n    def f(self):\n        pass\n\ndef g():\n    return 1\n";
+        let py = "@app.get(\"/items\")\ndef get_items():\n    pass\n\nclass A:\n    def f(self):\n        pass\n\ndef g():\n    return 1\n";
         let o = outline(Path::new("a.py"), py).expect("python");
-        assert_eq!(o.find("A.f").map(|s| (s.start, s.depth)), Some((2, 1)));
+        assert_eq!(o.find("get_items").map(|s| s.start), Some(1));
+        assert_eq!(o.find("A.f").map(|s| (s.start, s.depth)), Some((6, 1)));
         let go = "package main\n\nfunc main() {\n}\n\ntype T struct{}\n\nfunc (t T) M() {}\n";
         let o = outline(Path::new("a.go"), go).expect("go");
-        assert!(o.find("main").is_some() && o.find("M").is_some(), "{o:?}");
-        let ts =
-            "export class C {\n  m(): void {}\n}\ninterface I { x: number }\nfunction f() {}\n";
+        assert!(
+            o.find("main").is_some() && o.find("T.M").is_some() && o.find("M").is_some(),
+            "{o:?}"
+        );
+        let ts = "export class C {\n  m(): void {}\n}\ninterface I { x: number }\ntype Config = { a: string }\nenum Mode { Fast, Safe }\nfunction f() {}\n";
         let o = outline(Path::new("a.ts"), ts).expect("ts");
-        assert!(o.find("C.m").is_some() && o.find("f").is_some(), "{o:?}");
+        assert!(
+            o.find("C.m").is_some()
+                && o.find("Config").is_some()
+                && o.find("Mode").is_some()
+                && o.find("f").is_some(),
+            "{o:?}"
+        );
         let js = "function a() {}\nconst b = () => 1;\nclass K { z() {} }\n";
         let o = outline(Path::new("a.js"), js).expect("js");
         assert!(o.find("a").is_some() && o.find("K.z").is_some(), "{o:?}");
@@ -457,6 +518,18 @@ mod tests {
     #[test]
     fn every_query_compiles() {
         assert_eq!(imp::query_errors(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn go_outline_resolves_methods_by_receiver() {
+        let go = "package main\n\ntype Scope struct {\n    name string\n}\n\nfunc (s *Scope) Define(name string) {\n    s.name = name\n}\n\nfunc (s Scope) Lookup(name string) string {\n    return s.name\n}\n\ntype Definer interface {\n    Define(name string)\n}\n";
+        let o = outline(Path::new("scope.go"), go).expect("go");
+        assert_eq!(o.find("Scope.Define").map(|s| s.start), Some(7));
+        assert_eq!(o.find("Scope::Define").map(|s| s.start), Some(7));
+        assert_eq!(o.find("Define").map(|s| s.start), Some(7));
+        assert_eq!(o.find("Scope.Lookup").map(|s| s.start), Some(11));
+        assert_eq!(o.find("Definer.Define").map(|s| s.start), Some(16));
+        assert_eq!(o.find("Missing.Define"), None);
     }
 
     fn rows(o: &Outline) -> Vec<(usize, usize, &str, &str, usize)> {

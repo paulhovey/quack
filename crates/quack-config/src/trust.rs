@@ -72,6 +72,7 @@ const KINDS: &[(&str, &str)] = &[
     ("providers.d", "provider"),
     ("profiles.d", "profile"),
     ("agents.d", "agent"),
+    ("grammars", "grammar query file"),
 ];
 
 /// Larger files are fingerprinted by size only, so a stray file cannot stall startup.

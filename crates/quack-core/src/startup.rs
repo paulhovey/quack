@@ -698,6 +698,9 @@ async fn build_setup(
         edit_format: EditFormat::StrReplace,
         // About 3.5 bytes per token.
         outline_above: config.settings.tools.read_outline_tokens as usize * 7 / 2,
+        grammars: Arc::new(quack_tools::grammar::Grammars::from_layers(
+            config.item_layers().iter().map(|(_, d)| d.as_path()),
+        )),
     };
     let registry = Arc::new(Registry::builtin());
     let vars = PromptVars {

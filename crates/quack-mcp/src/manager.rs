@@ -5,7 +5,7 @@
 //! with backoff, up to [`MAX_RESTARTS`] times.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
@@ -13,19 +13,23 @@ use quack_config::settings::NetworkSettings;
 use quack_config::{McpServerFile, glob_match};
 use quack_shell::Tree;
 use rmcp::ClientHandler;
+use rmcp::ErrorData;
 use rmcp::model::{
-    CallToolRequestParams, ClientCapabilities, ClientConfig, Implementation, ProtocolVersion,
+    CallToolRequestParams, ClientCapabilities, ClientConfig, ElicitRequestParams, ElicitResult,
+    ElicitationAction, ElicitationCapability, FormElicitationCapability, GetPromptRequestParams,
+    Implementation, ProtocolVersion, ReadResourceRequestParams, SamplingCapability,
 };
 use rmcp::service::{
-    ClientLifecycleMode, NotificationContext, Peer, RoleClient, RunningService,
+    ClientLifecycleMode, NotificationContext, Peer, RequestContext, RoleClient, RunningService,
     serve_client_with_lifecycle_and_ct,
 };
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use serde_json::Value;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
+use crate::ask::{Elicited, Form, SampleRequest, ServerAsk};
 use crate::spawn::{self, Log};
 
 /// Restarts of a server that keeps exiting before it is left failed.
@@ -60,6 +64,123 @@ pub struct ToolInfo {
     pub auto_approve: bool,
 }
 
+/// One prompt a ready server offers; the user runs it as `/<server>:<prompt>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptInfo {
+    pub server: String,
+    pub name: String,
+    pub description: String,
+    pub arguments: Vec<PromptArg>,
+}
+
+impl PromptInfo {
+    /// The slash command that runs it, without the slash.
+    pub fn command(&self) -> String {
+        format!("{}:{}", self.server, self.name)
+    }
+
+    /// What to type after the command, e.g. `<file> [focus]`.
+    pub fn usage(&self) -> String {
+        self.arguments
+            .iter()
+            .map(|a| {
+                if a.required {
+                    format!("<{}>", a.name)
+                } else {
+                    format!("[{}]", a.name)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// The arguments typed after the command. `name=value` pairs set arguments by name
+    /// (a value runs to the next pair); otherwise words fill the arguments in order, and
+    /// the last one takes the rest of the line.
+    pub fn parse_args<'a>(&self, line: &'a str) -> Result<serde_json::Map<String, Value>, String> {
+        let line = line.trim();
+        let mut out = serde_json::Map::new();
+        let named = |w: &'a str| {
+            w.split_once('=')
+                .filter(|(k, _)| self.arguments.iter().any(|a| a.name == *k))
+        };
+        if line
+            .split_whitespace()
+            .next()
+            .is_some_and(|w| named(w).is_some())
+        {
+            let mut key: Option<String> = None;
+            let mut value: Vec<&str> = Vec::new();
+            for w in line.split_whitespace() {
+                if let Some((k, v)) = named(w) {
+                    if let Some(k) = key.take() {
+                        out.insert(k, value.join(" ").into());
+                    }
+                    key = Some(k.to_owned());
+                    value = vec![v];
+                } else {
+                    value.push(w);
+                }
+            }
+            if let Some(k) = key {
+                out.insert(k, value.join(" ").into());
+            }
+        } else if !line.is_empty() {
+            let mut rest = line;
+            for (i, a) in self.arguments.iter().enumerate() {
+                if rest.is_empty() {
+                    break;
+                }
+                if i + 1 == self.arguments.len() {
+                    out.insert(a.name.clone(), rest.into());
+                    rest = "";
+                } else {
+                    let (word, tail) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+                    out.insert(a.name.clone(), word.into());
+                    rest = tail.trim_start();
+                }
+            }
+            if !rest.is_empty() {
+                return Err(format!("takes no arguments; got `{rest}`"));
+            }
+        }
+        let missing: Vec<&str> = self
+            .arguments
+            .iter()
+            .filter(|a| a.required && !out.contains_key(&a.name))
+            .map(|a| a.name.as_str())
+            .collect();
+        if !missing.is_empty() {
+            return Err(format!(
+                "missing {}; usage: /{} {}",
+                missing.join(", "),
+                self.command(),
+                self.usage()
+            ));
+        }
+        Ok(out)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptArg {
+    pub name: String,
+    pub description: String,
+    pub required: bool,
+}
+
+/// One resource (or resource template) a ready server lists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceInfo {
+    pub server: String,
+    /// The URI, or for a template the URI template (`file:///{path}`).
+    pub uri: String,
+    pub name: String,
+    pub description: String,
+    pub mime_type: String,
+    pub template: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerStatus {
     pub id: String,
@@ -70,6 +191,9 @@ pub struct ServerStatus {
     pub description: String,
     pub state: ServerState,
     pub tools: Vec<String>,
+    pub prompts: Vec<String>,
+    /// Resource URIs and URI templates.
+    pub resources: Vec<String>,
     /// The server's last stderr lines and log messages.
     pub log: Vec<String>,
 }
@@ -83,7 +207,9 @@ pub struct CallOutput {
 struct Inner {
     state: ServerState,
     tools: Vec<ToolInfo>,
-    peer: Option<Peer<RoleClient>>,
+    prompts: Vec<PromptInfo>,
+    resources: Vec<ResourceInfo>,
+    service: Option<Arc<Service>>,
     /// Order in which servers became ready, so tools of later servers go at the end.
     ready_seq: u64,
     /// Bumped on every (re)connect; events from older connections are ignored.
@@ -91,9 +217,21 @@ struct Inner {
     restarts: u32,
 }
 
+type Service = RunningService<RoleClient, Handler>;
+
 struct Conn {
-    service: RunningService<RoleClient, Handler>,
+    service: Arc<Service>,
     tree: Option<Tree>,
+}
+
+/// Stop a connection; one a request still holds is cancelled instead of awaited.
+async fn close(service: Arc<Service>) {
+    match Arc::try_unwrap(service) {
+        Ok(s) => {
+            let _ = s.cancel().await;
+        }
+        Err(shared) => shared.cancellation_token().cancel(),
+    }
 }
 
 struct Server {
@@ -101,6 +239,10 @@ struct Server {
     inner: Mutex<Inner>,
     conn: tokio::sync::Mutex<Option<Conn>>,
     log: Log,
+    /// Forms and sampling requests waiting on the user, and how many have finished:
+    /// time spent on them doesn't count toward `call_timeout_secs`.
+    asking: AtomicUsize,
+    asked: AtomicU64,
 }
 
 pub struct McpManager {
@@ -113,6 +255,9 @@ pub struct McpManager {
     shutting_down: AtomicBool,
     seq: AtomicU64,
     changed: watch::Sender<u64>,
+    /// Where elicitation and sampling requests go; `None`: servers are told quack does
+    /// neither.
+    asker: Mutex<Option<mpsc::Sender<ServerAsk>>>,
 }
 
 impl std::fmt::Debug for McpManager {
@@ -145,13 +290,17 @@ impl McpManager {
                     inner: Mutex::new(Inner {
                         state: ServerState::Stopped,
                         tools: Vec::new(),
-                        peer: None,
+                        prompts: Vec::new(),
+                        resources: Vec::new(),
+                        service: None,
                         ready_seq: 0,
                         generation: 0,
                         restarts: 0,
                     }),
                     conn: tokio::sync::Mutex::new(None),
                     log: Log::default(),
+                    asking: AtomicUsize::new(0),
+                    asked: AtomicU64::new(0),
                 })
             })
             .collect();
@@ -164,7 +313,20 @@ impl McpManager {
             shutting_down: AtomicBool::new(false),
             seq: AtomicU64::new(1),
             changed: watch::Sender::new(0),
+            asker: Mutex::new(None),
         })
+    }
+
+    /// Answer servers' forms and sampling requests through `asker`. Call it before
+    /// [`Self::start`]: servers learn what quack can do when they connect.
+    pub fn set_asker(&self, asker: mpsc::Sender<ServerAsk>) {
+        if let Ok(mut a) = self.asker.lock() {
+            *a = Some(asker);
+        }
+    }
+
+    fn asker(&self) -> Option<mpsc::Sender<ServerAsk>> {
+        self.asker.lock().ok().and_then(|a| a.clone())
     }
 
     pub fn is_empty(&self) -> bool {
@@ -190,12 +352,26 @@ impl McpManager {
     /// Tools of ready servers: servers in the order they became ready, each server's
     /// tools in its own order.
     pub fn tools(&self) -> Vec<ToolInfo> {
-        let mut ready: Vec<(u64, Vec<ToolInfo>)> = self
+        self.ready(|i| i.tools.clone())
+    }
+
+    /// Prompts of ready servers, in the order the servers became ready.
+    pub fn prompts(&self) -> Vec<PromptInfo> {
+        self.ready(|i| i.prompts.clone())
+    }
+
+    /// Resources and resource templates of ready servers.
+    pub fn resources(&self) -> Vec<ResourceInfo> {
+        self.ready(|i| i.resources.clone())
+    }
+
+    fn ready<T>(&self, f: impl Fn(&Inner) -> Vec<T>) -> Vec<T> {
+        let mut ready: Vec<(u64, Vec<T>)> = self
             .servers
             .iter()
             .filter_map(|s| {
                 let inner = s.inner.lock().ok()?;
-                (inner.state == ServerState::Ready).then(|| (inner.ready_seq, inner.tools.clone()))
+                (inner.state == ServerState::Ready).then(|| (inner.ready_seq, f(&inner)))
             })
             .collect();
         ready.sort_by_key(|(seq, _)| *seq);
@@ -206,12 +382,22 @@ impl McpManager {
         self.servers
             .iter()
             .map(|s| {
-                let (state, tools) = s.inner.lock().map_or_else(
-                    |_| (ServerState::Failed("poisoned".into()), Vec::new()),
+                let (state, tools, prompts, resources) = s.inner.lock().map_or_else(
+                    |_| {
+                        let none = Vec::new;
+                        (
+                            ServerState::Failed("poisoned".into()),
+                            none(),
+                            none(),
+                            none(),
+                        )
+                    },
                     |i| {
                         (
                             i.state.clone(),
                             i.tools.iter().map(|t| t.name.clone()).collect(),
+                            i.prompts.iter().map(|p| p.name.clone()).collect(),
+                            i.resources.iter().map(|r| r.uri.clone()).collect(),
                         )
                     },
                 );
@@ -232,6 +418,8 @@ impl McpManager {
                     description: f.description.clone(),
                     state,
                     tools,
+                    prompts,
+                    resources,
                     log: s
                         .log
                         .lock()
@@ -274,11 +462,13 @@ impl McpManager {
         if let Ok(mut i) = server.inner.lock() {
             i.generation += 1;
             i.state = ServerState::Stopped;
-            i.peer = None;
+            i.service = None;
             i.tools.clear();
+            i.prompts.clear();
+            i.resources.clear();
         }
         if let Some(conn) = server.conn.lock().await.take() {
-            let _ = conn.service.cancel().await;
+            close(conn.service).await;
             if let Some(tree) = conn.tree {
                 tree.kill();
             }
@@ -306,7 +496,9 @@ impl McpManager {
                 i.generation += 1;
                 i.state = ServerState::Starting;
                 i.tools.clear();
-                i.peer = None;
+                i.prompts.clear();
+                i.resources.clear();
+                i.service = None;
                 i.generation
             }
             Err(_) => return,
@@ -315,18 +507,20 @@ impl McpManager {
         let limit = Duration::from_secs(server.spec.file.startup_timeout_secs.max(1));
         let result = tokio::time::timeout(limit, self.establish(idx, generation)).await;
         let outcome = match result {
-            Ok(Ok((conn, tools))) => {
-                let peer = conn.service.peer().clone();
+            Ok(Ok((conn, tools, prompts, resources))) => {
+                let service = Arc::clone(&conn.service);
                 *server.conn.lock().await = Some(conn);
                 let seq = self.seq.fetch_add(1, Ordering::SeqCst);
                 let current = self.set(idx, generation, |i| {
                     i.state = ServerState::Ready;
                     i.tools = tools;
-                    i.peer = Some(peer);
+                    i.prompts = prompts;
+                    i.resources = resources;
+                    i.service = Some(service);
                     i.ready_seq = seq;
                 });
                 if !current && let Some(conn) = server.conn.lock().await.take() {
-                    let _ = conn.service.cancel().await;
+                    close(conn.service).await;
                 }
                 return;
             }
@@ -349,7 +543,7 @@ impl McpManager {
         self: &Arc<Self>,
         idx: usize,
         generation: u64,
-    ) -> Result<(Conn, Vec<ToolInfo>), String> {
+    ) -> Result<(Conn, Vec<ToolInfo>, Vec<PromptInfo>, Vec<ResourceInfo>), String> {
         let server = &self.servers[idx];
         let file = server.spec.file.clone();
         let handler = Handler {
@@ -372,7 +566,7 @@ impl McpManager {
                     .await
                     .map_err(|e| e.to_string())?;
                 Conn {
-                    service,
+                    service: Arc::new(service),
                     tree: None,
                 }
             }
@@ -411,13 +605,24 @@ impl McpManager {
                 };
                 tokio::spawn(Arc::clone(self).watch_exit(idx, generation, child));
                 Conn {
-                    service,
+                    service: Arc::new(service),
                     tree: Some(sp.tree),
                 }
             }
         };
-        let tools = list_tools(conn.service.peer(), &server.spec).await?;
-        Ok((conn, tools))
+        let peer = conn.service.peer();
+        let tools = list_tools(peer, &server.spec).await?;
+        // A server whose prompts or resources fail to list still serves its tools.
+        let id = &server.spec.id;
+        let prompts = list_prompts(peer, id).await.unwrap_or_else(|e| {
+            tracing::warn!(server = %id, error = %e, "listing prompts failed");
+            Vec::new()
+        });
+        let resources = list_resources(peer, id).await.unwrap_or_else(|e| {
+            tracing::warn!(server = %id, error = %e, "listing resources failed");
+            Vec::new()
+        });
+        Ok((conn, tools, prompts, resources))
     }
 
     /// A stdio server exited: mark it failed and start it again, with backoff.
@@ -434,8 +639,10 @@ impl McpManager {
         let how = status.map_or_else(|e| e.to_string(), |s| s.to_string());
         let mut restart_in = None;
         let current = self.set(idx, generation, |i| {
-            i.peer = None;
+            i.service = None;
             i.tools.clear();
+            i.prompts.clear();
+            i.resources.clear();
             if i.restarts < MAX_RESTARTS {
                 i.restarts += 1;
                 restart_in = Some(Duration::from_secs(1 << i.restarts));
@@ -497,19 +704,9 @@ impl McpManager {
         cancel: &CancellationToken,
     ) -> CallOutput {
         let fail = |text: String| CallOutput { ok: false, text };
-        let Ok(idx) = self.index(server) else {
-            return fail(format!("no MCP server `{server}`"));
-        };
-        let s = &self.servers[idx];
-        let (peer, state) = match s.inner.lock() {
-            Ok(i) => (i.peer.clone(), i.state.clone()),
-            Err(_) => return fail("internal error".into()),
-        };
-        let Some(peer) = peer else {
-            return fail(match state {
-                ServerState::Failed(why) => format!("MCP server `{server}` is not running: {why}"),
-                _ => format!("MCP server `{server}` is not ready yet"),
-            });
+        let (s, service) = match self.service(server) {
+            Ok(found) => found,
+            Err(e) => return fail(e),
         };
         let arguments = match args {
             Value::Object(map) => map,
@@ -519,9 +716,8 @@ impl McpManager {
             }
         };
         let params = CallToolRequestParams::new(tool.to_owned()).with_arguments(arguments);
-        let limit = Duration::from_secs(s.spec.file.call_timeout_secs.max(1));
         let result = tokio::select! {
-            r = tokio::time::timeout(limit, peer.call_tool(params)) => r,
+            r = timed(s, service.call_tool(params)) => r,
             () = cancel.cancelled() => return fail("interrupted by the user".into()),
         };
         let max_chars = s.spec.file.max_output_tokens as usize * 4;
@@ -535,23 +731,113 @@ impl McpManager {
                 }
             }
             Ok(Err(e)) => fail(format!("MCP error: {e}")),
-            Err(_) => fail(format!(
-                "no answer within {}s (call_timeout_secs)",
-                limit.as_secs()
-            )),
+            Err(e) => fail(e),
         }
     }
 
-    async fn relist(&self, idx: usize, peer: Peer<RoleClient>) {
-        let spec = &self.servers[idx].spec;
-        match list_tools(&peer, spec).await {
-            Ok(tools) => {
-                let generation = self.servers[idx].inner.lock().map_or(0, |i| i.generation);
-                self.set(idx, generation, |i| i.tools = tools);
+    /// The server and its connection, or why it can't take a request.
+    fn service(&self, server: &str) -> Result<(&Server, Arc<Service>), String> {
+        let s = &self.servers[self.index(server)?];
+        let (service, state) = match s.inner.lock() {
+            Ok(i) => (i.service.clone(), i.state.clone()),
+            Err(_) => return Err("internal error".into()),
+        };
+        match (service, state) {
+            (Some(service), _) => Ok((s, service)),
+            (None, ServerState::Failed(why)) => {
+                Err(format!("MCP server `{server}` is not running: {why}"))
             }
-            Err(e) => tracing::warn!(server = %spec.id, error = %e, "re-listing tools failed"),
+            (None, _) => Err(format!("MCP server `{server}` is not ready yet")),
         }
     }
+
+    /// Get a prompt's messages as one text, with `args` filled in (`prompts/get`).
+    pub async fn get_prompt(
+        &self,
+        server: &str,
+        name: &str,
+        args: serde_json::Map<String, Value>,
+    ) -> Result<String, String> {
+        let (s, service) = self.service(server)?;
+        let params = GetPromptRequestParams::new(name).with_arguments(args);
+        let r = timed(s, service.get_prompt(params))
+            .await?
+            .map_err(|e| format!("MCP error: {e}"))?;
+        Ok(crate::output::prompt(
+            &serde_json::to_value(&r).unwrap_or_default(),
+        ))
+    }
+
+    /// Read a resource (`resources/read`). Never fails: errors become an error result.
+    pub async fn read_resource(&self, server: &str, uri: &str) -> CallOutput {
+        let fail = |text: String| CallOutput { ok: false, text };
+        let (s, service) = match self.service(server) {
+            Ok(found) => found,
+            Err(e) => return fail(e),
+        };
+        let read = service.read_resource(ReadResourceRequestParams::new(uri));
+        match timed(s, read).await {
+            Ok(Ok(r)) => CallOutput {
+                ok: true,
+                text: crate::output::contents(
+                    &serde_json::to_value(&r).unwrap_or_default(),
+                    s.spec.file.max_output_tokens as usize * 4,
+                ),
+            },
+            Ok(Err(e)) => fail(format!("MCP error: {e}")),
+            Err(e) => fail(e),
+        }
+    }
+
+    async fn relist(&self, idx: usize, peer: Peer<RoleClient>, what: List) {
+        let id = &self.servers[idx].spec.id;
+        let generation = self.servers[idx].inner.lock().map_or(0, |i| i.generation);
+        let result = match what {
+            List::Tools => list_tools(&peer, &self.servers[idx].spec)
+                .await
+                .map(|tools| self.set(idx, generation, |i| i.tools = tools)),
+            List::Prompts => list_prompts(&peer, id)
+                .await
+                .map(|prompts| self.set(idx, generation, |i| i.prompts = prompts)),
+            List::Resources => list_resources(&peer, id)
+                .await
+                .map(|resources| self.set(idx, generation, |i| i.resources = resources)),
+        };
+        if let Err(e) = result {
+            tracing::warn!(server = %id, error = %e, ?what, "re-listing failed");
+        }
+    }
+}
+
+/// Run a request to `s` within its `call_timeout_secs`. Time the user spends on the
+/// server's forms and sampling approvals doesn't count: each one gives the server a new
+/// full window.
+async fn timed<F: Future>(s: &Server, fut: F) -> Result<F::Output, String> {
+    let limit = Duration::from_secs(s.spec.file.call_timeout_secs.max(1));
+    tokio::pin!(fut);
+    let mut seen = s.asked.load(Ordering::SeqCst);
+    loop {
+        tokio::select! {
+            out = &mut fut => return Ok(out),
+            () = tokio::time::sleep(limit) => {
+                let asked = s.asked.load(Ordering::SeqCst);
+                if s.asking.load(Ordering::SeqCst) == 0 && asked == seen {
+                    return Err(format!(
+                        "no answer within {}s (call_timeout_secs)",
+                        limit.as_secs()
+                    ));
+                }
+                seen = asked;
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum List {
+    Tools,
+    Prompts,
+    Resources,
 }
 
 /// `connect` again from inside a connection's own task; boxed to break the async cycle.
@@ -590,6 +876,83 @@ async fn list_tools(peer: &Peer<RoleClient>, spec: &ServerSpec) -> Result<Vec<To
         .collect())
 }
 
+async fn list_prompts(peer: &Peer<RoleClient>, server: &str) -> Result<Vec<PromptInfo>, String> {
+    if !peer
+        .peer_info()
+        .is_some_and(|info| info.capabilities.prompts.is_some())
+    {
+        return Ok(Vec::new());
+    }
+    let prompts = peer
+        .list_all_prompts()
+        .await
+        .map_err(|e| format!("listing prompts: {e}"))?;
+    Ok(prompts
+        .into_iter()
+        .map(|p| PromptInfo {
+            server: server.to_owned(),
+            description: p.description.unwrap_or_default(),
+            arguments: p
+                .arguments
+                .unwrap_or_default()
+                .into_iter()
+                .map(|a| PromptArg {
+                    name: a.name,
+                    description: a.description.unwrap_or_default(),
+                    required: a.required.unwrap_or(false),
+                })
+                .collect(),
+            name: p.name,
+        })
+        .collect())
+}
+
+/// Resources, then resource templates. Read through JSON, so every spec revision's
+/// shape works.
+async fn list_resources(
+    peer: &Peer<RoleClient>,
+    server: &str,
+) -> Result<Vec<ResourceInfo>, String> {
+    if !peer
+        .peer_info()
+        .is_some_and(|info| info.capabilities.resources.is_some())
+    {
+        return Ok(Vec::new());
+    }
+    let resources = peer
+        .list_all_resources()
+        .await
+        .map_err(|e| format!("listing resources: {e}"))?;
+    // Templates are optional; a server without them answers "method not found".
+    let templates = peer.list_all_resource_templates().await.unwrap_or_default();
+    let info = |v: Value, template: bool| {
+        let field = |k: &str| {
+            v.get(k)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned()
+        };
+        ResourceInfo {
+            server: server.to_owned(),
+            uri: field(if template { "uriTemplate" } else { "uri" }),
+            name: field("name"),
+            description: field("description"),
+            mime_type: field("mimeType"),
+            template,
+        }
+    };
+    Ok(resources
+        .iter()
+        .map(|r| info(serde_json::to_value(r).unwrap_or_default(), false))
+        .chain(
+            templates
+                .iter()
+                .map(|t| info(serde_json::to_value(t).unwrap_or_default(), true)),
+        )
+        .filter(|r| !r.uri.is_empty())
+        .collect())
+}
+
 type Headers = std::collections::HashMap<
     quack_providers::reqwest::header::HeaderName,
     quack_providers::reqwest::header::HeaderValue,
@@ -623,25 +986,154 @@ async fn http_parts(
     .map_err(|e| e.to_string())?
 }
 
-/// Re-lists tools when the server says they changed. Roots and logging are left out:
-/// both are deprecated in 2026-07-28, and stdio servers start in the workspace root.
+/// Re-lists tools, prompts and resources when the server says they changed, and passes
+/// its forms and sampling requests to the asker. Roots and logging are left out: both are
+/// deprecated in 2026-07-28, and stdio servers start in the workspace root.
 #[derive(Clone)]
 struct Handler {
     manager: Weak<McpManager>,
     idx: usize,
 }
 
+impl Handler {
+    /// Send `ask` to the asker and wait for the answer, which `None` means never came.
+    /// While waiting, the server's requests don't time out.
+    async fn ask<T>(
+        &self,
+        ask: impl FnOnce(oneshot::Sender<T>) -> ServerAsk,
+        ct: &CancellationToken,
+    ) -> Option<T> {
+        let m = self.manager.upgrade()?;
+        let asker = m.asker()?;
+        let server = &m.servers[self.idx];
+        let (tx, rx) = oneshot::channel();
+        server.asking.fetch_add(1, Ordering::SeqCst);
+        let answer = match asker.send(ask(tx)).await {
+            Ok(()) => tokio::select! {
+                a = rx => a.ok(),
+                () = ct.cancelled() => None,
+            },
+            Err(_) => None,
+        };
+        server.asked.fetch_add(1, Ordering::SeqCst);
+        server.asking.fetch_sub(1, Ordering::SeqCst);
+        answer
+    }
+
+    fn id(&self) -> String {
+        self.manager
+            .upgrade()
+            .map(|m| m.servers[self.idx].spec.id.clone())
+            .unwrap_or_default()
+    }
+}
+
 impl ClientHandler for Handler {
     fn get_info(&self) -> ClientConfig {
+        let mut caps = ClientCapabilities::default();
+        if self.manager.upgrade().and_then(|m| m.asker()).is_some() {
+            caps.elicitation =
+                Some(ElicitationCapability::new().with_form(FormElicitationCapability::new()));
+            caps.sampling = Some(SamplingCapability::default());
+        }
         ClientConfig::new(
-            ClientCapabilities::default(),
+            caps,
             Implementation::new("quack", env!("CARGO_PKG_VERSION")),
         )
     }
 
+    async fn create_elicitation(
+        &self,
+        request: ElicitRequestParams,
+        context: RequestContext<RoleClient>,
+    ) -> Result<ElicitResult, ErrorData> {
+        // quack offers forms only, so a URL request shouldn't come; decline it if it does.
+        let ElicitRequestParams::FormElicitationParams {
+            message,
+            requested_schema,
+            ..
+        } = request
+        else {
+            return Ok(ElicitResult::new(ElicitationAction::Decline));
+        };
+        let schema = serde_json::to_value(&requested_schema).unwrap_or_default();
+        let form = Form::from_schema(message, &schema);
+        let server = self.id();
+        let answer = self
+            .ask(
+                |reply| ServerAsk::Elicit {
+                    server,
+                    form,
+                    reply,
+                },
+                &context.ct,
+            )
+            .await;
+        Ok(match answer {
+            Some(Elicited::Accept(content)) => {
+                ElicitResult::new(ElicitationAction::Accept).with_content(Value::Object(content))
+            }
+            Some(Elicited::Cancel) => ElicitResult::new(ElicitationAction::Cancel),
+            Some(Elicited::Decline) | None => ElicitResult::new(ElicitationAction::Decline),
+        })
+    }
+
+    #[allow(
+        deprecated,
+        reason = "sampling is deprecated in 2026-07-28 but still served"
+    )]
+    async fn create_message(
+        &self,
+        params: rmcp::model::CreateMessageRequestParams,
+        context: RequestContext<RoleClient>,
+    ) -> Result<rmcp::model::CreateMessageResult, ErrorData> {
+        let request =
+            SampleRequest::from_params(&serde_json::to_value(&params).unwrap_or_default())
+                .map_err(|e| ErrorData::invalid_params(e, None))?;
+        let server = self.id();
+        let answer = self
+            .ask(
+                |reply| ServerAsk::Sample {
+                    server,
+                    request,
+                    reply,
+                },
+                &context.ct,
+            )
+            .await
+            .unwrap_or_else(|| Err("quack can't answer sampling requests right now".into()))
+            .map_err(|e| ErrorData::invalid_request(e, None))?;
+        let stop = if answer.truncated {
+            "maxTokens"
+        } else {
+            "endTurn"
+        };
+        serde_json::from_value(serde_json::json!({
+            "model": answer.model,
+            "stopReason": stop,
+            "role": "assistant",
+            "content": {"type": "text", "text": answer.text},
+        }))
+        .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
     async fn on_tool_list_changed(&self, context: NotificationContext<RoleClient>) {
         if let Some(m) = self.manager.upgrade() {
-            m.relist(self.idx, context.peer.clone()).await;
+            m.relist(self.idx, context.peer.clone(), List::Tools).await;
+        }
+    }
+
+    async fn on_prompt_list_changed(&self, context: NotificationContext<RoleClient>) {
+        if let Some(m) = self.manager.upgrade() {
+            m.relist(self.idx, context.peer.clone(), List::Prompts)
+                .await;
+        }
+    }
+
+    async fn on_resource_list_changed(&self, context: NotificationContext<RoleClient>) {
+        if let Some(m) = self.manager.upgrade() {
+            m.relist(self.idx, context.peer.clone(), List::Resources)
+                .await;
         }
     }
 }
@@ -665,6 +1157,43 @@ pub fn model_tool_name(server: &str, tool: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prompt_arguments() {
+        let arg = |name: &str, required: bool| PromptArg {
+            name: name.into(),
+            description: String::new(),
+            required,
+        };
+        let p = PromptInfo {
+            server: "gh".into(),
+            name: "review".into(),
+            description: String::new(),
+            arguments: vec![arg("pr", true), arg("focus", false)],
+        };
+        assert_eq!(p.usage(), "<pr> [focus]");
+        let get = |line: &str| p.parse_args(line).map(|m| Value::Object(m).to_string());
+        assert_eq!(get("12").as_deref(), Ok(r#"{"pr":"12"}"#));
+        assert_eq!(
+            get("12 error handling only").as_deref(),
+            Ok(r#"{"focus":"error handling only","pr":"12"}"#)
+        );
+        assert_eq!(
+            get("focus=the tests pr=7").as_deref(),
+            Ok(r#"{"focus":"the tests","pr":"7"}"#)
+        );
+        let err = get("").expect_err("missing pr");
+        assert!(
+            err.contains("missing pr; usage: /gh:review <pr> [focus]"),
+            "{err}"
+        );
+        let none = PromptInfo {
+            arguments: Vec::new(),
+            ..p.clone()
+        };
+        assert!(none.parse_args("").is_ok());
+        assert!(none.parse_args("x").is_err());
+    }
 
     #[test]
     fn tool_names() {

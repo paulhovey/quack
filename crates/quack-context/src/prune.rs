@@ -225,11 +225,18 @@ fn aim_matches(call: &ToolCall, want: &(String, &'static str)) -> bool {
     aim(call).is_some_and(|a| a.0 == want.0)
 }
 
-/// File text from a `read` result: line numbers (`  12\t`, or hashline `12:ab|`) taken off,
-/// notes after the lines dropped.
+/// File text from a `read` result: line numbers (`  12\t`, or the older hashline `12:ab|`)
+/// taken off, a hashline `[path#tag]` header and notes after the lines dropped.
 fn unnumber(content: &str) -> String {
     let mut out = String::new();
-    for line in content.lines() {
+    let mut lines = content.lines().peekable();
+    if lines
+        .peek()
+        .is_some_and(|l| l.starts_with('[') && l.ends_with(']') && l.contains('#'))
+    {
+        lines.next();
+    }
+    for line in lines {
         let digits = line
             .trim_start()
             .chars()
@@ -496,6 +503,7 @@ mod tests {
             "fn a() {}\n\n"
         );
         assert_eq!(unnumber("1:ab|x\n2:cd|y\n"), "x\ny\n");
+        assert_eq!(unnumber("[a.rs#3f0c]\n   1\tx\n   2\ty\n"), "x\ny\n");
     }
 
     #[test]

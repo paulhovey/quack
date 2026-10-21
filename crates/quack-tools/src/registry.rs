@@ -37,7 +37,7 @@ pub enum Subject {
     },
     /// Loading an installed skill's instructions.
     Skill,
-    /// Turning on deferred MCP tools; changes nothing.
+    /// Turning on deferred MCP tools, or listing MCP resources; changes nothing.
     ToolSearch,
     /// Updating the model's own plan (`todo`); changes nothing.
     Plan,
@@ -110,7 +110,34 @@ impl ToolOutput {
 #[derive(Debug, Default)]
 pub struct ReadTracker {
     seen: Mutex<HashMap<PathBuf, (Option<SystemTime>, u64)>>,
+    /// With hashline edits: each version of a file the model was shown, newest last.
+    views: Mutex<HashMap<PathBuf, Vec<View>>>,
 }
+
+/// One version of a file the model was shown under a hashline tag: its text, and which
+/// lines (1-based, inclusive) a `read`, `grep` or edit result showed of it.
+#[derive(Debug, Clone)]
+pub struct View {
+    pub tag: String,
+    pub text: Arc<str>,
+    pub shown: Vec<(usize, usize)>,
+    /// Only an edit result showed it: the first to go when too many are kept.
+    pub edited: bool,
+}
+
+impl View {
+    pub fn covers(&self, line: usize) -> bool {
+        self.shown.iter().any(|(a, b)| (*a..=*b).contains(&line))
+    }
+
+    /// Whether any lines of it were shown.
+    pub fn covers_any(&self) -> bool {
+        self.shown.iter().any(|(a, b)| *a >= 1 && b >= a)
+    }
+}
+
+/// Versions kept per file: enough to read numbers from a few edits back.
+const VIEWS_KEPT: usize = 8;
 
 impl ReadTracker {
     fn stamp(path: &Path) -> Option<(Option<SystemTime>, u64)> {
@@ -133,6 +160,50 @@ impl ReadTracker {
             Some(recorded) => Self::stamp(path).is_some_and(|now| now != *recorded),
             None => false,
         }
+    }
+
+    /// Note that the model was shown `lines` of `text` (the file's whole, LF-normalized
+    /// content) under `tag`. Showing a version again makes it the newest.
+    pub fn saw(&self, path: &Path, tag: &str, text: &str, lines: (usize, usize)) {
+        self.note(path, tag, text, &[lines], false);
+    }
+
+    /// Note the version an edit made, of which its result gave `lines` (the new ones).
+    pub fn edited(&self, path: &Path, tag: &str, text: &str, lines: &[(usize, usize)]) {
+        self.note(path, tag, text, lines, true);
+    }
+
+    fn note(&self, path: &Path, tag: &str, text: &str, lines: &[(usize, usize)], edit: bool) {
+        let Ok(mut views) = self.views.lock() else {
+            return;
+        };
+        let list = views.entry(path.to_path_buf()).or_default();
+        let mut view = match list.iter().position(|v| v.tag == tag) {
+            Some(i) => list.remove(i),
+            None => View {
+                tag: tag.to_owned(),
+                text: text.into(),
+                shown: Vec::new(),
+                edited: edit,
+            },
+        };
+        view.edited &= edit;
+        view.shown.extend_from_slice(lines);
+        list.push(view);
+        if list.len() > VIEWS_KEPT {
+            // Versions only edit results showed go first, keeping those read from.
+            let edited = list[..list.len() - 1].iter().position(|v| v.edited);
+            list.remove(edited.unwrap_or(0));
+        }
+    }
+
+    /// The versions of `path` the model was shown, oldest first.
+    pub fn views(&self, path: &Path) -> Vec<View> {
+        self.views
+            .lock()
+            .ok()
+            .and_then(|v| v.get(path).cloned())
+            .unwrap_or_default()
     }
 }
 
@@ -168,6 +239,8 @@ pub struct ToolCtx {
     /// `read` without a range returns the outline of files longer than this many bytes,
     /// when their language has one. 0: always the content.
     pub outline_above: usize,
+    /// Grammars and their `grammars/` query overrides, for outlines.
+    pub grammars: Arc<crate::grammar::Grammars>,
 }
 
 impl ToolCtx {
@@ -272,6 +345,7 @@ pub(crate) fn test_ctx() -> ToolCtx {
         spawn: None,
         edit_format: EditFormat::StrReplace,
         outline_above: 0,
+        grammars: crate::grammar::Grammars::builtin(),
     }
 }
 

@@ -48,6 +48,8 @@ pub struct AppInfo {
     pub layers: Vec<(String, String)>,
     /// `(list, rule)` from `[permissions]`, e.g. `("allow", "shell:git status*")`.
     pub rules: Vec<(String, String)>,
+    /// `grammars/` folders of the active layers, lowest first, for highlighting.
+    pub grammar_dirs: Vec<std::path::PathBuf>,
 }
 
 impl AppInfo {
@@ -69,6 +71,11 @@ impl AppInfo {
             ui: config.settings.ui.clone(),
             no_color: std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()),
             settings: config.setting_rows(),
+            grammar_dirs: config
+                .item_layers()
+                .into_iter()
+                .map(|(_, d)| d.join("grammars"))
+                .collect(),
             rules: {
                 let p = &config.settings.permissions;
                 [("deny", &p.deny), ("ask", &p.ask), ("allow", &p.allow)]
@@ -434,6 +441,8 @@ pub struct App {
     pub(crate) startup: Vec<(Subsystem, LoadState)>,
     pub(crate) startup_done: bool,
     pub(crate) transcript: Vec<Entry>,
+    /// Highlighted code blocks, filled as assistant text arrives; drawing only reads it.
+    pub(crate) highlights: crate::highlight::Highlights,
     pub(crate) input: Input,
     pub(crate) modal: Option<Modal>,
     /// Transcript rows scrolled up from the bottom. Drawing clamps it and keeps the view
@@ -488,6 +497,8 @@ pub struct App {
     skills: Vec<quack_protocol::SkillInfo>,
     /// Custom slash commands, minus any that a built-in command's name hides.
     custom: Vec<quack_protocol::CommandInfo>,
+    /// Prompts of the ready MCP servers, runnable as `/<server>:<prompt>`.
+    mcp_prompts: Vec<quack_protocol::CommandInfo>,
     /// What `/setup` has found so far.
     setup: modal::SetupView,
     /// A question from `/setup`, drawn over everything else.
@@ -518,6 +529,9 @@ impl App {
                 .collect(),
             startup_done: false,
             transcript: Vec::new(),
+            highlights: crate::highlight::Highlights::new(std::sync::Arc::new(
+                quack_core::grammar::Grammars::new(info.grammar_dirs.clone()),
+            )),
             input: Input::default(),
             modal: None,
             scroll: Cell::new(0),
@@ -549,6 +563,7 @@ impl App {
             clipboard: None,
             skills: Vec::new(),
             custom: Vec::new(),
+            mcp_prompts: Vec::new(),
             setup: modal::SetupView::default(),
             prompt: None,
             setup_adding: false,
@@ -650,6 +665,17 @@ impl App {
                 }),
         );
         items.extend(
+            fuzzy::filter(query, self.mcp_prompts.iter().map(|c| c.name.as_str()))
+                .into_iter()
+                .map(|i| PopupItem {
+                    name: self.mcp_prompts[i].name.clone(),
+                    args: self.mcp_prompts[i].args.clone(),
+                    description: self.mcp_prompts[i].description.clone(),
+                    hint: Some("mcp"),
+                    command: None,
+                }),
+        );
+        items.extend(
             fuzzy::filter(query, self.skills.iter().map(|s| s.name.as_str()))
                 .into_iter()
                 .map(|i| PopupItem {
@@ -693,6 +719,46 @@ impl App {
 
     pub fn on_engine(&mut self, event: Event) {
         self.dirty = true;
+        // Assistant text changed: the last entry, or any of them.
+        let code = match &event {
+            Event::AssistantDelta { .. } => Some(false),
+            Event::AssistantRewrite { .. } | Event::SessionResumed { .. } => Some(true),
+            _ => None,
+        };
+        self.on_engine_event(event);
+        if let Some(all) = code {
+            self.highlight_code(all);
+        }
+    }
+
+    /// Highlight the closed code blocks of assistant messages: the last one, or all.
+    fn highlight_code(&mut self, all: bool) {
+        let skip = if all {
+            0
+        } else {
+            self.transcript.len().saturating_sub(1)
+        };
+        for entry in &self.transcript[skip..] {
+            if let Entry::Assistant(text) = entry {
+                self.highlights.scan(text);
+            }
+        }
+    }
+
+    /// A highlight finished on the blocking thread.
+    pub fn on_highlighted(&mut self, done: (u64, Option<crate::highlight::Runs>)) {
+        self.highlights.done(done);
+        self.dirty = true;
+    }
+
+    /// Where highlights done off-thread arrive; the event loop takes it once.
+    pub fn take_highlight_results(
+        &mut self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<(u64, Option<crate::highlight::Runs>)>> {
+        self.highlights.take_results()
+    }
+
+    fn on_engine_event(&mut self, event: Event) {
         match event {
             Event::StartupProgress { subsystem, state } => {
                 if let Some(row) = self.startup.iter_mut().find(|(s, _)| *s == subsystem) {
@@ -798,6 +864,7 @@ impl App {
                 }
                 self.custom = kept;
             }
+            Event::McpPrompts { prompts } => self.mcp_prompts = prompts,
             Event::FilesRestored {
                 restored,
                 conflicts,
@@ -1803,9 +1870,11 @@ impl App {
         let (name, args) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
         match commands::find(name) {
             Some(cmd) => self.run_command(cmd, args.trim()),
-            // The engine expands `/<skill> args` into the skill's instructions.
+            // The engine expands `/<skill> args` into the skill's instructions, and fetches
+            // MCP prompts.
             None if self.skills.iter().any(|s| s.name == name)
-                || self.custom.iter().any(|c| c.name == name) =>
+                || self.custom.iter().any(|c| c.name == name)
+                || self.mcp_prompts.iter().any(|c| c.name == name) =>
             {
                 self.send(text.trim().to_owned());
             }
@@ -2004,7 +2073,15 @@ impl App {
                     );
                 }
             }
-            "commands" => self.modal = Some(modal::custom_commands(&self.custom, &self.theme)),
+            "commands" => {
+                let all: Vec<_> = self
+                    .custom
+                    .iter()
+                    .chain(&self.mcp_prompts)
+                    .cloned()
+                    .collect();
+                self.modal = Some(modal::custom_commands(&all, &self.theme));
+            }
             "doctor" => {
                 self.modal = Some(modal::doctor(None, &self.theme));
                 self.ops.push(Op::RunDoctor);
@@ -2153,6 +2230,12 @@ impl App {
         ) = keep;
         self.theme = Theme::resolve(&self.info.ui.theme, self.info.no_color);
         self.glyphs = Glyphs::new(self.info.ui.ascii);
+        // Query overrides may have changed.
+        self.highlights
+            .reset(std::sync::Arc::new(quack_core::grammar::Grammars::new(
+                self.info.grammar_dirs.clone(),
+            )));
+        self.highlight_code(true);
         self.dirty = true;
     }
 
@@ -2247,7 +2330,42 @@ mod tests {
             settings: Vec::new(),
             layers: Vec::new(),
             rules: Vec::new(),
+            grammar_dirs: Vec::new(),
         }
+    }
+
+    // Without a runtime (a plain `#[test]`), highlighting happens on the spot.
+    #[test]
+    fn code_blocks_are_highlighted_when_they_close() {
+        if !quack_core::grammar::Grammars::compiled_in() {
+            return;
+        }
+        let mut app = App::new(info());
+        app.on_engine(Event::AssistantDelta {
+            text: "Here:\n\n```rust\nfn a() {}\n".into(),
+        });
+        assert!(app.highlights.get("rust", "fn a() {}\n").is_none());
+        app.on_engine(Event::AssistantDelta {
+            text: "```\n".into(),
+        });
+        assert!(app.highlights.get("rust", "fn a() {}\n").is_some());
+    }
+
+    #[tokio::test]
+    async fn large_code_blocks_are_highlighted_off_thread() {
+        if !quack_core::grammar::Grammars::compiled_in() {
+            return;
+        }
+        let mut app = App::new(info());
+        let mut results = app.take_highlight_results().expect("receiver");
+        let code = "let x = 1;\n".repeat(2_000);
+        app.on_engine(Event::AssistantDelta {
+            text: format!("```rust\n{code}```\n"),
+        });
+        assert!(app.highlights.get("rust", &code).is_none());
+        let done = results.recv().await.expect("a result");
+        app.on_highlighted(done);
+        assert!(app.highlights.get("rust", &code).is_some());
     }
 
     fn press(app: &mut App, code: KeyCode) {
@@ -2292,6 +2410,35 @@ mod tests {
         assert!(matches!(
             app.take_ops().as_slice(),
             [Op::UserTurn { items, .. }] if items == &vec![InputItem::text("/review the cache")]
+        ));
+    }
+
+    #[test]
+    fn mcp_prompts_in_the_popup_and_sent_as_turns() {
+        let mut app = App::new(info());
+        app.on_engine(Event::McpPrompts {
+            prompts: vec![quack_protocol::CommandInfo {
+                name: "gh:review".into(),
+                description: "Review a pull request".into(),
+                args: "<pr>".into(),
+                source: "mcp: gh".into(),
+                path: String::new(),
+            }],
+        });
+        type_str(&mut app, "/gh:re");
+        let popup = app.popup_matches();
+        assert!(
+            popup
+                .iter()
+                .any(|p| p.name == "gh:review" && p.hint == Some("mcp")),
+            "{popup:?}"
+        );
+        app.input.clear();
+        type_str(&mut app, "/gh:review 12");
+        press(&mut app, KeyCode::Enter);
+        assert!(matches!(
+            app.take_ops().as_slice(),
+            [Op::UserTurn { items, .. }] if items == &vec![InputItem::text("/gh:review 12")]
         ));
     }
 
