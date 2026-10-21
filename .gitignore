@@ -79,6 +79,7 @@ $RECYCLE.BIN/
 .skills
 .agents/skills
 .claude/skills
+frontierharness-eval/
 
 # Python bytecode from running the eval tasks locally.
 __pycache__/

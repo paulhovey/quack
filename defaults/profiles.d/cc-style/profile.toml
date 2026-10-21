@@ -1,11 +1,12 @@
 #:schema ../../schemas/profile.json
-description = "Tools named and shaped like Claude Code's (Read, Edit, Bash, ...), for models trained with such harnesses (GLM, MiniMax, DeepSeek, MiMo)"
+description = "Tools named and shaped like Claude Code's (Read, Edit, Bash, ...), for models trained with such harnesses (MiniMax, MiMo; GLM and DeepSeek have their own `zcode` and `dsh` profiles)"
 source = "Original prompt text (quack project, Apache-2.0). Only the tool names and parameter shapes follow Claude Code conventions; no Claude Code text is used"
 
 # Not chosen automatically until the eval shows it beats `generic` for these families
 # (docs/plan/03-model-profiles.md#evaluating-profiles). Proposed:
-#   model = ["*glm-5*", "*glm-4.6*", "*minimax-m*", "*deepseek-v4*", "*mimo*"]
+#   model = ["*minimax-m*", "*mimo*"]
 #   priority = 40
+# GLM-5 and DeepSeek-V4 moved to `zcode` and `dsh` (enabled 2026-10-20).
 # Use it now with `profile = "cc-style"` on a model.
 [match]
 model = []

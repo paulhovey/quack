@@ -87,8 +87,9 @@ Everything below works today. Planned work is listed separately at the end.
   it off.
 - Model profiles adapt prompts and tools per model family, using Jinja-style templates:
   tool names, parameter names, descriptions, the edit format and sampling. Besides
-  `generic`, the bundle has `qwen-code`, `cc-style` (GLM, MiniMax, DeepSeek, MiMo),
-  `kimi-code` and `codex` (gpt-oss). They are used only when chosen (`profile = "qwen-code"`
+  `generic`, the bundle has `qwen-code`, `cc-style` (GLM, MiniMax, DeepSeek, MiMo), `zcode`
+  (GLM, Z.ai's ZCode shapes), `kimi-code`, `codex` (gpt-oss), `dsh` (DeepSeek Harness
+  shapes) and `vibe` (Mistral's Vibe shapes). They are used only when chosen (`profile = "qwen-code"`
   on a model, `--profile`, `[model] profile`, or `/profiles`) until the eval shows they beat
   `generic`. The per-session part of the prompt (workspace, date, AGENTS.md, memory) goes
   at the start of the first user message (`context.md`), so the system prompt and tools are

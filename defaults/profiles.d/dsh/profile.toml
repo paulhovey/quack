@@ -1,0 +1,46 @@
+#:schema ../../schemas/profile.json
+description = "DeepSeek Harness-shaped tools (read, write, edit, bash, todo_write) as DeepSeek trains V4 coding models"
+source = "Original prompt text (quack project, Apache-2.0). Only the tool names and parameter shapes follow deepseek-ai/deepseek-harness (MIT); no DeepSeek Harness text is used"
+
+# Enabled for DeepSeek V4 on 2026-10-20: hard suite, 3 repeats,
+# deepseek-v4.1-flash-1017 on Charm Hyper matched `generic` at 42/42 with
+# clearly fewer steps and clearly lower cost, and no parse failures
+# (evals/results/2026-10-20).
+[match]
+model = ["*deepseek-v4*", "deepseek-flash"]
+priority = 50
+
+[defaults]
+edit_format = "str_replace"
+
+[[tools]]
+name = "read"
+maps_to = "read"
+description = "Reads a file, with line numbers. Long files are clipped; when that happens, search inside the file for the lines you need and read that range with `offset` and `limit`."
+
+[[tools]]
+name = "write"
+maps_to = "write"
+description = "Creates a file (or replaces one entirely) with the given content."
+
+[[tools]]
+name = "edit"
+maps_to = "edit"
+description = "Replaces an exact literal string in a file: `old_string` must match the file character for character, including whitespace. Read the file first; make several small edits rather than one fragile huge one."
+
+[[tools]]
+name = "bash"
+maps_to = "shell"
+description = "Runs a shell command in the workspace and returns its output with the exit status. Batch related file inspection into one command (grep -n, sed -n ranges, head/tail) instead of many small calls."
+
+[[tools]]
+name = "todo_write"
+maps_to = "todo"
+description = "Writes the task list for multi-step work. Send the WHOLE list on every call, mark each task you are actively working on in_progress (several at once when work runs in parallel), and mark a task completed as soon as it is done."
+[tools.params]
+todos = { to = "items" }
+
+[[tools]]
+name = "task"
+maps_to = "task"
+description = "Delegates a self-contained chunk of work to a fresh agent with its own context window and reports back. Hand it the question plus everything it needs to act without asking back; do not wait idle if you can work on an independent step."

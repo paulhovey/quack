@@ -6,7 +6,11 @@ Open-weight coding models are post-trained (often with RL) inside a specific age
 
 - Qwen (Qwen3-Coder, Qwen3.5/3.6) ↔ Qwen Code (a Gemini-CLI-derived tool set: `read_file`, `edit`, `run_shell_command`, …)
 - Kimi (K2 → K3) ↔ Kimi Code / Kimi CLI (`ReadFile`, `StrReplaceFile`, `Shell`, …)
-- GLM (4.x → 5.x) ↔ Claude-Code-style tools (`Read`, `Edit`, `Bash`, …)
+- GLM (4.x → 5.x) ↔ ZCode, Z.ai's Claude-Code-shaped harness (`Read`, `Edit`, `Bash`, …)
+- DeepSeek (V4.x) ↔ DeepSeek Harness (`read`, `write`, `edit`, `bash`, `todo_write`, …; bash-first) and, officially, Claude Code through their Anthropic-compatible endpoint
+- MiniMax, MiMo ↔ Claude-Code-style tools (`Read`, `Edit`, `Bash`, …)
+- Mistral (Large 4, Codestral) ↔ Mistral Vibe (`read_file`, `write_file`, `edit`, `bash`, `grep`, `todo`, …)
+- Meta Muse Spark ↔ no open harness (Muse Code is closed); OpenAI-style native tool calls and their prompting guide's structure
 - gpt-oss ↔ Codex-style tools (`shell`, `apply_patch`) in the harmony format
 - Small or weak models ↔ SWE-agent-style plain-text commands, with no tool schemas at all
 
@@ -169,7 +173,10 @@ The system prompt and context templates use `minijinja` and these variables:
 | `qwen-code` | Qwen3-Coder, Qwen3.5/3.6 | QwenLM/qwen-code (Apache-2.0); verify licence at time of derivation |
 | `kimi-code` | Kimi K3 (and K2) | MoonshotAI kimi-cli; verify licence |
 | `codex` | gpt-oss | openai/codex prompts and `apply_patch` (Apache-2.0) |
-| `cc-style` | GLM-5.x, MiniMax, DeepSeek V4, MiMo (verify each) | Original prompt text written by us. Only the tool *names and shapes* follow Claude-Code conventions. Claude Code's prompt is not openly licensed, so it is **not** copied |
+| `cc-style` | MiniMax, MiMo (GLM and DeepSeek moved to their own profiles) | Original prompt text written by us. Only the tool *names and shapes* follow Claude-Code conventions. Claude Code's prompt is not openly licensed, so it is **not** copied |
+| `zcode` | GLM-5.x | Original prompt text. Tool names and shapes follow zai-org/ZCode (Apache-2.0), Z.ai's own Claude-Code-shaped harness |
+| `dsh` | DeepSeek V4.x | Original prompt text. Tool names and shapes follow deepseek-ai/deepseek-harness (MIT): lowercase, literal-replacement `edit`, `todo_write`, bash-first |
+| `vibe` | Mistral Large 4, Codestral | Original prompt text. Tool names and shapes follow mistralai/mistral-vibe (Apache-2.0), Mistral's own CLI coding agent |
 | `swe-agent` | Small/weak models (≤14B) | SWE-agent (MIT). Text-only commands, observation loop |
 
 Licensing rule: every profile's `source` field states where the prompt and tool descriptions come from, and the shipped defaults must only derive from permissively licensed material. CI checks that `source` is present.
@@ -180,7 +187,7 @@ Profiles are judged by measurement, not opinion. The eval suite ([13](13-testing
 
 ## As implemented (2026-10-18)
 
-- **Shipped**: `generic`, plus `qwen-code`, `cc-style`, `kimi-code` and `codex`. The four family profiles have empty `[match]` lists, so they are used only when chosen: `profile = "<id>"` on a model, `--profile <id>`, or `[model] profile` for every model in the session. Each `profile.toml` has the proposed globs in a comment, to enable once `quack eval` shows the profile at least matches `generic` for that family.
+- **Shipped**: `generic`, plus `qwen-code`, `cc-style`, `kimi-code`, `codex`, `zcode`, `dsh` and `vibe`. `zcode` (`*glm-5*`) and `dsh` (`*deepseek-v4*`, `deepseek-flash`) are auto-selected for their families since the 2026-10-20 eval; the other family profiles have empty `[match]` lists, so they are used only when chosen: `profile = "<id>"` on a model, `--profile <id>`, or `[model] profile` for every model in the session. Each unchosen profile's `profile.toml` has the proposed globs in a comment, to enable once `quack eval` shows the profile at least matches `generic` for that family.
 - **Prompts** are original text written for this project; only tool names and parameter shapes follow each family's harness, and each `source` says which. `swe-agent` is not built: it needs a text-only tool mode that does not exist yet.
 - **Tool surface**: `[[tools]]` renames tools and parameters and may replace descriptions (inline, or a `.md` file in the profile directory). Internal tools a profile does not list are still offered under their internal names, unless the profile sets `exclusive = true` (the `codex` profile does: shell, apply_patch, update_plan, memory, skill). A mapping onto a tool that is merely off this session (`lsp` without servers, `skill` without skills, another edit format's tool) is skipped without a warning.
 - **Parameters**: `transform` is `abs_to_workspace`, `zero_to_one_based`, `one_to_zero_based`, `join_lines` (an array of lines becomes one string; shown to the model as an array) or `argv` (an argument list becomes one command line; `["bash", "-lc", script]` gives the script). `default` fills a parameter the model left out and makes it optional in the schema; `[tools.fixed]` sends internal parameters with a fixed value and hides them.

@@ -1,0 +1,69 @@
+#:schema ../../schemas/profile.json
+description = "ZCode-shaped tools (Read, Edit, Bash, TodoWrite, ...) as Z.ai trains GLM coding models"
+source = "Original prompt text (quack project, Apache-2.0). Only the tool names and parameter shapes follow zai-org/ZCode (Apache-2.0); no ZCode text is used"
+
+# Enabled for GLM 5.x on 2026-10-20: hard suite, 3 repeats, glm-5.3-flash on
+# Charm Hyper beat `generic` (37/42 vs 35/42 tasks, clearly fewer steps per task
+# with the same parse-failure count of zero; evals/results/2026-10-20).
+[match]
+model = ["*glm-5*"]
+priority = 50
+
+[defaults]
+edit_format = "str_replace"
+
+[[tools]]
+name = "Read"
+maps_to = "read"
+description = "Reads a file from the workspace. Returns the whole file by default, with line numbers; for long files pass `offset` (1-based line to start at) and `limit`. Read a file before editing it."
+[tools.params]
+file_path = { to = "path" }
+
+[[tools]]
+name = "Write"
+maps_to = "write"
+[tools.params]
+file_path = { to = "path" }
+
+[[tools]]
+name = "Edit"
+maps_to = "edit"
+description = "Replaces one exact string in a file. `old_string` must match the file byte for byte, including indentation, and be unique unless `replace_all` is true. Prefer it over rewriting the file with Write."
+[tools.params]
+file_path = { to = "path" }
+
+[[tools]]
+name = "Bash"
+maps_to = "shell"
+
+[[tools]]
+name = "Glob"
+maps_to = "glob"
+
+[[tools]]
+name = "Grep"
+maps_to = "grep"
+[tools.params]
+"-i" = { to = "case_insensitive" }
+
+[[tools]]
+name = "LS"
+maps_to = "list_dir"
+
+[[tools]]
+name = "TodoWrite"
+maps_to = "todo"
+description = "Writes the task list. Send the whole list every call: what is left as pending, one or more tasks in_progress while work is running, and completed tasks kept with their final status."
+[tools.params]
+todos = { to = "items" }
+
+[[tools]]
+name = "AskUserQuestion"
+maps_to = "ask_user"
+
+[[tools]]
+name = "Task"
+maps_to = "task"
+description = "Delegates a self-contained job to a fresh agent with its own context window: broad codebase searches, or a multi-step investigation whose details would crowd this conversation. Give it the question and everything it needs to act without asking back."
+[tools.params]
+subagent_type = { to = "agent" }
