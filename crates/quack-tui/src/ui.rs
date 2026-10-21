@@ -233,6 +233,28 @@ const TOOL_LIVE_LINES: usize = 6;
 /// Output lines shown under a successful command.
 const TOOL_OK_LINES: usize = 3;
 
+fn assistant_lead(app: &App, is_head: bool) -> Vec<Span<'static>> {
+    let lead_w = 2 + app.glyphs.assistant.width();
+    if !is_head {
+        return vec![Span::raw(" ".repeat(lead_w))];
+    }
+    let (body_style, beak_style) = app.theme.duck();
+    if let Some(body) = app.glyphs.assistant.strip_suffix('>') {
+        vec![
+            Span::raw(" "),
+            Span::styled(body.to_owned(), body_style),
+            Span::styled(">", beak_style),
+            Span::raw(" "),
+        ]
+    } else {
+        vec![
+            Span::raw(" "),
+            Span::styled(app.glyphs.assistant, body_style),
+            Span::raw(" "),
+        ]
+    }
+}
+
 fn transcript_rows(app: &App, width: usize) -> Vec<Line<'static>> {
     let t = &app.theme;
     let mut rows = Vec::new();
@@ -276,12 +298,7 @@ fn transcript_rows(app: &App, width: usize) -> Vec<Line<'static>> {
                     .into_iter()
                     .enumerate()
                 {
-                    let lead = if i == 0 {
-                        format!(" {} ", app.glyphs.assistant)
-                    } else {
-                        " ".repeat(lead_w)
-                    };
-                    let mut spans = vec![Span::styled(lead, t.accent)];
+                    let mut spans = assistant_lead(app, i == 0);
                     spans.extend(row);
                     rows.push(Line::from(spans));
                 }
@@ -765,7 +782,8 @@ fn draw_popup(f: &mut Frame<'_>, app: &App, above: Rect) {
     };
     // Under the list: what the selected row could not show (the rest of its description,
     // aliases, when it lands), sized for the tallest so the popup doesn't jump.
-    let about_w = inner_w.saturating_sub(3).max(10);
+    let lead_w = 2 + g.assistant.width();
+    let about_w = inner_w.saturating_sub(lead_w).max(10);
     let about = |i: &PopupItem| {
         let mut parts = Vec::new();
         if i.description.width() > room(i) {
@@ -873,15 +891,9 @@ fn draw_popup(f: &mut Frame<'_>, app: &App, above: Rect) {
         lines.push(Line::styled(g.rule.repeat(inner_w), t.border));
     }
     for (n, l) in about_lines.into_iter().enumerate() {
-        let lead = if n == 0 && !l.is_empty() {
-            g.assistant
-        } else {
-            " "
-        };
-        lines.push(Line::from(vec![
-            Span::styled(format!(" {lead} "), t.accent),
-            Span::styled(l, t.sel_text),
-        ]));
+        let mut spans = assistant_lead(app, n == 0 && !l.is_empty());
+        spans.push(Span::styled(l, t.sel_text));
+        lines.push(Line::from(spans));
     }
 
     let count = if matches.len() > rows {
@@ -1308,10 +1320,7 @@ fn welcome(app: &App, area: Rect) -> Vec<Line<'static>> {
         }));
         return lines;
     }
-    let body = t.warn;
-    let beak = t.gradient.get(1).map_or(t.warn, |c| {
-        Style::new().fg(ratatui::style::Color::Rgb(c.0, c.1, c.2))
-    });
+    let (body, beak) = t.duck();
 
     let step = if app.info.ui.reduced_motion {
         0

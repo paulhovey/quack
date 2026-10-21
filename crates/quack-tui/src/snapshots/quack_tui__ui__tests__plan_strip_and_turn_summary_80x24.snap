@@ -12,7 +12,7 @@ expression: "render(&app, 80, 24)"
 " ✗ shell cargo bench · exit 101                                                 "
 "     error: no bench target                                                     "
 "                                                                                "
-" 🦆 There is no bench target yet; adding one.                                   " Hidden by multi-width symbols: [(2, " ")]
+" _(•)> There is no bench target yet; adding one.                                "
 "                                                                                "
 "   ── 14s · 2 tools · 1.2k tokens out · 48 t/s ────────                         "
 "                                                                                "

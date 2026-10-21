@@ -204,6 +204,16 @@ impl Theme {
             })
             .collect()
     }
+
+    /// Body and beak styles for rubber duck glyphs and art.
+    pub fn duck(&self) -> (Style, Style) {
+        let body = self.warn;
+        let beak = self
+            .gradient
+            .get(1)
+            .map_or(self.warn, |c| Style::new().fg(Color::Rgb(c.0, c.1, c.2)));
+        (body, beak)
+    }
 }
 
 /// A small meter, e.g. `▰▰▰▱▱`, filled `frac` of `width` cells.
@@ -280,7 +290,7 @@ impl Glyphs {
                 spinner: &["|", "/", "-", "\\"],
                 border: ASCII_BORDER,
                 prompt: ">",
-                assistant: "*",
+                assistant: "_(o)>",
                 todo: ["[x]", "[~]", "[ ]"],
                 gutter: "|",
                 rule: "-",
@@ -299,7 +309,7 @@ impl Glyphs {
                 spinner: &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
                 border: border::ROUNDED,
                 prompt: "›",
-                assistant: "🦆",
+                assistant: "_(•)>",
                 todo: ["✓", "▶", "·"],
                 gutter: "▎",
                 rule: "─",
