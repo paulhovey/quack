@@ -2009,6 +2009,7 @@ mod tests {
                 prompt_tokens: 1,
                 completion_tokens: 1,
                 cached_prompt_tokens: None,
+                cache_write_tokens: None,
             },
         });
         let s = render(&app, 100, 30);
@@ -2030,6 +2031,7 @@ mod tests {
                 prompt_tokens: 10,
                 completion_tokens: 1234,
                 cached_prompt_tokens: None,
+                cache_write_tokens: None,
             },
         });
         let Some(Entry::TurnSummary(s)) = app.transcript.last() else {

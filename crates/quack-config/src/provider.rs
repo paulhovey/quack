@@ -42,6 +42,9 @@ pub struct ProviderFile {
     pub enabled: bool,
     #[serde(default)]
     pub api_key: Option<Secret>,
+    /// Sign in instead of a key (`quack login <id>`). Takes the place of `api_key`.
+    #[serde(default)]
+    pub auth: Option<Auth>,
     /// Default `Authorization`.
     #[serde(default)]
     pub auth_header: Option<String>,
@@ -56,6 +59,10 @@ pub struct ProviderFile {
     pub http: Http,
     #[serde(default)]
     pub discovery: Discovery,
+    /// Merged into every request body, under each model's own `extra_body`.
+    #[serde(default)]
+    #[schemars(with = "JsonMap")]
+    pub extra_body: toml::Table,
     /// Model ids as plain strings, or tables for per-model settings.
     #[serde(default, deserialize_with = "models_de")]
     #[schemars(with = "Vec<ModelSpec>")]
@@ -127,6 +134,25 @@ impl ProviderFile {
             .iter()
             .find(|m| m.id == name || m.alias.as_deref() == Some(name))
     }
+}
+
+/// A sign-in that gives the provider its tokens.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Auth {
+    #[serde(rename = "type")]
+    pub kind: AuthKind,
+    /// The sign-in server. It is contacted only by `quack login`, `quack logout`, and to
+    /// renew the token while the provider is in use.
+    pub issuer: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuthKind {
+    /// Sign in with ChatGPT: requests use the account's ChatGPT plan. Needs
+    /// `api = "openai-responses"`.
+    Chatgpt,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -332,14 +358,19 @@ pub struct Cost {
     pub output: f64,
     /// Prompt tokens served from the server's cache. Unset: the `input` price.
     pub cached_input: Option<f64>,
+    /// Prompt tokens written to the cache, where the server bills them apart. Unset: the
+    /// `input` price.
+    pub cache_write: Option<f64>,
 }
 
 impl Cost {
-    /// Dollars for one request.
-    pub fn of(&self, prompt: u32, cached: u32, completion: u32) -> f64 {
+    /// Dollars for one request: `cached` and `written` are parts of `prompt`.
+    pub fn of(&self, prompt: u32, cached: u32, written: u32, completion: u32) -> f64 {
         let cached = cached.min(prompt);
-        (f64::from(prompt - cached) * self.input
+        let written = written.min(prompt - cached);
+        (f64::from(prompt - cached - written) * self.input
             + f64::from(cached) * self.cached_input.unwrap_or(self.input)
+            + f64::from(written) * self.cache_write.unwrap_or(self.input)
             + f64::from(completion) * self.output)
             / 1_000_000.0
     }

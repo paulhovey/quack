@@ -103,6 +103,22 @@ pub(crate) enum Cmd {
         #[command(subcommand)]
         cmd: KeyringCmd,
     },
+    /// Sign in to a provider that uses a sign-in instead of a key (`[auth]`, such as
+    /// ChatGPT). Opens the browser.
+    #[cfg(feature = "auth-chatgpt")]
+    Login {
+        /// The provider id; may be left out when only one provider has a sign-in.
+        provider: Option<String>,
+        /// Sign in to another account instead of the saved one.
+        #[arg(long)]
+        new: bool,
+        /// Print the address instead of opening the browser.
+        #[arg(long)]
+        no_browser: bool,
+    },
+    /// Sign out of a provider's sign-in and revoke its token.
+    #[cfg(feature = "auth-chatgpt")]
+    Logout { provider: Option<String> },
     /// Run the eval task suite with the selected model and profile.
     Eval(EvalArgs),
     /// Run as a Zed Agent Client Protocol agent on stdio.

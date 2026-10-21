@@ -2011,6 +2011,7 @@ mod tests {
                 prompt_tokens: 1,
                 completion_tokens: 1,
                 cached_prompt_tokens: None,
+                cache_write_tokens: None,
             },
         });
     }

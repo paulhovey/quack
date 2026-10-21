@@ -98,6 +98,14 @@ fn main() -> ExitCode {
             KeyringCmd::Set { name } => commands::keyring_set(&name),
             KeyringCmd::Delete { name } => commands::keyring_delete(&name),
         }),
+        #[cfg(feature = "auth-chatgpt")]
+        Cmd::Login {
+            provider,
+            new,
+            no_browser,
+        } => block_on(commands::login(&loaded, provider, new, no_browser)),
+        #[cfg(feature = "auth-chatgpt")]
+        Cmd::Logout { provider } => block_on(commands::logout(&loaded, provider)),
         Cmd::Eval(args) => block_on(commands::eval(&loaded, opts.clone(), args)),
         #[cfg(feature = "acp")]
         Cmd::Acp => {

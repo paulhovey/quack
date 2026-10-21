@@ -1,0 +1,78 @@
+#:schema ../schemas/provider.json
+# Anthropic's Claude API, billed per token to the key's account.
+# Not contacted until ANTHROPIC_API_KEY is set or `quack setup` stores a key.
+# A Claude subscription (Pro, Max) can't be used here: Anthropic allows its sign-in only
+# in Anthropic's own apps.
+name = "Anthropic API"
+group = "Proprietary models"
+api = "anthropic-messages"
+base_url = "https://api.anthropic.com"
+api_key = { env = "ANTHROPIC_API_KEY" }
+
+# Adaptive thinking, shown as summaries while the model works. quack sends each reply's
+# signed thinking back unchanged; should an edit to the history ever invalidate a block,
+# the API drops it instead of refusing the request (`block_binding`, behind the first
+# beta). The second beta lets a request a safety classifier declines be answered by
+# another Claude model (`fallbacks`, set per model below); it is billed at that model's
+# price.
+headers = { "anthropic-beta" = "thinking-binding-controls-2026-08-01,server-side-fallback-2026-07-01" }
+extra_body = { thinking = { type = "adaptive", display = "summarized", block_binding = { prefix_mismatch_behavior = "drop_block" } } }
+
+# Prices: US dollars per million tokens. Cache writes are the 5-minute rate.
+[[models]]
+id = "claude-opus-5-5"
+alias = "opus"
+context_window = 1000000
+max_output = 64000
+reasoning = { effort = "high" }
+extra_body = { fallbacks = "default" }
+cost = { input = 4.0, output = 20.0, cached_input = 0.2, cache_write = 5.0 }
+
+[[models]]
+id = "claude-sonnet-5-5"
+alias = "sonnet"
+context_window = 1000000
+max_output = 64000
+reasoning = { effort = "medium" }
+extra_body = { fallbacks = "default" }
+cost = { input = 2.0, output = 10.0, cached_input = 0.2, cache_write = 2.5 }
+
+# Prompts over 100k tokens cost $0.50 / $2.50.
+[[models]]
+id = "claude-haiku-5-5"
+alias = "haiku"
+context_window = 1000000
+max_output = 64000
+reasoning = { effort = "medium" }
+cost = { input = 0.1, output = 0.5, cached_input = 0.01, cache_write = 0.125 }
+
+[[models]]
+id = "claude-fable-5-1"
+alias = "fable"
+context_window = 1000000
+max_output = 64000
+reasoning = { effort = "high" }
+extra_body = { fallbacks = "default" }
+cost = { input = 10.0, output = 50.0, cached_input = 0.25, cache_write = 12.5 }
+
+[[models]]
+id = "claude-opus-5"
+context_window = 1000000
+max_output = 64000
+reasoning = { effort = "high" }
+extra_body = { fallbacks = "default" }
+cost = { input = 5.0, output = 25.0, cached_input = 0.5, cache_write = 6.25 }
+
+[[models]]
+id = "claude-sonnet-5"
+context_window = 1000000
+max_output = 64000
+reasoning = { effort = "xhigh" }
+cost = { input = 2.0, output = 10.0, cached_input = 0.2, cache_write = 2.5 }
+
+[[models]]
+id = "claude-opus-4-8"
+context_window = 1000000
+max_output = 64000
+reasoning = { effort = "xhigh" }
+cost = { input = 5.0, output = 25.0, cached_input = 0.5, cache_write = 6.25 }

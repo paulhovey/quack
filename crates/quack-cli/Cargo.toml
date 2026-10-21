@@ -37,11 +37,13 @@ tracing-subscriber.workspace = true
 
 [features]
 default = ["proto-openai-chat", "proto-openai-responses", "proto-anthropic", "proto-ollama",
-           "lang-common", "tokenizers-hf", "acp", "keyring"]
+           "auth-chatgpt", "lang-common", "tokenizers-hf", "acp", "keyring"]
 proto-openai-chat = ["quack-providers/proto-openai-chat"]
 proto-openai-responses = ["quack-providers/proto-openai-responses"]
 proto-anthropic = ["quack-providers/proto-anthropic"]
 proto-ollama = ["quack-providers/proto-ollama"]
+# Sign in with ChatGPT (`quack login`); needs the Responses adapter.
+auth-chatgpt = ["proto-openai-responses", "quack-providers/auth-chatgpt"]
 lang-common = ["quack-context/lang-common", "quack-tools/lang-common"]
 tokenizers-hf = ["quack-providers/tokenizers"]
 acp = ["dep:quack-acp"]

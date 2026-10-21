@@ -74,6 +74,18 @@ pub(crate) struct Prompt {
 }
 
 impl TurnCtx {
+    /// For an append-only provider, end the step's last tool result with the plan, where it
+    /// stays: the next request extends this one instead of rewriting its end.
+    fn keep_plan(&self, content: &mut String, last: bool) {
+        if last
+            && self.setup.provider.append_only()
+            && let Some(plan) = self.setup.tool_ctx.plan.reminder()
+        {
+            content.push_str("\n\n");
+            content.push_str(&plan);
+        }
+    }
+
     /// Add to history and the session log together, so the log is the source of truth.
     fn push(&self, history: &mut Vec<Message>, m: Message) {
         session::record_message(self.log.as_ref(), &m);
@@ -331,12 +343,15 @@ pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: Prompt)
                     let batch = &calls[i..i + together];
                     let outs =
                         futures::future::join_all(batch.iter().map(|c| run_call(&ctx, c))).await;
-                    for (call, out) in batch.iter().zip(outs) {
+                    let end = i + together == calls.len();
+                    for (n, (call, out)) in batch.iter().zip(outs).enumerate() {
+                        let mut content = out.model;
+                        ctx.keep_plan(&mut content, end && n + 1 == together);
                         ctx.push(
                             &mut history,
                             Message::Tool {
                                 call_id: call.id.clone(),
-                                content: out.model,
+                                content,
                             },
                         );
                     }
@@ -358,6 +373,7 @@ pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: Prompt)
                          Try a different approach."
                     ));
                 }
+                ctx.keep_plan(&mut out.model, i == calls.len());
                 ctx.push(
                     &mut history,
                     Message::Tool {
@@ -444,6 +460,7 @@ pub(crate) fn request(s: &Setup, messages: Vec<Message>, tools: bool) -> ChatReq
             .ok()
             .and_then(|v| v.as_object().cloned())
             .unwrap_or_default(),
+        cache_key: None,
     }
 }
 
@@ -516,14 +533,22 @@ async fn stream_step(
     messages.extend_from_slice(history);
     with_session_context(s, &mut messages);
     // The plan rides on the last message of this request only, so the history (and the
-    // cached prefix before it) stays the same.
-    if let Some(plan) = s.tool_ctx.plan.reminder()
+    // cached prefix before it) stays the same. An append-only provider has it in the
+    // history already (`TurnCtx::keep_plan`).
+    if !s.provider.append_only()
+        && let Some(plan) = s.tool_ctx.plan.reminder()
         && let Some(Message::Tool { content, .. } | Message::User { content }) = messages.last_mut()
     {
         content.push_str("\n\n");
         content.push_str(&plan);
     }
-    let req = request(s, messages, true);
+    let mut req = request(s, messages, true);
+    // Sub-agents have their own prefix, so their own key.
+    req.cache_key = Some(match &ctx.agent {
+        Some(agent) => format!("{}/{agent}", ctx.session),
+        None => ctx.session.clone(),
+    });
+    let fingerprint = quack_providers::fingerprint(&req);
     let mut rx = s
         .provider
         .stream(req, reasoning_format(s), ctx.cancel.child_token());
@@ -595,6 +620,7 @@ async fn stream_step(
         Some(c.of(
             u.prompt_tokens,
             u.cached_prompt_tokens.unwrap_or(0),
+            u.cache_write_tokens.unwrap_or(0),
             u.completion_tokens,
         ))
     });
@@ -616,9 +642,15 @@ async fn stream_step(
     if let Message::Assistant {
         tool_calls,
         content,
+        sealed,
         ..
     } = &mut msg
     {
+        if let Some(sd) = sealed {
+            sd.provider.clone_from(&s.provider.id);
+            sd.model.clone_from(&s.model.id);
+            sd.fingerprint = fingerprint;
+        }
         // Fallback chain: a model that printed its tool call as text still gets it run.
         let names = tool_names(s);
         let names: Vec<&str> = names.iter().map(String::as_str).collect();
@@ -629,6 +661,10 @@ async fn stream_step(
                 *tool_calls = calls;
                 true
             });
+        if promoted {
+            // The reply no longer matches what the server sent.
+            *sealed = None;
+        }
         if promoted || gate.hid() {
             // Promoted: show the text without the calls. Otherwise it only looked like a
             // call, so show what the gate held back.
@@ -658,6 +694,7 @@ fn emit_speed(
                 content,
                 reasoning,
                 tool_calls,
+                ..
             } => {
                 let calls: usize = tool_calls.iter().map(|c| c.arguments.len()).sum();
                 tokens::estimate(content)

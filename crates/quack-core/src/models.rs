@@ -87,6 +87,9 @@ async fn probe(
         Ok(Err(e)) => return unavailable(id, e.message),
         Err(e) => return unavailable(id, e.to_string()),
     };
+    if let Some(why) = provider.not_ready() {
+        return unavailable(id, why);
+    }
     let (discovered, note) =
         match tokio::time::timeout(CATALOG_TIMEOUT, provider.list_models()).await {
             Ok(Ok(list)) => (list, String::new()),

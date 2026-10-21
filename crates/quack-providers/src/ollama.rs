@@ -13,7 +13,7 @@ use serde_json::{Map, Value, json};
 use crate::error::{ErrorKind, ProviderError, body_message};
 use crate::openai_chat::piece_event;
 use crate::reasoning::ThinkSplitter;
-use crate::types::{ChatRequest, DiscoveredModel, FinishReason, Message, StreamEvent};
+use crate::types::{ChatRequest, DiscoveredModel, FinishReason, Message, StreamEvent, merge};
 
 pub(crate) const CHAT_PATH: &str = "api/chat";
 pub(crate) const TAGS_PATH: &str = "api/tags";
@@ -53,6 +53,7 @@ pub(crate) fn build_body(req: &ChatRequest) -> Value {
                 content,
                 reasoning,
                 tool_calls,
+                ..
             } => {
                 let mut v = json!({ "role": "assistant", "content": content });
                 // Thinking models keep their reasoning across tool calls; the model's
@@ -139,10 +140,9 @@ pub(crate) fn build_body(req: &ChatRequest) -> Value {
             body.insert("think".into(), json!(true));
         }
     }
-    for (k, v) in &req.extra_body {
-        body.insert(k.clone(), v.clone());
-    }
-    Value::Object(body)
+    let mut body = Value::Object(body);
+    merge(&mut body, &req.extra_body);
+    body
 }
 
 /// Splits a byte stream into lines.
@@ -264,6 +264,7 @@ impl LineParser {
                 prompt_tokens: num("prompt_eval_count").unwrap_or(0),
                 completion_tokens: num("eval_count").unwrap_or(0),
                 cached_prompt_tokens: None,
+                cache_write_tokens: None,
             }));
             let reason = if self.calls > 0 {
                 FinishReason::ToolCalls
@@ -342,6 +343,7 @@ mod tests {
                         name: "read".into(),
                         arguments: r#"{"path":"a.rs"}"#.into(),
                     }],
+                    sealed: None,
                 },
                 Message::Tool {
                     call_id: "c1".into(),
@@ -378,6 +380,7 @@ mod tests {
                 content: String::new(),
                 reasoning: Some("read a.rs first".into()),
                 tool_calls: Vec::new(),
+                sealed: None,
             }],
             ..ChatRequest::default()
         };
@@ -421,6 +424,7 @@ mod tests {
             content,
             reasoning,
             tool_calls,
+            ..
         } = b.into_message()
         else {
             unreachable!()

@@ -167,6 +167,8 @@ api_key = "sk-..."                                        # allowed, but warns i
 
 `cmd` forms run only from system/user layers, or from trusted project layers. `quack keyring set <name>` stores a key (typed hidden, or piped on stdin) and `quack keyring delete <name>` removes it. A bare name lives under the `quack` service. The stores are Credential Manager on Windows, Keychain on macOS, and the Secret Service elsewhere. The Secret Service is reached through the `secret-tool` program (package `libsecret-tools` on Debian/Ubuntu, `libsecret` on Fedora/Arch) rather than a compiled-in D-Bus stack, which would add about 130 crates; when `secret-tool` is missing the error says which package to install. Keyring support is the `keyring` build feature, on by default; builds without it report keyring secrets as unsupported.
 
+A provider can use a sign-in instead of a key: `auth = { type = "chatgpt", issuer = "https://auth.openai.com" }`, then `quack login <id>` ([02](02-providers.md#sign-in-with-chatgpt)). Its tokens live in `<data dir>/auth/<id>.json`, readable by the owner only, not in TOML.
+
 ## Tooling
 
 - `quack config check` validates every layer and prints miette diagnostics. Exits non-zero on errors, so it can run in CI or from an enterprise image build.

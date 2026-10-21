@@ -22,16 +22,21 @@ tokio.workspace = true
 tokio-util.workspace = true
 toml.workspace = true
 tracing.workspace = true
+# Already built for reqwest's TLS; the ChatGPT sign-in uses its SHA-256, RSA and random.
+aws-lc-rs = { version = "1.18", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"], optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 wiremock.workspace = true
+tempfile.workspace = true
+aws-lc-rs = { version = "1.18", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }
 
 [features]
 proto-openai-chat = []
 proto-openai-responses = []
 proto-anthropic = []
 proto-ollama = []
+auth-chatgpt = ["proto-openai-responses", "dep:aws-lc-rs"]
 tokenizers = []
 
 [lints]

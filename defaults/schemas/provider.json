@@ -1,9 +1,45 @@
 {
   "$defs": {
+    "Auth": {
+      "additionalProperties": false,
+      "description": "A sign-in that gives the provider its tokens.",
+      "properties": {
+        "issuer": {
+          "description": "The sign-in server. It is contacted only by `quack login`, `quack logout`, and to\nrenew the token while the provider is in use.",
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/AuthKind"
+        }
+      },
+      "required": [
+        "type",
+        "issuer"
+      ],
+      "type": "object"
+    },
+    "AuthKind": {
+      "oneOf": [
+        {
+          "const": "chatgpt",
+          "description": "Sign in with ChatGPT: requests use the account's ChatGPT plan. Needs\n`api = \"openai-responses\"`.",
+          "type": "string"
+        }
+      ]
+    },
     "Cost": {
       "additionalProperties": false,
       "description": "US dollars per million tokens, for `/stats`.",
       "properties": {
+        "cache_write": {
+          "default": null,
+          "description": "Prompt tokens written to the cache, where the server bills them apart. Unset: the\n`input` price.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
         "cached_input": {
           "default": null,
           "description": "Prompt tokens served from the server's cache. Unset: the `input` price.",
@@ -477,6 +513,18 @@
       ],
       "default": null
     },
+    "auth": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Auth"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Sign in instead of a key (`quack login <id>`). Takes the place of `api_key`."
+    },
     "auth_header": {
       "default": null,
       "description": "Default `Authorization`.",
@@ -507,6 +555,12 @@
     "enabled": {
       "default": true,
       "type": "boolean"
+    },
+    "extra_body": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Merged into every request body, under each model's own `extra_body`.",
+      "type": "object"
     },
     "group": {
       "default": "",

@@ -9,7 +9,7 @@ use serde_json::{Map, Value, json};
 
 use crate::error::{ErrorKind, ProviderError, body_message};
 use crate::reasoning::{Piece, ThinkSplitter};
-use crate::types::{ChatRequest, DiscoveredModel, FinishReason, Message, StreamEvent};
+use crate::types::{ChatRequest, DiscoveredModel, FinishReason, Message, StreamEvent, merge};
 
 pub(crate) const CHAT_PATH: &str = "chat/completions";
 pub(crate) const MODELS_PATH: &str = "models";
@@ -131,10 +131,9 @@ pub(crate) fn build_body(req: &ChatRequest, dialect: Dialect) -> Value {
             body.insert(k.into(), v);
         }
     }
-    for (k, v) in &req.extra_body {
-        body.insert(k.clone(), v.clone());
-    }
-    Value::Object(body)
+    let mut body = Value::Object(body);
+    merge(&mut body, &req.extra_body);
+    body
 }
 
 /// Mistral takes `none` or `high`, as Mistral's own harness maps them.
@@ -201,6 +200,7 @@ fn message_json(m: &Message, shape: &Shape<'_>) -> Value {
             content,
             reasoning,
             tool_calls,
+            ..
         } => {
             let mut v = json!({ "role": "assistant", "content": content });
             let echo = reasoning
@@ -414,6 +414,7 @@ fn parse_usage(u: &Value) -> Usage {
         cached_prompt_tokens: num("/prompt_tokens_details/cached_tokens")
             .or_else(|| num("/cached_tokens"))
             .or_else(|| num("/prompt_cache_hit_tokens")),
+        cache_write_tokens: None,
     }
 }
 
@@ -451,8 +452,15 @@ pub(crate) fn parse_models(body: &Value) -> Vec<DiscoveredModel> {
     list.as_array()
         .into_iter()
         .flatten()
+        // A ChatGPT sign-in's list marks the models it doesn't offer.
+        .filter(|m| m["visibility"].as_str().is_none_or(|v| v == "list"))
         .filter_map(|m| {
-            let id = m.get("id").or_else(|| m.get("name"))?.as_str()?.to_owned();
+            let id = m
+                .get("id")
+                .or_else(|| m.get("slug"))
+                .or_else(|| m.get("name"))?
+                .as_str()?
+                .to_owned();
             Some(DiscoveredModel {
                 id,
                 context_window: num(
@@ -496,11 +504,13 @@ fn pricing(p: &Value) -> Option<Cost> {
             input,
             output,
             cached_input: per_million(&["cache_hit", "cached_input", "cache_read"]),
+            cache_write: None,
         },
         _ => Cost {
             input: per_token("prompt")?,
             output: per_token("completion")?,
             cached_input: per_token("input_cache_read"),
+            cache_write: None,
         },
     };
     let valid = |n: f64| n.is_finite() && n >= 0.0;
@@ -567,6 +577,7 @@ mod tests {
                         name: "read".into(),
                         arguments: "{}".into(),
                     }],
+                    sealed: None,
                 },
                 Message::Tool {
                     call_id: "c1".into(),
@@ -619,6 +630,7 @@ mod tests {
                         name: "read".into(),
                         arguments: "{}".into(),
                     }],
+                    sealed: None,
                 },
                 Message::Tool {
                     call_id: "call_0".into(),
@@ -726,7 +738,8 @@ mod tests {
             Some(Usage {
                 prompt_tokens: 10,
                 completion_tokens: 5,
-                cached_prompt_tokens: Some(8)
+                cached_prompt_tokens: Some(8),
+                cache_write_tokens: None,
             })
         );
         assert_eq!(
@@ -739,6 +752,7 @@ mod tests {
                     name: "read".into(),
                     arguments: r#"{"path":"a.rs"}"#.into()
                 }],
+                sealed: None,
             }
         );
     }
@@ -767,6 +781,7 @@ mod tests {
                 content: "Done.".into(),
                 reasoning: Some("check the file".into()),
                 tool_calls: vec![],
+                sealed: None,
             }
         );
         let models = parse_models(

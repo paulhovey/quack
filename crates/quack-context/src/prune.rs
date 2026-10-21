@@ -324,6 +324,10 @@ fn head_and_tail(content: &str) -> Option<String> {
 /// Apply ops to history. Ops that no longer fit (index out of range or not a tool result)
 /// are skipped. Returns the number of characters removed.
 pub fn apply(history: &mut [Message], ops: &[PruneOp]) -> usize {
+    // Signed reasoning after an edited message would no longer verify.
+    if !ops.is_empty() {
+        quack_providers::unseal(history);
+    }
     let mut removed = 0;
     for op in ops {
         if let Some(Message::Tool { content, .. }) = history.get_mut(op.index) {
@@ -347,6 +351,7 @@ mod tests {
                 name: name.into(),
                 arguments: format!(r#"{{"path":"{path}"}}"#),
             }],
+            sealed: None,
         }
     }
 
@@ -383,7 +388,47 @@ mod tests {
                 name: "shell".into(),
                 arguments: serde_json::json!({ "command": cmd }).to_string(),
             }],
+            sealed: None,
         }
+    }
+
+    #[test]
+    fn an_edit_unseals_the_history() {
+        let mut history = vec![
+            Message::Assistant {
+                content: String::new(),
+                reasoning: None,
+                tool_calls: Vec::new(),
+                sealed: Some(quack_providers::Sealed {
+                    provider: "p".into(),
+                    model: "m".into(),
+                    fingerprint: String::new(),
+                    items: Vec::new(),
+                }),
+            },
+            Message::Tool {
+                call_id: "a".into(),
+                content: "long".into(),
+            },
+        ];
+        apply(&mut history, &[]);
+        assert!(matches!(
+            &history[0],
+            Message::Assistant {
+                sealed: Some(_),
+                ..
+            }
+        ));
+        let op = PruneOp {
+            index: 1,
+            rule: Rule::LargeOutput,
+            content: "[pruned]".into(),
+        };
+        apply(&mut history, &[op]);
+        assert!(matches!(
+            &history[0],
+            Message::Assistant { sealed: None, .. }
+        ));
     }
 
     #[test]

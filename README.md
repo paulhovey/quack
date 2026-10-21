@@ -1,8 +1,9 @@
 # quack
 
 A terminal coding agent for open-weight models: self-hosted (llama.cpp, vLLM, Ollama,
-SGLang, LM Studio) or hosted open-model services. Written in Rust with a full-screen
-ratatui UI.
+SGLang, LM Studio) or hosted open-model services. It also works with the Claude and OpenAI
+APIs and with a ChatGPT plan, each off until you set it up. Written in Rust with a
+full-screen ratatui UI.
 
 > **Status: in development.** Usable day to day with local servers and hosted services.
 > See [docs/plan/roadmap.md](docs/plan/roadmap.md) for what is done and what is next.
@@ -19,6 +20,10 @@ Everything below works today. Planned work is listed separately at the end.
   SGLang, LM Studio) and 13 hosted open-model services (OpenRouter, Fireworks, Together,
   DeepInfra, Novita, DeepSeek, Moonshot, Kimi Code, Z.ai, Z.ai Coding, Mistral, Synthetic,
   Charm Hyper).
+- **Claude and GPT too, if you want them.** The Anthropic and OpenAI APIs with a key, or a
+  ChatGPT Plus or Pro plan through `quack login chatgpt`. Their reasoning is kept across
+  steps the way each API requires. Claude subscriptions can't be offered: Anthropic allows
+  them only in its own apps.
 - **Nothing built in.** Every provider, model profile and MCP server is a small TOML file.
   Delete the file and the capability is gone; startup stays clean (checked by a test for
   every default file).
@@ -44,6 +49,9 @@ Everything below works today. Planned work is listed separately at the end.
   service with its key stored in the OS credential store.
 - API keys come from an environment variable, a file, a command, or the OS keyring (Windows,
   macOS, and Linux through the Secret Service). `quack keyring set|delete` manages them.
+- `quack login chatgpt` signs in to a ChatGPT plan in the browser; `quack logout chatgpt`
+  revokes it. The sign-in is saved in the data folder, readable by you only, and renewed
+  while in use.
 - `quack doctor` (or `/doctor`) checks config, providers, the model, the project, MCP
   servers, language servers, AGENTS.md, the shell, the sandbox, git, the credential store,
   the sessions folder, memory and the terminal.
@@ -63,7 +71,10 @@ Everything below works today. Planned work is listed separately at the end.
 - A native Ollama adapter that sets the context window per request.
 - Besides OpenAI-compatible chat: the Anthropic Messages API (`api = "anthropic-messages"`,
   which several open-model hosts also serve) and the OpenAI Responses API
-  (`api = "openai-responses"`).
+  (`api = "openai-responses"`). Claude's signed thinking and OpenAI's encrypted reasoning go
+  back unchanged with each request, so the model keeps its reasoning between steps and
+  across `/resume`. With Claude the history only ever grows, which that requires and which
+  keeps the prompt cache warm. Cache writes are priced apart where the API bills them.
 - Mistral's API differences are handled.
 - `/models` lists every model of every provider; switch mid-conversation without losing
   history or approvals. `/providers` shows which are usable and why the others are not.

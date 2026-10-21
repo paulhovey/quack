@@ -3,15 +3,16 @@
 //!
 //! The history is folded into strictly alternating user and assistant turns: tool results
 //! become `tool_result` blocks in a user turn, and a system message after the first becomes
-//! user text. The system prompt and the newest message carry `cache_control`, so servers
-//! that cache by breakpoint keep the prefix warm. Earlier reasoning is not sent back: it
-//! needs signatures this harness does not keep.
+//! user text. The system prompt, the newest message and the end of the user turn before
+//! the last reply carry `cache_control`, so servers that cache by breakpoint keep the prefix
+//! warm. A reply with thinking is kept as the server sent it ([`crate::Sealed`]): its blocks
+//! in order, with the signatures, and sent back unchanged.
 
 use quack_protocol::Usage;
 use serde_json::{Value, json};
 
 use crate::error::{ErrorKind, ProviderError, body_message};
-use crate::types::{ChatRequest, FinishReason, Message, StreamEvent};
+use crate::types::{ChatRequest, FinishReason, Message, StreamEvent, merge};
 
 pub(crate) const VERSION: &str = "2023-06-01";
 /// `max_tokens` is required; this is used when the model entry sets none.
@@ -63,8 +64,18 @@ pub(crate) fn build_body(req: &ChatRequest) -> Value {
             Message::Assistant {
                 content,
                 tool_calls,
+                sealed,
                 ..
             } => {
+                if let Some(blocks) = sealed
+                    .as_ref()
+                    .and_then(|s| unsealed(content, tool_calls, &s.items))
+                {
+                    for b in blocks {
+                        push(&mut turns, "assistant", b);
+                    }
+                    continue;
+                }
                 let mut blocks = Vec::new();
                 if !content.trim().is_empty() {
                     blocks.push(json!({ "type": "text", "text": content }));
@@ -99,12 +110,19 @@ pub(crate) fn build_body(req: &ChatRequest) -> Value {
         );
     }
     // A cache breakpoint on the newest block: everything before it is reused next time.
-    if let Some(block) = turns
-        .last_mut()
-        .and_then(|t| t["content"].as_array_mut())
-        .and_then(|c| c.last_mut())
-    {
-        block["cache_control"] = json!({ "type": "ephemeral" });
+    // The previous request put its own on the end of the user turn before the last reply;
+    // marking that again reads it back even when the newest step added many blocks.
+    let n = turns.len();
+    for i in [n.checked_sub(3), n.checked_sub(1)].into_iter().flatten() {
+        if turns[i]["role"] != "user" {
+            continue;
+        }
+        if let Some(block) = turns[i]["content"]
+            .as_array_mut()
+            .and_then(|c| c.last_mut())
+        {
+            block["cache_control"] = json!({ "type": "ephemeral" });
+        }
     }
 
     let mut body = json!({
@@ -133,6 +151,9 @@ pub(crate) fn build_body(req: &ChatRequest) -> Value {
             })
             .collect();
     }
+    if let Some(e) = &req.reasoning_effort {
+        body["output_config"] = json!({ "effort": e });
+    }
     let s = &req.sampling;
     if let Some(t) = s.temperature {
         body["temperature"] = json!(t);
@@ -143,10 +164,40 @@ pub(crate) fn build_body(req: &ChatRequest) -> Value {
     if let Some(k) = s.top_k {
         body["top_k"] = json!(k);
     }
-    for (k, v) in &req.extra_body {
-        body[k] = v.clone();
-    }
+    merge(&mut body, &req.extra_body);
     body
+}
+
+/// The blocks of a sealed reply, with tool calls filled in from the message. `None` when the
+/// message no longer matches them (its text or calls were changed), so it is sent rebuilt.
+fn unsealed(content: &str, calls: &[crate::ToolCall], items: &[Value]) -> Option<Vec<Value>> {
+    let mut text = String::new();
+    let mut used = 0;
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        match item["type"].as_str()? {
+            "text" => {
+                let t = item["text"].as_str()?;
+                text.push_str(t);
+                if !t.is_empty() {
+                    out.push(item.clone());
+                }
+            }
+            "tool_use" => {
+                let c = calls.get(usize::try_from(item["ref"].as_u64()?).ok()?)?;
+                used += 1;
+                out.push(json!({
+                    "type": "tool_use",
+                    "id": c.id,
+                    "name": c.name,
+                    "input": arguments(&c.arguments),
+                }));
+            }
+            "thinking" | "redacted_thinking" => out.push(item.clone()),
+            _ => return None,
+        }
+    }
+    (text == content && used == calls.len() && !out.is_empty()).then_some(out)
 }
 
 /// Turns `data:` payloads into [`StreamEvent`]s.
@@ -156,6 +207,10 @@ pub(crate) struct EventParser {
     input: (u32, u32, u32),
     output: u32,
     finish: Option<FinishReason>,
+    /// The reply's blocks in order (tool calls by number), and where each stream index is.
+    blocks: Vec<Value>,
+    at: std::collections::HashMap<u32, usize>,
+    calls: u64,
 }
 
 impl EventParser {
@@ -186,6 +241,24 @@ impl EventParser {
             }
             "content_block_start" => {
                 let b = &v["content_block"];
+                let block = match b["type"].as_str() {
+                    Some("tool_use" | "server_tool_use") => {
+                        self.calls += 1;
+                        Some(json!({ "type": "tool_use", "ref": self.calls - 1 }))
+                    }
+                    Some("text") => Some(json!({ "type": "text", "text": b["text"] })),
+                    Some("thinking") => Some(json!({
+                        "type": "thinking",
+                        "thinking": b["thinking"],
+                        "signature": b["signature"].as_str().unwrap_or_default(),
+                    })),
+                    Some("redacted_thinking") => Some(b.clone()),
+                    _ => None,
+                };
+                if let Some(block) = block {
+                    self.at.insert(index(), self.blocks.len());
+                    self.blocks.push(block);
+                }
                 match b["type"].as_str() {
                     Some("tool_use" | "server_tool_use") => {
                         out.push(StreamEvent::ToolCallStart {
@@ -219,15 +292,27 @@ impl EventParser {
             }
             "content_block_delta" => {
                 let d = &v["delta"];
+                let block = self.at.get(&index()).and_then(|&i| self.blocks.get_mut(i));
                 match d["type"].as_str() {
                     Some("text_delta") => {
                         if let Some(t) = d["text"].as_str().filter(|t| !t.is_empty()) {
+                            if let Some(b) = block {
+                                append(b, "text", t);
+                            }
                             out.push(StreamEvent::TextDelta(t.to_owned()));
                         }
                     }
                     Some("thinking_delta") => {
                         if let Some(t) = d["thinking"].as_str().filter(|t| !t.is_empty()) {
+                            if let Some(b) = block {
+                                append(b, "thinking", t);
+                            }
                             out.push(StreamEvent::ReasoningDelta(t.to_owned()));
+                        }
+                    }
+                    Some("signature_delta") => {
+                        if let (Some(b), Some(sig)) = (block, d["signature"].as_str()) {
+                            append(b, "signature", sig);
                         }
                     }
                     Some("input_json_delta") => {
@@ -255,6 +340,9 @@ impl EventParser {
                 if let Some(n) = num(&v, "/usage/cache_read_input_tokens") {
                     self.input.1 = n;
                 }
+                if let Some(n) = num(&v, "/usage/cache_creation_input_tokens") {
+                    self.input.2 = n;
+                }
             }
             "message_stop" => out.extend(self.end()),
             "error" => {
@@ -275,19 +363,36 @@ impl EventParser {
             return Vec::new();
         };
         let (fresh, read, write) = self.input;
-        vec![
-            StreamEvent::Finish(finish),
-            StreamEvent::Usage(Usage {
-                prompt_tokens: fresh + read + write,
-                completion_tokens: self.output,
-                cached_prompt_tokens: Some(read),
-            }),
-        ]
+        let mut out = Vec::new();
+        // Only a reply with thinking needs its layout kept.
+        let thought = self
+            .blocks
+            .iter()
+            .any(|b| matches!(b["type"].as_str(), Some("thinking" | "redacted_thinking")));
+        if thought {
+            out.push(StreamEvent::Sealed(std::mem::take(&mut self.blocks)));
+        }
+        out.push(StreamEvent::Finish(finish));
+        out.push(StreamEvent::Usage(Usage {
+            prompt_tokens: fresh + read + write,
+            completion_tokens: self.output,
+            cached_prompt_tokens: Some(read),
+            cache_write_tokens: Some(write),
+        }));
+        out
     }
 
     /// End of stream: a stream cut before `message_stop` still reports what it had.
+    /// A cut stream ends without `message_delta`, so nothing is sealed.
     pub(crate) fn finish(&mut self) -> Vec<StreamEvent> {
         self.end()
+    }
+}
+
+fn append(block: &mut Value, key: &str, text: &str) {
+    match &mut block[key] {
+        Value::String(s) => s.push_str(text),
+        other => *other = json!(text),
     }
 }
 
@@ -322,6 +427,7 @@ mod tests {
                             arguments: "oops".into(),
                         },
                     ],
+                    sealed: None,
                 },
                 Message::Tool {
                     call_id: "a".into(),
@@ -365,12 +471,14 @@ mod tests {
             r#"{"type":"message_start","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":90,"output_tokens":1}}}"#,
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#,
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"plan"}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"SIG"}}"#,
             r#"{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}"#,
             r#"{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Hi"}}"#,
             r#"{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"t1","name":"read","input":{}}}"#,
             r#"{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"path\":"}}"#,
             r#"{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"\"a\"}"}}"#,
-            r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":20}}"#,
+            r#"{"type":"content_block_start","index":3,"content_block":{"type":"redacted_thinking","data":"XYZ"}}"#,
+            r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":20,"cache_creation_input_tokens":5}}"#,
             r#"{"type":"message_stop"}"#,
         ]
         .iter()
@@ -383,9 +491,10 @@ mod tests {
         assert_eq!(
             b.usage,
             Some(Usage {
-                prompt_tokens: 100,
+                prompt_tokens: 105,
                 completion_tokens: 20,
-                cached_prompt_tokens: Some(90)
+                cached_prompt_tokens: Some(90),
+                cache_write_tokens: Some(5),
             })
         );
         assert_eq!(b.finish, Some(FinishReason::ToolCalls));
@@ -393,10 +502,21 @@ mod tests {
             content,
             reasoning,
             tool_calls,
+            sealed,
         } = b.into_message()
         else {
             panic!("assistant");
         };
+        let items = sealed.expect("sealed").items;
+        assert_eq!(
+            items,
+            vec![
+                json!({"type":"thinking","thinking":"plan","signature":"SIG"}),
+                json!({"type":"text","text":"Hi"}),
+                json!({"type":"tool_use","ref":0}),
+                json!({"type":"redacted_thinking","data":"XYZ"}),
+            ]
+        );
         assert_eq!(
             (content.as_str(), reasoning.as_deref()),
             ("Hi", Some("plan"))
@@ -404,6 +524,85 @@ mod tests {
         assert_eq!(tool_calls[0].arguments, "{\"path\":\"a\"}");
         assert_eq!(tool_calls[0].id, "t1");
         assert!(p.finish().is_empty());
+    }
+
+    fn sealed_reply(items: Vec<Value>) -> Message {
+        Message::Assistant {
+            content: "Hi".into(),
+            reasoning: Some("plan".into()),
+            tool_calls: vec![ToolCall {
+                id: "t1".into(),
+                name: "read".into(),
+                arguments: "{\"path\":\"a\"}".into(),
+            }],
+            sealed: Some(crate::Sealed {
+                provider: "anthropic".into(),
+                model: "m".into(),
+                fingerprint: String::new(),
+                items,
+            }),
+        }
+    }
+
+    #[test]
+    fn sealed_replies_go_back_in_their_order() {
+        let items = vec![
+            json!({"type":"thinking","thinking":"plan","signature":"SIG"}),
+            json!({"type":"text","text":"Hi"}),
+            json!({"type":"thinking","thinking":"","signature":"S2"}),
+            json!({"type":"tool_use","ref":0}),
+        ];
+        let req = ChatRequest {
+            model: "m".into(),
+            messages: vec![
+                Message::User {
+                    content: "go".into(),
+                },
+                sealed_reply(items.clone()),
+                Message::Tool {
+                    call_id: "t1".into(),
+                    content: "A".into(),
+                },
+            ],
+            reasoning_effort: Some("high".into()),
+            ..ChatRequest::default()
+        };
+        let b = build_body(&req);
+        let reply = &b["messages"][1]["content"];
+        assert_eq!(reply[0], items[0]);
+        assert_eq!(reply[1], items[1]);
+        assert_eq!(reply[2], items[2]);
+        assert_eq!(
+            reply[3],
+            json!({"type":"tool_use","id":"t1","name":"read","input":{"path":"a"}})
+        );
+        assert_eq!(b["output_config"]["effort"], "high");
+        // The user turn before the reply keeps the breakpoint the last request put there.
+        assert_eq!(
+            b["messages"][0]["content"][0]["cache_control"]["type"],
+            "ephemeral"
+        );
+        assert_eq!(
+            b["messages"][2]["content"][0]["cache_control"]["type"],
+            "ephemeral"
+        );
+
+        // A message whose text changed since is rebuilt, without the thinking.
+        let mut changed = sealed_reply(items);
+        if let Message::Assistant { content, .. } = &mut changed {
+            *content = "Hello".into();
+        }
+        let req = ChatRequest {
+            messages: vec![
+                Message::User {
+                    content: "go".into(),
+                },
+                changed,
+            ],
+            ..req
+        };
+        let b = build_body(&req);
+        assert!(!b.to_string().contains("SIG"));
     }
 
     #[test]

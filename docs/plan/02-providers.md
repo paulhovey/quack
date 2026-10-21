@@ -56,9 +56,55 @@ pub enum StreamEvent {
 
 ## anthropic-messages and openai-responses (2026-10-18)
 
-- **`anthropic-messages`** (`proto-anthropic`): `POST <base>/v1/messages`, or `<base>/messages` when `base_url` already ends in `/v1`. With no `auth_header`, the key goes in `x-api-key` and `anthropic-version: 2023-06-01` is sent. The history is folded into alternating turns: tool results are `tool_result` blocks in the next user turn, a system message after the first becomes user text, and the conversation always opens with the user. The system prompt and the newest block carry `cache_control: ephemeral`. `max_tokens` is required, so 8,192 is sent when the model sets none. Earlier reasoning is not sent back (it needs signatures this harness does not keep), and extended thinking is not requested yet. Usage counts cache reads and writes in the prompt, and cache reads as cached. Models are listed from `/v1/models`.
-- **`openai-responses`** (`proto-openai-responses`): `POST <base>/responses`, stateless (`store: false`, the whole history in `input` each time, as with chat). The first system message is `instructions`, later ones `developer` messages. Tool calls and results are `function_call` / `function_call_output` items. Streams of text, reasoning (`reasoning_text` and `reasoning_summary_text`) and function-call arguments are handled, including servers that send arguments only at `.done`. `reasoning.effort` comes from the model's `reasoning.effort`.
+- **`anthropic-messages`** (`proto-anthropic`): `POST <base>/v1/messages`, or `<base>/messages` when `base_url` already ends in `/v1`. With no `auth_header`, the key goes in `x-api-key` and `anthropic-version: 2023-06-01` is sent. The history is folded into alternating turns: tool results are `tool_result` blocks in the next user turn, a system message after the first becomes user text, and the conversation always opens with the user. Cache breakpoints sit on the system prompt, the newest block, and the end of the user turn before the last reply (where the previous request put its own, so a step that adds many blocks still reads the cache). `max_tokens` is required, so 8,192 is sent when the model sets none. `reasoning.effort` becomes `output_config.effort`. Thinking is turned on by the provider file (`extra_body.thinking`), not by the adapter, since compatible hosts take other shapes. Replies with thinking are kept sealed and sent back unchanged (below). Usage counts cache reads and writes in the prompt, reads as cached and writes as `cache_write_tokens`. `refusal` ends a reply as a content filter. Models are listed from `/v1/models`.
+- **`openai-responses`** (`proto-openai-responses`): `POST <base>/responses`, stateless (`store: false`, the whole history in `input` each time, as with chat). The first system message is `instructions`, later ones `developer` messages. Tool calls and results are `function_call` / `function_call_output` items. Streams of text, reasoning (`reasoning_text` and `reasoning_summary_text`) and function-call arguments are handled, including servers that send arguments only at `.done`. `reasoning.effort` comes from the model's `reasoning.effort`; the request's `cache_key` (the session id) is sent as `prompt_cache_key`. Replies with encrypted reasoning or an assistant `phase` are kept sealed and sent back in order. `input_tokens_details.cache_write_tokens` is counted.
 - Both are tested against mock servers only (`quack-providers/tests/mock_server.rs`, plus unit tests of the request bodies and stream parsing).
+
+## Claude, OpenAI and ChatGPT plans (2026-10-19)
+
+Optional, like every provider: three files in `defaults/providers.d`, contacted only once set up, never picked on their own, and removed by deleting the file or by `[policy.providers] hosts`.
+
+| File | Billing | Set up with | Contacts |
+|---|---|---|---|
+| `anthropic.toml` | Claude API key, per token | `ANTHROPIC_API_KEY` or `quack setup` | `api.anthropic.com` |
+| `openai.toml` | OpenAI API key, per token | `OPENAI_API_KEY` or `quack setup` | `api.openai.com` |
+| `chatgpt.toml` | The ChatGPT plan's allowance (Plus, Pro) | `quack login chatgpt` | `api.openai.com`, and `auth.openai.com` for sign-in and hourly renewal |
+
+**Claude subscriptions are not supported.** Anthropic's terms ([legal and compliance](https://code.claude.com/docs/en/legal-and-compliance)) allow Claude Free/Pro/Max sign-in only in Anthropic's own apps and forbid third-party tools from offering it or routing requests through those credentials. OpenAI, by contrast, documents an approval-free path for open-source apps that run on the user's machine ([Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source)).
+
+### Sealed replies
+
+Both APIs return reasoning that must go back unchanged for the model to keep it: Anthropic's thinking blocks carry signatures, OpenAI's reasoning items carry `encrypted_content`. The adapters keep the reply as the server sent it in `Message::Assistant.sealed` (`quack_providers::Sealed`): the blocks or items in order, text verbatim, tool calls by position (the calls themselves stay in `tool_calls`). Only replies that have reasoning (or an OpenAI `phase`) are sealed. `sealed` is logged with the message, so a resumed session sends the same request.
+
+- A sealed reply goes back only to the provider that made it, under the same system prompt and tools (`fingerprint`, FNV-1a of both), and for OpenAI the same model. Otherwise it is sent rebuilt from `content` and `tool_calls`. Anthropic's API itself drops thinking another Claude model can't read.
+- A reply whose text or calls the engine changed (a text tool call promoted to a real one) loses its seal.
+- Pruning and compaction (`prune::apply`, `compact::apply`) remove every seal: signed thinking after an edited message no longer verifies, and dropping all of it at that one point is what Anthropic recommends.
+- **Append-only history for `anthropic-messages`** (`Provider::append_only`). Claude's newer models check that a thinking block's history is unchanged (preserved thinking). The plan reminder, which rides on the newest message of each request for other providers, is instead written into the step's last tool result and stays there. `core/tests/anthropic.rs` checks that every request extends the one before it, across a resume.
+- `anthropic.toml` sends `thinking.block_binding.prefix_mismatch_behavior = "drop_block"` (beta `thinking-binding-controls-2026-08-01`), so an edit we missed costs that reasoning rather than failing the request.
+
+### The provider files
+
+- `anthropic.toml`: `claude-opus-5-5` (`opus`), `claude-sonnet-5-5` (`sonnet`), `claude-haiku-5-5` (`haiku`), `claude-fable-5-1` (`fable`), plus `claude-opus-5`, `claude-sonnet-5` and `claude-opus-4-8`, with 1M windows, `max_output = 64000`, prices (cache reads and 5-minute writes) and an effort each. A file-level `extra_body` asks for adaptive thinking with summaries; models with refusal classifiers get `fallbacks = "default"` (beta `server-side-fallback-2026-07-01`), billed at the fallback model's price.
+- `openai.toml` and `chatgpt.toml`: `gpt-6.1-sol` (`sol`), `gpt-6-astra` (`astra`), `gpt-6-luna` (`luna`), with `reasoning = { summary = "auto", context = "all_turns" }`. Prices in `openai.toml` are for prompts up to 272k tokens. The ChatGPT plan's own list (`models[].slug`, only `visibility = "list"`) is merged in `/models`.
+- Provider files gained `extra_body` (merged under each model's; objects now merge key by key in every adapter), `[auth]`, and `cost.cache_write`.
+- The family profiles (`cc-style` for Claude, `codex` for GPT) stay opt-in until `quack eval` shows they beat `generic` on these models.
+
+### Sign in with ChatGPT
+
+`[auth] type = "chatgpt"` with an `issuer` (feature `auth-chatgpt`, on by default, needs `openai-responses`). The binary names no host: the issuer comes from the file, and policy must allow its host as well as `base_url`'s; `doctor`'s network line lists it.
+
+- `quack login [provider] [--new] [--no-browser]` (`quack_providers::login`): PKCE (S256), a callback on `127.0.0.1:1455` (any free port if taken), `ext_agent_host_id` (a `urn:uuid:` made once, kept in `<data>/auth/host-id`), `client_id = dynamic_agent_client` plus `agent_name_hint = "quack"` on first sign-in, then the issued client id, `id_token_hint` and `login_hint`. The ID token's RS256 signature is checked against the issuer's JWKS (endpoints on another host are refused), then `iss`, `aud`, `exp` and `nonce`. A sign-in without `chatgpt.tokens.use.direct` is saved but not used. `--new` registers again to switch accounts.
+- Credentials: `<data>/auth/<provider>.json`, written whole with mode 0600 on Unix. The provider sends `Authorization: Bearer` and renews the token two minutes before it expires; a lock file serializes renewals across processes, because each refresh replaces the refresh token. Terminal refresh errors (`invalid_grant`, `refresh_token_reused`, ...) clear the tokens and ask for `quack login`; network failures keep them.
+- The plan route (`responses::Route::ChatgptPlan`): no `max_output_tokens`, `temperature` or `top_p`; function tools go in one `namespace` (`workspace`), and calls and results carry it. `subscription_sharing_usage_limit_exceeded` is reported as the plan's limit and not retried.
+- `quack logout` revokes the refresh token at the issuer's `revocation_endpoint` and clears the tokens, keeping the registration.
+- Until signed in, `/models` and `doctor` show "run `quack login chatgpt`", and nothing is sent: the token is looked up before any request (`tests/login.rs`).
+- No new crates: the SHA-256, RSA and random number generator come from `aws-lc-rs`, already built for reqwest's TLS on every OS. Base64url and form encoding are a few lines each.
+
+### Not done yet
+
+- None of this has been run against the live APIs; everything is checked against mock servers and the published docs. A first live run should confirm the beta headers, `reasoning.context`, and that the plan route accepts `prompt_cache_key` and `reasoning.summary`.
+- `quack setup` lists `anthropic` and `openai` (they have keys) but not `chatgpt`; it says nothing about `quack login`.
+- Images, server tools (web search) and Anthropic's mid-conversation system messages are not used.
 
 ## Provider file schema
 
@@ -92,9 +138,12 @@ enabled = true
 
 # auth — any secret form from 01-configuration
 api_key = { env = "CORP_LLM_KEY" }
+# or a sign-in instead of a key: `quack login <id>` (see "Sign in with ChatGPT")
+# auth = { type = "chatgpt", issuer = "https://auth.openai.com" }
 auth_header = "Authorization"          # default; value "Bearer <key>"
 # auth_scheme = "Bearer" | "" (raw) | custom
 headers = { "X-Team" = "platform" }
+extra_body = { }                       # merged into every request, under each model's
 
 [tls]
 ca_file = "/etc/ssl/corp-root.pem"     # in addition to OS store
@@ -142,13 +191,14 @@ top_k = 20
 min_p = 0.0
 repetition_penalty = 1.05
 
-[models.extra_body]                    # merged verbatim into request JSON
+[models.extra_body]                    # merged into the request JSON (objects key by key)
 chat_template_kwargs = { enable_thinking = false }
 
 [models.cost]                          # optional; US$ per million tokens, for /stats
 input = 0.0
 output = 0.0
 cached_input = 0.0                     # unset: the input price
+cache_write = 0.0                      # where writes are billed apart; unset: the input price
 
 [models.serving]
 prefill_tps = 3000                     # hint for cache-aware pruning (05-context); "auto" = measure

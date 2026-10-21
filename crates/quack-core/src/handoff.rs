@@ -88,6 +88,7 @@ mod tests {
                 content: "Looking around.".into(),
                 reasoning: None,
                 tool_calls: vec![call("r", "Read"), call("q", "AskUserQuestion")],
+                sealed: None,
             },
             Message::Tool {
                 call_id: "r".into(),
@@ -101,6 +102,7 @@ mod tests {
                 content: "1. Wrap fetch in a loop.".into(),
                 reasoning: None,
                 tool_calls: Vec::new(),
+                sealed: None,
             },
         ];
         let b = brief(

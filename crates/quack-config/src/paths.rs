@@ -67,7 +67,7 @@ impl Dirs {
             .unwrap_or_default();
         let platform = platform_dirs(env, &home);
 
-        let user_data = var("DATA_DIR").map_or(platform.data, PathBuf::from);
+        let user_data = user_data_dir(env);
         let defaults = match var("DEFAULTS_DIR") {
             Some(v) if v == "none" => None,
             Some(v) => Some(PathBuf::from(v)),
@@ -101,6 +101,16 @@ impl Dirs {
     pub fn log_dir(&self) -> PathBuf {
         self.user_cache.join("logs")
     }
+}
+
+/// The user data directory alone, without looking at the workspace.
+pub fn user_data_dir(env: Env<'_>) -> PathBuf {
+    let home = env(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    env(&format!("{ENV_PREFIX}DATA_DIR"))
+        .filter(|v| !v.is_empty())
+        .map_or_else(|| platform_dirs(env, &home).data, PathBuf::from)
 }
 
 struct PlatformDirs {

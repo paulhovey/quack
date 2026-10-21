@@ -19,10 +19,18 @@ use crate::openai_chat::{self, ChunkParser};
 #[cfg(feature = "proto-openai-responses")]
 use crate::responses;
 use crate::sse::SseDecoder;
-use crate::types::{ChatRequest, DiscoveredModel, StreamEvent};
+use crate::types::{ChatRequest, DiscoveredModel, Message, StreamEvent, fingerprint, merge};
 
 /// Longest wait we honour from a `Retry-After` header.
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(60);
+
+/// Whether this build has the adapter for `api` (`openai-chat`, `anthropic-messages`, ...).
+pub fn supports(api: &str) -> bool {
+    api == "openai-chat"
+        || (cfg!(feature = "proto-ollama") && api == "ollama")
+        || (cfg!(feature = "proto-anthropic") && api == "anthropic-messages")
+        || (cfg!(feature = "proto-openai-responses") && api == "openai-responses")
+}
 
 /// Wire protocol of a provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +53,12 @@ pub struct Provider {
     base_url: String,
     headers: HeaderMap,
     dialect: openai_chat::Dialect,
+    /// The file's `extra_body`, under each model's.
+    extra: serde_json::Map<String, serde_json::Value>,
+    #[cfg(feature = "proto-openai-responses")]
+    route: responses::Route,
+    #[cfg(feature = "auth-chatgpt")]
+    login: Option<std::sync::Arc<crate::login::Login>>,
 }
 
 impl Provider {
@@ -90,7 +104,7 @@ impl Provider {
         };
 
         let mut headers = HeaderMap::new();
-        if let Some(key) = &file.api_key {
+        if let Some(key) = file.api_key.as_ref().filter(|_| file.auth.is_none()) {
             let key = key
                 .resolve(env)
                 .map_err(|e| config(format!("api_key: {e}")))?;
@@ -122,6 +136,44 @@ impl Provider {
         }
 
         let client = build_client(&file, network, env)?;
+        #[cfg(feature = "auth-chatgpt")]
+        let mut login = None;
+        if let Some(a) = &file.auth {
+            match a.kind {
+                #[cfg(feature = "auth-chatgpt")]
+                quack_config::provider::AuthKind::Chatgpt => {
+                    if api != Api::Responses {
+                        return Err(config(
+                            "a ChatGPT sign-in needs `api = \"openai-responses\"`".into(),
+                        ));
+                    }
+                    login = Some(std::sync::Arc::new(crate::login::Login::new(
+                        id,
+                        &a.issuer,
+                        &file.base_url,
+                        &quack_config::user_data_dir(env),
+                        client.clone(),
+                    )));
+                }
+                #[cfg(not(feature = "auth-chatgpt"))]
+                quack_config::provider::AuthKind::Chatgpt => {
+                    return Err(config(
+                        "this build has no ChatGPT sign-in; use an API key provider".into(),
+                    ));
+                }
+            }
+        }
+        // Only a ChatGPT sign-in gets this far with `[auth]`.
+        #[cfg(feature = "proto-openai-responses")]
+        let route = if file.auth.is_some() {
+            responses::Route::ChatgptPlan
+        } else {
+            responses::Route::Api
+        };
+        let extra = serde_json::to_value(&file.extra_body)
+            .ok()
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default();
         let base_url = match api {
             #[cfg(feature = "proto-ollama")]
             Api::Ollama => ollama::native_base(&file.base_url),
@@ -136,7 +188,70 @@ impl Provider {
             file,
             client,
             headers,
+            extra,
+            #[cfg(feature = "proto-openai-responses")]
+            route,
+            #[cfg(feature = "auth-chatgpt")]
+            login,
         })
+    }
+
+    /// The sign-in behind this provider, for `quack login` and `quack logout`.
+    #[cfg(feature = "auth-chatgpt")]
+    pub fn login(&self) -> Option<&crate::login::Login> {
+        self.login.as_deref()
+    }
+
+    /// Why this provider can't be used yet, without contacting it: a sign-in not done.
+    pub fn not_ready(&self) -> Option<String> {
+        #[cfg(feature = "auth-chatgpt")]
+        if let Some(login) = &self.login
+            && !login.load().is_some_and(|c| c.signed_in())
+        {
+            return Some(format!(
+                "run `quack login {}` to use this provider",
+                self.id
+            ));
+        }
+        None
+    }
+
+    /// The headers for one request, with a current token for a signed-in provider.
+    async fn request_headers(&self) -> Result<HeaderMap, ProviderError> {
+        #[cfg(feature = "auth-chatgpt")]
+        if let Some(login) = &self.login {
+            let mut h = self.headers.clone();
+            let token = login.bearer().await?;
+            insert_header(&mut h, "Authorization", &format!("Bearer {token}"), true)?;
+            return Ok(h);
+        }
+        Ok(self.headers.clone())
+    }
+
+    /// Whether the history should only ever grow: per-request text (the plan reminder) is
+    /// then kept in it rather than sent once. Anthropic's signed thinking only verifies
+    /// against the exact history it was made after.
+    pub fn append_only(&self) -> bool {
+        #[cfg(feature = "proto-anthropic")]
+        if self.api == Api::Anthropic {
+            return true;
+        }
+        false
+    }
+
+    /// Keep a sealed reply only for the provider, system prompt and tools that made it.
+    /// OpenAI's encrypted reasoning is also tied to its model; Anthropic's API itself
+    /// drops thinking the current model can't read.
+    fn keeps(&self, s: &crate::Sealed, model: &str, fp: &str) -> bool {
+        let model_ok = s.model == model || {
+            #[cfg(feature = "proto-anthropic")]
+            {
+                self.api == Api::Anthropic
+            }
+            #[cfg(not(feature = "proto-anthropic"))]
+            false
+        };
+        s.provider == self.id && s.fingerprint == fp && model_ok
     }
 
     fn url(&self, path: &str) -> String {
@@ -155,7 +270,7 @@ impl Provider {
         let resp = self
             .client
             .get(url)
-            .headers(self.headers.clone())
+            .headers(self.request_headers().await?)
             .timeout(self.discovery_timeout())
             .send()
             .await
@@ -216,7 +331,7 @@ impl Provider {
         let resp = self
             .client
             .post(self.url(ollama::SHOW_PATH))
-            .headers(self.headers.clone())
+            .headers(self.request_headers().await.ok()?)
             .timeout(self.discovery_timeout())
             .json(&serde_json::json!({ "model": model }))
             .send()
@@ -247,10 +362,26 @@ impl Provider {
 
     async fn run_stream(
         &self,
-        req: ChatRequest,
+        mut req: ChatRequest,
         reasoning: ReasoningFormat,
         tx: &mpsc::Sender<Result<StreamEvent, ProviderError>>,
     ) {
+        let fp = fingerprint(&req);
+        let model = req.model.clone();
+        for m in &mut req.messages {
+            if let Message::Assistant { sealed, .. } = m
+                && sealed.as_ref().is_some_and(|s| !self.keeps(s, &model, &fp))
+            {
+                *sealed = None;
+            }
+        }
+        if !self.extra.is_empty() {
+            let mut extra = serde_json::Value::Object(self.extra.clone());
+            merge(&mut extra, &req.extra_body);
+            if let serde_json::Value::Object(m) = extra {
+                req.extra_body = m;
+            }
+        }
         let (path, body, accept) = match self.api {
             Api::OpenAiChat => (
                 openai_chat::CHAT_PATH.to_owned(),
@@ -272,16 +403,23 @@ impl Provider {
             #[cfg(feature = "proto-openai-responses")]
             Api::Responses => (
                 responses::RESPONSES_PATH.to_owned(),
-                responses::build_body(&req),
+                responses::build_body(&req, self.route),
                 "text/event-stream",
             ),
         };
         let mut attempt = 0;
         let resp = loop {
+            let headers = match self.request_headers().await {
+                Ok(h) => h,
+                Err(e) => {
+                    let _ = tx.send(Err(e)).await;
+                    return;
+                }
+            };
             let sent = self
                 .client
                 .post(self.url(&path))
-                .headers(self.headers.clone())
+                .headers(headers)
                 .header(reqwest::header::ACCEPT, accept)
                 .json(&body)
                 .send()

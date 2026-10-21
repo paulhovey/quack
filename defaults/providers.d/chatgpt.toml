@@ -1,0 +1,29 @@
+#:schema ../schemas/provider.json
+# A ChatGPT plan (Plus, Pro) through Sign in with ChatGPT: requests use the plan's
+# allowance instead of a key. Run `quack login chatgpt` once; it opens the browser.
+# Nothing is contacted until then. The sign-in server below is contacted by `quack login`,
+# `quack logout`, and to renew the token about once an hour while this provider is in use.
+# Set a weekly cap for quack under Usage in ChatGPT settings.
+name = "ChatGPT plan"
+group = "Proprietary models"
+note = "sign in with `quack login chatgpt`"
+api = "openai-responses"
+base_url = "https://api.openai.com/v1"
+auth = { type = "chatgpt", issuer = "https://auth.openai.com" }
+extra_body = { reasoning = { summary = "auto", context = "all_turns" } }
+
+# The models the account offers are also listed in /models.
+[[models]]
+id = "gpt-6.1-sol"
+alias = "sol"
+context_window = 1050000
+
+[[models]]
+id = "gpt-6-astra"
+alias = "astra"
+context_window = 1050000
+
+[[models]]
+id = "gpt-6-luna"
+alias = "luna"
+context_window = 1050000

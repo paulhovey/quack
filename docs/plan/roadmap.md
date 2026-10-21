@@ -148,6 +148,14 @@ Round 2 (2026-10-18), tested against mock servers only; nothing here has been ru
 - [ ] Eval shows profile matching ≥ `generic` for each targeted family, otherwise the profile isn't shipped
 - [ ] Additional hosted services (Together, DeepInfra) work through provider files alone, with no code changes
 
+## Proprietary model APIs (2026-10-19)
+
+Optional support for Claude and GPT, as data like every other provider ([02](02-providers.md#claude-openai-and-chatgpt-plans-2026-10-19)):
+- `anthropic.toml` and `openai.toml` (API keys), `chatgpt.toml` (a ChatGPT plan through `quack login chatgpt`, feature `auth-chatgpt`). None is contacted until set up; the sign-in server comes from the file and is subject to `[policy.providers] hosts`. Claude subscriptions are left out: Anthropic's terms forbid third-party tools from using them.
+- Sealed replies: Claude's signed thinking and OpenAI's encrypted reasoning are kept with the message, in order, and sent back to the provider and setup that made them; pruning and compaction drop them. For `anthropic-messages` the plan reminder is kept in the history instead of riding on the newest message, so every request extends the one before it (`core/tests/anthropic.rs`).
+- Adapters: Claude effort (`output_config.effort`), a third cache breakpoint, cache-write usage and `cost.cache_write`; Responses `prompt_cache_key`, `phase`, cache writes, and the ChatGPT plan route (tools in a namespace, no sampling or output cap). Provider files gained `extra_body` and `[auth]`.
+- Tested against mock servers only (the browser sign-in end to end with a signed ID token, renewal, revocation; replay and filtering of sealed replies). Not yet run live; no family profile turned on for these models.
+
 ## M3 — Ecosystem: "it plugs into everything, safely"
 
 - MCP via rmcp, targeting spec 2026-07-28 with fallback to older revisions: stdio + streamable HTTP, `mcp.d`, deferred tools + `tool_search`, prompts as commands, resources, sampling (gated), elicitation, `/mcp`

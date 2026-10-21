@@ -264,3 +264,79 @@ async fn openai_responses_streams() {
     assert_eq!(b.usage.map(|u| u.prompt_tokens), Some(9));
     assert!(matches!(b.into_message(), Message::Assistant { content, .. } if content == "Hello"));
 }
+
+/// Sealed reasoning goes back only to the provider and setup that made it, and the file's
+/// `extra_body` sits under the model's.
+#[cfg(feature = "proto-anthropic")]
+#[tokio::test]
+async fn sealed_replies_go_back_only_where_they_came_from() {
+    let server = MockServer::start().await;
+    let done = [
+        r#"{"type":"message_start","message":{"usage":{"input_tokens":5}}}"#,
+        r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}"#,
+        r#"{"type":"message_stop"}"#,
+    ];
+    let body: String = done.iter().map(|e| format!("data: {e}\n\n")).collect();
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body),
+        )
+        .mount(&server)
+        .await;
+    let file: ProviderFile = toml::from_str(&format!(
+        "base_url = \"{}\"\napi = \"anthropic-messages\"\n\
+         extra_body = {{ thinking = {{ type = \"adaptive\", display = \"summarized\" }} }}\n",
+        server.uri()
+    ))
+    .expect("provider toml");
+    let p =
+        Provider::new("anthropic", file, &NetworkSettings::default(), &|_| None).expect("provider");
+
+    let mut req = request();
+    req.extra_body.insert(
+        "thinking".into(),
+        serde_json::json!({ "display": "omitted" }),
+    );
+    let fp = quack_providers::fingerprint(&req);
+    let reply = |provider: &str, fingerprint: &str, sig: &str| Message::Assistant {
+        content: String::new(),
+        reasoning: None,
+        tool_calls: Vec::new(),
+        sealed: Some(quack_providers::Sealed {
+            provider: provider.into(),
+            model: "other-model".into(),
+            fingerprint: fingerprint.into(),
+            items: vec![serde_json::json!({"type":"thinking","thinking":"","signature":sig})],
+        }),
+    };
+    req.messages.extend([
+        reply("anthropic", &fp, "KEEP"),
+        Message::User {
+            content: "and".into(),
+        },
+        reply("elsewhere", &fp, "OTHER-PROVIDER"),
+        Message::User {
+            content: "then".into(),
+        },
+        reply("anthropic", "0000", "OLD-SETUP"),
+        Message::User {
+            content: "now".into(),
+        },
+    ]);
+    let mut rx = p.stream(req, ReasoningFormat::Auto, CancellationToken::new());
+    while rx.recv().await.is_some() {}
+
+    let sent = &server.received_requests().await.unwrap_or_default()[0];
+    let sent: serde_json::Value = serde_json::from_slice(&sent.body).expect("json");
+    let text = sent.to_string();
+    assert!(text.contains("KEEP"));
+    assert!(!text.contains("OTHER-PROVIDER"));
+    assert!(!text.contains("OLD-SETUP"));
+    assert_eq!(
+        sent["thinking"],
+        serde_json::json!({ "type": "adaptive", "display": "omitted" })
+    );
+}

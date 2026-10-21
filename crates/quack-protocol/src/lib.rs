@@ -690,6 +690,10 @@ pub struct Usage {
     pub completion_tokens: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cached_prompt_tokens: Option<u32>,
+    /// Prompt tokens written to the server's cache, for servers that bill writes apart
+    /// (Anthropic). Part of `prompt_tokens`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

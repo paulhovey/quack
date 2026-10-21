@@ -1,0 +1,32 @@
+#:schema ../schemas/provider.json
+# OpenAI's API, billed per token to the key's account. For a ChatGPT plan, see chatgpt.toml.
+# Not contacted until OPENAI_API_KEY is set or `quack setup` stores a key.
+name = "OpenAI API"
+group = "Proprietary models"
+api = "openai-responses"
+base_url = "https://api.openai.com/v1"
+api_key = { env = "OPENAI_API_KEY" }
+
+# Reasoning summaries show while the model works. The encrypted reasoning itself goes
+# back with each reply, so the model keeps it across steps.
+extra_body = { reasoning = { summary = "auto", context = "all_turns" } }
+
+# Prices: US dollars per million tokens, for prompts up to 272k tokens. Longer prompts
+# cost about twice as much.
+[[models]]
+id = "gpt-6.1-sol"
+alias = "sol"
+context_window = 1050000
+cost = { input = 2.0, output = 10.0, cached_input = 0.1, cache_write = 2.5 }
+
+[[models]]
+id = "gpt-6-astra"
+alias = "astra"
+context_window = 1050000
+cost = { input = 10.0, output = 50.0, cached_input = 1.0, cache_write = 12.5 }
+
+[[models]]
+id = "gpt-6-luna"
+alias = "luna"
+context_window = 1050000
+cost = { input = 0.1, output = 0.5, cached_input = 0.01, cache_write = 0.125 }

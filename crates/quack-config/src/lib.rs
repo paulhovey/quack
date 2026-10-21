@@ -38,7 +38,7 @@ pub use load::{
 };
 pub use lsp::LspServerFile;
 pub use mcp::McpServerFile;
-pub use paths::{Dirs, Env, LayerKind, find_workspace_root};
+pub use paths::{Dirs, Env, LayerKind, find_workspace_root, user_data_dir};
 pub use provider::ProviderFile;
 pub use secret::{Secret, SecretError, expand_home, keyring_delete, keyring_parts, keyring_set};
 pub use settings::Settings;
@@ -119,5 +119,15 @@ pub fn load_providers(loaded: &Loaded) -> Vec<Item<ProviderFile>> {
         &loaded.settings.policy.providers,
         |f| Some(f.base_url.as_str()),
     );
+    // A sign-in server is contacted too, so policy must allow its host as well.
+    let policy = &loaded.settings.policy.providers;
+    for item in &mut items {
+        if let ItemState::Loaded(f) = &item.state
+            && let Some(auth) = &f.auth
+            && !policy.allows(&item.id, Some(&auth.issuer))
+        {
+            item.state = ItemState::Disabled("not allowed by policy".into());
+        }
+    }
     items
 }

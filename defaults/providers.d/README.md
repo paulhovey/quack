@@ -9,6 +9,11 @@ server address, so deleting a file here removes that provider completely.
 | `ollama`, `llama-cpp`, `vllm`, `lmstudio`, `sglang` (127.0.0.1) | Listing models, `doctor`, or startup with no default model. Only this machine |
 | Open-model services: `openrouter`, `synthetic`, `charm-hyper`, `together`, `fireworks`, `deepinfra`, `novita` | Only once the key is set (the variable in the file, or `quack setup` stores one) |
 | Model makers: `mistral`, `kimi-code`, `moonshot`, `zai-coding`, `zai`, `deepseek` | Same |
+| Proprietary models: `anthropic`, `openai` | Same |
+| `chatgpt` (a ChatGPT plan) | Only after `quack login chatgpt`. Its sign-in server, `auth.openai.com`, is contacted by `quack login`, `quack logout`, and to renew the token while it is in use |
+
+There is no file for a Claude subscription (Pro, Max): Anthropic allows its sign-in only
+in Anthropic's own apps. Use `anthropic` with an API key.
 
 A hosted service from this folder is never picked by itself, even with its key set. The
 user picks a model in `/models` or `quack setup`, since it may cost money.
@@ -41,7 +46,7 @@ endpoint. Every other option has a working default; the full list is in
   allowed = ["corp*"]            # optional: provider ids too
   ```
 
-  Any provider whose `base_url` host doesn't match is disabled, including one a user
-  writes later under an allowed id. `quack setup` refuses to add one.
+  Any provider whose `base_url` host (or sign-in `issuer` host) doesn't match is disabled,
+  including one a user writes later under an allowed id. `quack setup` refuses to add one.
   `[policy.mcp] hosts` does the same for remote MCP servers. `quack doctor`
   lists every host the configuration can reach on its `network` line.

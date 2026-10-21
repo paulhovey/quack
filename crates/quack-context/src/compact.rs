@@ -229,6 +229,8 @@ pub fn carried_request(history: &[Message], cut: usize) -> Option<&str> {
 pub fn apply(history: &mut Vec<Message>, cut: usize, summary: Message) {
     let cut = cut.min(history.len());
     history.splice(..cut, [summary]);
+    // The kept turns' signed reasoning was made after the summarized ones.
+    quack_providers::unseal(history);
 }
 
 #[cfg(test)]
@@ -243,6 +245,7 @@ mod tests {
             content: s.into(),
             reasoning: None,
             tool_calls: Vec::new(),
+            sealed: None,
         }
     }
     fn chars(h: &[Message]) -> u32 {
@@ -304,6 +307,7 @@ mod tests {
                     name: "read".into(),
                     arguments: r#"{"path":"src/parse.rs"}"#.into(),
                 }],
+                sealed: None,
             },
         ];
         let s = fallback_summary(&h);

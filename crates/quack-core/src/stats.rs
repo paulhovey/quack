@@ -235,6 +235,7 @@ mod tests {
             prompt_tokens: prompt,
             completion_tokens: completion,
             cached_prompt_tokens: cached,
+            cache_write_tokens: None,
         }
     }
 
@@ -264,9 +265,22 @@ mod tests {
             input: 1.0,
             output: 4.0,
             cached_input: Some(0.25),
+            cache_write: None,
         };
         // 600k fresh + 400k cached + 100k out = 0.6 + 0.1 + 0.4
-        assert!((c.of(1_000_000, 400_000, 100_000) - 1.1).abs() < 1e-9);
+        assert!((c.of(1_000_000, 400_000, 0, 100_000) - 1.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn prices_cache_writes_apart() {
+        let c = Cost {
+            input: 1.0,
+            output: 0.0,
+            cached_input: Some(0.1),
+            cache_write: Some(1.25),
+        };
+        // 500k fresh + 400k cached + 100k written = 0.5 + 0.04 + 0.125
+        assert!((c.of(1_000_000, 400_000, 100_000, 0) - 0.665).abs() < 1e-9);
     }
 
     #[test]
@@ -275,8 +289,9 @@ mod tests {
             input: 2.0,
             output: 0.0,
             cached_input: None,
+            cache_write: None,
         };
-        assert!((c.of(1_000_000, 500_000, 0) - 2.0).abs() < 1e-9);
+        assert!((c.of(1_000_000, 500_000, 0, 0) - 2.0).abs() < 1e-9);
     }
 
     #[test]

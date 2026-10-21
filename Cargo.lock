@@ -2203,6 +2203,7 @@ dependencies = [
 name = "quack-providers"
 version = "0.1.0"
 dependencies = [
+ "aws-lc-rs",
  "futures",
  "quack-config",
  "quack-protocol",
@@ -2210,6 +2211,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",

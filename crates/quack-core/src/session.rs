@@ -289,6 +289,7 @@ mod tests {
             content: s.into(),
             reasoning: None,
             tool_calls: Vec::new(),
+            sealed: None,
         };
         let records = vec![
             msg(user("one")),
@@ -327,6 +328,7 @@ mod tests {
                     name: "shell".into(),
                     arguments: "{}".into(),
                 }],
+                sealed: None,
             },
         ];
         repair_dangling_calls(&mut h);

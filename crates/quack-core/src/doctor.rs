@@ -359,6 +359,9 @@ fn egress_check(config: &Loaded, usable: &[String]) -> DoctorCheck {
             && usable.contains(&item.id)
         {
             add(&f.base_url);
+            if let Some(auth) = &f.auth {
+                add(&auth.issuer);
+            }
         }
     }
     for item in quack_config::load_mcp(config) {

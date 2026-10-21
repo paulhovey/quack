@@ -249,6 +249,163 @@ pub(crate) fn keyring_delete(name: &str) -> i32 {
     }
 }
 
+/// The provider with a sign-in named `id`, or the only one when `id` is left out.
+#[cfg(feature = "auth-chatgpt")]
+fn signed_provider(
+    loaded: &Loaded,
+    id: Option<String>,
+) -> Result<quack_providers::Provider, String> {
+    let items = load_providers(loaded);
+    let with_auth: Vec<_> = items
+        .iter()
+        .filter_map(|i| i.loaded().filter(|f| f.auth.is_some()).map(|f| (i, f)))
+        .collect();
+    let (item, file) = match id {
+        Some(id) => {
+            let item = items
+                .iter()
+                .find(|i| i.id == id)
+                .ok_or_else(|| format!("no provider `{id}` · see `quack doctor`"))?;
+            let file = item
+                .loaded()
+                .ok_or_else(|| format!("provider `{id}` is not loaded · see `quack doctor`"))?;
+            if file.auth.is_none() {
+                return Err(format!(
+                    "provider `{id}` uses a key, not a sign-in · see `quack keyring set`"
+                ));
+            }
+            (item, file)
+        }
+        None => match with_auth.as_slice() {
+            [one] => *one,
+            [] => {
+                return Err(
+                    "no provider uses a sign-in · add one with an `[auth]` table".to_owned(),
+                );
+            }
+            many => {
+                let ids: Vec<&str> = many.iter().map(|(i, _)| i.id.as_str()).collect();
+                return Err(format!("name the provider: {}", ids.join(", ")));
+            }
+        },
+    };
+    quack_providers::Provider::new(&item.id, file.clone(), &loaded.settings.network, &|k| {
+        std::env::var_os(k)
+    })
+    .map_err(|e| e.to_string())
+}
+
+#[cfg(feature = "auth-chatgpt")]
+pub(crate) async fn login(
+    loaded: &Loaded,
+    id: Option<String>,
+    fresh: bool,
+    no_browser: bool,
+) -> i32 {
+    let provider = match signed_provider(loaded, id) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            return exit::CONFIG_ERROR;
+        }
+    };
+    let Some(login) = provider.login() else {
+        eprintln!("provider `{}` has no sign-in", provider.id);
+        return exit::CONFIG_ERROR;
+    };
+    let open = |url: &str| {
+        eprintln!(
+            "Continue with ChatGPT in your browser. If it does not open, visit:\n\n  {url}\n"
+        );
+        if !no_browser {
+            open_browser(url);
+        }
+    };
+    match login.sign_in(fresh, open).await {
+        Ok(done) => {
+            let who = if done.email.is_empty() {
+                String::new()
+            } else {
+                format!(" as {}", done.email)
+            };
+            eprintln!("signed in{who}.");
+            if !done.plan {
+                eprintln!(
+                    "the account did not allow plan usage, so requests will fail; run \
+                     `quack login {}` again and allow it",
+                    provider.id
+                );
+                return exit::CONFIG_ERROR;
+            }
+            eprintln!(
+                "pick a model with `/models` or `quack -m {}/<model>`",
+                provider.id
+            );
+            exit::OK
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            exit::CONFIG_ERROR
+        }
+    }
+}
+
+#[cfg(feature = "auth-chatgpt")]
+pub(crate) async fn logout(loaded: &Loaded, id: Option<String>) -> i32 {
+    let provider = match signed_provider(loaded, id) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            return exit::CONFIG_ERROR;
+        }
+    };
+    let Some(login) = provider.login() else {
+        eprintln!("provider `{}` has no sign-in", provider.id);
+        return exit::CONFIG_ERROR;
+    };
+    match login.sign_out().await {
+        Ok(true) => {
+            eprintln!("signed out of {}", provider.id);
+            exit::OK
+        }
+        Ok(false) => {
+            eprintln!(
+                "signed out here, but the server did not confirm the revocation; disconnect \
+                 quack in ChatGPT settings to be sure"
+            );
+            exit::OK
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            exit::CONFIG_ERROR
+        }
+    }
+}
+
+/// Open a URL in the default browser; the caller has printed it too.
+#[cfg(feature = "auth-chatgpt")]
+fn open_browser(url: &str) {
+    let mut cmd = if cfg!(windows) {
+        // `start` in cmd would read the `&`s in the URL as command separators.
+        let mut c = std::process::Command::new("rundll32");
+        c.args(["url.dll,FileProtocolHandler", url]);
+        c
+    } else if cfg!(target_os = "macos") {
+        let mut c = std::process::Command::new("open");
+        c.arg(url);
+        c
+    } else {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+    let _ = cmd
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
 /// Read one line without echo from a terminal, or all of stdin when piped.
 pub(crate) fn read_secret(prompt: &str) -> std::io::Result<String> {
     use std::io::IsTerminal;

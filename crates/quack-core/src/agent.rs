@@ -349,6 +349,7 @@ mod tests {
             content: text.into(),
             reasoning: None,
             tool_calls: Vec::new(),
+            sealed: None,
         }
     }
 
