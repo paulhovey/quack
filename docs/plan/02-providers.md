@@ -303,7 +303,7 @@ The defaults bundle ships one small file per engine and service (`name`, `base_u
 | LM Studio | `127.0.0.1:1234/v1` | — |
 | SGLang | `127.0.0.1:30000/v1` | `--tool-call-parser <parser>` |
 
-The hosted services come in two groups: open-model services (OpenRouter, Synthetic, Charm Hyper, Together, Fireworks, DeepInfra, Novita) and the model makers' own APIs and coding plans (Mistral, including Vibe plan keys; Kimi Code plan; Moonshot; Z.ai GLM Coding Plan; Z.ai API; DeepSeek). Coding-plan keys only work on their plan's endpoint, so Kimi and Z.ai each appear twice. DeepSeek has no separate coding plan.
+The hosted services come in two groups: open-model services (OpenRouter, Synthetic, Charm Hyper, Together, Fireworks, DeepInfra, Novita) and the model makers' own APIs and coding plans (Mistral, including Vibe plan keys; Kimi Code plan; Moonshot; Z.ai API; DeepSeek). Coding-plan keys only work on their plan's endpoint, so Kimi appears twice. The Z.ai GLM Coding Plan is left out: Z.ai's terms allow it only in their listed tools (https://docs.z.ai/devpack/tool/others). DeepSeek has no separate coding plan.
 
 How the bundled providers behave:
 

@@ -94,7 +94,8 @@ fn draw_prompt(f: &mut Frame<'_>, app: &App) {
     let screen = f.area();
     let width = screen.width.saturating_sub(4).min(72);
     let inner_w = usize::from(width.saturating_sub(4));
-    let mut lines: Vec<Line<'static>> = Vec::new();
+    // A blank row under the title.
+    let mut lines: Vec<Line<'static>> = vec![Line::raw("")];
     for h in &p.help {
         lines.extend(wrap(h, inner_w).into_iter().map(|l| Line::styled(l, t.dim)));
     }
@@ -983,16 +984,19 @@ fn draw_approval(f: &mut Frame<'_>, app: &App, above: Rect) {
             vec![Line::styled(arguments.clone(), t.dim)],
         ),
     };
-    let max_body = usize::from(above.height.saturating_sub(4)).max(1);
+    // Borders, a blank row under the title and one above the keys, and the keys.
+    let max_body = usize::from(above.height.saturating_sub(6)).max(1);
     let shown = body.len().min(max_body);
-    let height = u16::try_from(shown).unwrap_or(0) + 3;
+    let height = u16::try_from(shown).unwrap_or(0) + 5;
     let area = Rect {
         x: above.x,
         y: above.bottom().saturating_sub(height),
         width: above.width,
         height: height.min(above.height),
     };
-    let mut lines: Vec<Line<'_>> = body.into_iter().take(shown).collect();
+    let mut lines: Vec<Line<'_>> = vec![Line::raw("")];
+    lines.extend(body.into_iter().take(shown));
+    lines.push(Line::raw(""));
     lines.push(Line::from(vec![
         Span::styled(" y ", t.pill(t.ok)),
         Span::raw(" allow  "),
@@ -1006,7 +1010,8 @@ fn draw_approval(f: &mut Frame<'_>, app: &App, above: Rect) {
     let block = Block::bordered()
         .title(Span::styled(title, t.pill(t.warn)))
         .border_set(app.glyphs.border)
-        .border_style(t.warn);
+        .border_style(t.warn)
+        .padding(ratatui::widgets::Padding::horizontal(1));
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
 

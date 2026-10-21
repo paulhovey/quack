@@ -218,9 +218,14 @@ impl Modal {
         f.render_widget(block, area);
 
         let tabs_h = u16::from(self.tabs.len() > 1);
-        let [tabs_area, filter_area, body, footer] = Layout::vertical([
+        // Room to breathe under the title and between the rows, unless the screen is small.
+        let gap = u16::from(!narrow);
+        let [_, tabs_area, _, filter_area, _, body, footer] = Layout::vertical([
+            Constraint::Length(gap),
             Constraint::Length(tabs_h),
+            Constraint::Length(gap * tabs_h),
             Constraint::Length(1),
+            Constraint::Length(gap),
             Constraint::Min(3),
             Constraint::Length(1),
         ])
@@ -273,8 +278,8 @@ impl Modal {
                     .areas(body);
             (l, d)
         };
-        self.draw_list(f, list_area, theme, glyphs);
-        self.draw_details(f, detail_area, theme, glyphs);
+        self.draw_list(f, list_area, gap, theme, glyphs);
+        self.draw_details(f, detail_area, gap, theme, glyphs);
 
         let keys: Vec<(&str, &str)> = self
             .footer
@@ -285,10 +290,12 @@ impl Modal {
         f.render_widget(Paragraph::new(crate::ui::key_hints(theme, &keys)), footer);
     }
 
-    fn draw_list(&self, f: &mut Frame<'_>, area: Rect, theme: &Theme, glyphs: &Glyphs) {
+    /// `top`: blank rows above the first item.
+    fn draw_list(&self, f: &mut Frame<'_>, area: Rect, top: u16, theme: &Theme, glyphs: &Glyphs) {
         let block = Block::bordered()
             .border_set(glyphs.border)
-            .border_style(theme.border);
+            .border_style(theme.border)
+            .padding(Padding::top(top));
         let inner = block.inner(area);
         let width = usize::from(inner.width);
         let rows: Vec<ListItem<'_>> = self
@@ -337,11 +344,18 @@ impl Modal {
         }
     }
 
-    fn draw_details(&self, f: &mut Frame<'_>, area: Rect, theme: &Theme, glyphs: &Glyphs) {
+    fn draw_details(
+        &self,
+        f: &mut Frame<'_>,
+        area: Rect,
+        top: u16,
+        theme: &Theme,
+        glyphs: &Glyphs,
+    ) {
         let block = Block::bordered()
             .border_set(glyphs.border)
             .border_style(theme.border)
-            .padding(Padding::horizontal(1));
+            .padding(Padding::new(1, 1, top, 0));
         let inner = block.inner(area);
         f.render_widget(block, area);
         match self.selected_item() {

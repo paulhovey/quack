@@ -17,9 +17,11 @@ Everything below works today. Planned work is listed separately at the end.
 ### Highlights
 
 - **Made for open-weight models.** Works with local servers (llama.cpp, Ollama, vLLM,
-  SGLang, LM Studio) and 13 hosted open-model services (OpenRouter, Fireworks, Together,
-  DeepInfra, Novita, DeepSeek, Moonshot, Kimi Code, Z.ai, Z.ai Coding, Mistral, Synthetic,
-  Charm Hyper).
+  SGLang, LM Studio) and 12 hosted open-model services (OpenRouter, Fireworks, Together,
+  DeepInfra, Novita, DeepSeek, Moonshot, Kimi Code, Z.ai, Mistral, Synthetic, Charm Hyper).
+  The Z.ai GLM Coding Plan can't be offered: Z.ai allows it only in
+  [its listed tools](https://docs.z.ai/devpack/tool/others). Use the pay-as-you-go Z.ai API
+  instead.
 - **Claude and GPT too, if you want them.** The Anthropic and OpenAI APIs with a key, or a
   ChatGPT Plus or Pro plan through `quack login chatgpt`. Their reasoning is kept across
   steps the way each API requires. Claude subscriptions can't be offered: Anthropic allows

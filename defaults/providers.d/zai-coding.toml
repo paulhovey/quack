@@ -1,7 +1,0 @@
-#:schema ../schemas/provider.json
-# Z.ai GLM Coding Plan. Plan keys only work on this endpoint; API keys use zai.toml.
-# Not contacted until ZAI_API_KEY is set or `quack setup` stores a key.
-name = "Z.ai GLM Coding Plan"
-group = "From the model makers"
-base_url = "https://api.z.ai/api/coding/paas/v4"
-api_key = { env = "ZAI_API_KEY" }

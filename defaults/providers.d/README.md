@@ -8,7 +8,7 @@ server address, so deleting a file here removes that provider completely.
 |---|---|
 | `ollama`, `llama-cpp`, `vllm`, `lmstudio`, `sglang` (127.0.0.1) | Listing models, `doctor`, or startup with no default model. Only this machine |
 | Open-model services: `openrouter`, `synthetic`, `charm-hyper`, `together`, `fireworks`, `deepinfra`, `novita` | Only once the key is set (the variable in the file, or `quack setup` stores one) |
-| Model makers: `mistral`, `kimi-code`, `moonshot`, `zai-coding`, `zai`, `deepseek` | Same |
+| Model makers: `mistral`, `kimi-code`, `moonshot`, `zai`, `deepseek` | Same |
 | Proprietary models: `anthropic`, `openai` | Same |
 | `chatgpt` (a ChatGPT plan) | Only after `quack login chatgpt`. Its sign-in server, `auth.openai.com`, is contacted by `quack login`, `quack logout`, and to renew the token while it is in use |
 
