@@ -15,7 +15,9 @@ Settings come from the environment, which the hook file sets with `env`:
   JIRA_MAX_ISSUES    issues fetched per prompt (default 5)
   JIRA_MAX_COMMENTS  newest comments kept per issue (default 5)
   JIRA_MAX_CHARS     longest description or comment kept, in characters (default 4000)
-  JIRA_CA_BUNDLE     a PEM file of extra CA certificates, for a corporate CA
+  JIRA_CA_BUNDLE     a PEM file of CA certificates (e.g. a corporate intermediate) added
+                     to the system trust store, never replacing it. Pass the server's
+                     intermediate here when its issuer root is already trusted by the system.
   JIRA_TIMEOUT       seconds per request (default 8)
 
 Only the Python standard library is used. Exit status 1 with a message on stderr means
@@ -90,8 +92,20 @@ def issue_keys(event, base):
 
 
 def opener():
+    # Trust the system root store (on a corporate workstation this includes any
+    # TLS-intercepting root enrolled there, e.g. GlobalSign Root CA - R3), then load
+    # JIRA_CA_BUNDLE *on top of* it, never instead of it. Passing `cafile=` to
+    # create_default_context() replaces the system store, so an intermediate such
+    # as GlobalSign RSA OV SSL CA 2018 ends up trusted on its own and can no longer
+    # reach its issuer root -> "unable to get issuer certificate".
+    context = ssl.create_default_context()
     bundle = setting("JIRA_CA_BUNDLE")
-    context = ssl.create_default_context(cafile=bundle and os.path.expanduser(bundle))
+    if bundle:
+        path = os.path.expanduser(bundle)
+        if os.path.exists(path):
+            context.load_verify_locations(path)
+        else:
+            fail(f"JIRA_CA_BUNDLE is {path}, which does not exist; remove it or fix the path")
     # urllib honours HTTPS_PROXY and NO_PROXY, which quack passes through.
     return urllib.request.build_opener(urllib.request.HTTPSHandler(context=context))
 
