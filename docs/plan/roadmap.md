@@ -225,7 +225,7 @@ Landings (2026-10-21):
 **Exit criteria**
 - [ ] Air-gapped VM: build from vendored sources, run against a local vLLM, zero external connections (verified with a network capture)
 - [ ] Sandboxed `full-auto` session can't write outside the workspace or reach the network, on all three OSes (or Windows limitation documented with mitigation) — Linux done (`core/tests/sandbox.rs`), macOS written and tested in CI only, Windows unavailable with commands asking first ([11](11-security.md#as-implemented-2026-10-18-ahead-of-m5))
-- [ ] Policy-locked settings can't be overridden from user/project/env/CLI
+- [x] Policy-locked settings can't be overridden from user/project/env/CLI (2026-10-21): `locks_hold_against_every_higher_layer` (user, trusted project, `QUACK_MODEL`, `-m`, `-c`, whole-table and unset locks, `/config set`), `QUACK_SYSTEM_DIR` ignored when the platform's system layer holds a `[policy]`, and at runtime `core/tests/policy.rs` (`/permissions`, `/yolo`) and `sandbox.rs` (`/sandbox off`). Windows caveat: `%ProgramData%` is itself an environment variable, so a policy that must hold against the user there waits for a registry location ([01](01-configuration.md#precedence))
 
 ## M6 — Editor integration & extras
 

@@ -10,7 +10,7 @@
 
 ## Directory layout
 
-The directory is resolved per OS. Environment overrides, useful for testing and portable installs: `QUACK_CONFIG_DIR` (user layer), `QUACK_SYSTEM_DIR` (system layer), `QUACK_DATA_DIR`, `QUACK_CACHE_DIR`, and `QUACK_DEFAULTS_DIR` (`none` disables the defaults bundle). `quack config paths` prints the resolved directories.
+The directory is resolved per OS. Environment overrides, useful for testing and portable installs: `QUACK_CONFIG_DIR` (user layer), `QUACK_SYSTEM_DIR` (system layer), `QUACK_DATA_DIR`, `QUACK_CACHE_DIR`, and `QUACK_DEFAULTS_DIR` (`none` disables the defaults bundle). `QUACK_SYSTEM_DIR` is ignored, with a warning, when the platform's system `config.toml` has a `[policy]`, so a variable can't step around an administrator's locks. On Windows the platform directory itself comes from `%ProgramData%`, which a user can also set, so a Windows policy that must hold against the user needs a fixed location (a registry key; not built yet). `quack config paths` prints the resolved directories.
 
 | Layer | Linux | macOS | Windows |
 |---|---|---|---|
@@ -51,7 +51,7 @@ From lowest to highest:
 5. Environment variables `QUACK_*` (e.g. `QUACK_MODEL`)
 6. CLI flags and `-c key=value` overrides
 
-Then policy is applied: any key the system layer locks is reset to the system value, and the attempted override is reported as a warning.
+Then policy is applied: any key the system layer locks is reset to the system value, and the attempted override is reported as a warning. A lock covers everything under it (`locked = ["permissions"]` locks `permissions.mode`), and a key locked while unset (such as `keys.ctrl-t`) stays unset. Locks also hold at runtime: `/config set` refuses a locked key or a table holding one, `/permissions` and `/yolo` keep a locked `permissions.mode` (plan mode, which only narrows, stays available), `/sandbox off` keeps a locked `sandbox.mode`, and a remembered model doesn't replace a locked `model.default`.
 
 ### Merge rules
 

@@ -41,6 +41,9 @@ pub struct Dirs {
     /// Defaults bundle, if one is installed and not disabled.
     pub defaults: Option<PathBuf>,
     pub system: PathBuf,
+    /// `QUACK_SYSTEM_DIR`, when set but not used because the platform's system layer holds
+    /// a `[policy]`: a variable must not be able to step around an administrator's locks.
+    pub ignored_system_dir: Option<PathBuf>,
     pub user_config: PathBuf,
     pub user_data: PathBuf,
     pub user_cache: PathBuf,
@@ -76,9 +79,12 @@ impl Dirs {
                 .find(|p| p.is_dir()),
         };
         let workspace_root = find_workspace_root(cwd);
+        let (system, ignored_system_dir) =
+            system_dir(var("SYSTEM_DIR").map(PathBuf::from), platform.system);
         Self {
             defaults,
-            system: var("SYSTEM_DIR").map_or(platform.system, PathBuf::from),
+            system,
+            ignored_system_dir,
             user_config: var("CONFIG_DIR").map_or(platform.config, PathBuf::from),
             user_cache: var("CACHE_DIR").map_or(platform.cache, PathBuf::from),
             user_data,
@@ -101,6 +107,25 @@ impl Dirs {
     pub fn log_dir(&self) -> PathBuf {
         self.user_cache.join("logs")
     }
+}
+
+/// The system layer's directory: `requested` (from `QUACK_SYSTEM_DIR`) unless `platform`
+/// holds a policy, which then stays in force. Returns the directory and, when the request
+/// was refused, the refused one.
+fn system_dir(requested: Option<PathBuf>, platform: PathBuf) -> (PathBuf, Option<PathBuf>) {
+    match requested {
+        Some(r) if r != platform && has_policy(&platform) => (platform, Some(r)),
+        Some(r) => (r, None),
+        None => (platform, None),
+    }
+}
+
+/// Whether a layer directory's `config.toml` has a `[policy]` table.
+fn has_policy(dir: &Path) -> bool {
+    crate::diagnostic::read_text(&dir.join("config.toml"))
+        .ok()
+        .and_then(|text| toml::from_str::<toml::Table>(&text).ok())
+        .is_some_and(|t| t.contains_key("policy"))
 }
 
 /// The user data directory alone, without looking at the workspace.
@@ -237,6 +262,34 @@ mod tests {
         assert_eq!(dirs.user_config, cfg);
         assert_eq!(dirs.system, sys);
         assert_eq!(dirs.defaults, None);
+    }
+
+    #[test]
+    fn system_dir_override_cannot_skip_a_policy() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let platform = tmp.path().join("etc");
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(&platform).expect("mkdir");
+        let file = platform.join("config.toml");
+
+        // No system config, or one without a policy: the variable wins.
+        assert_eq!(
+            system_dir(Some(elsewhere.clone()), platform.clone()),
+            (elsewhere.clone(), None)
+        );
+        std::fs::write(&file, "[model]\ndefault = \"a/b\"\n").expect("write");
+        assert_eq!(
+            system_dir(Some(elsewhere.clone()), platform.clone()),
+            (elsewhere.clone(), None)
+        );
+
+        // A policy keeps the platform directory.
+        std::fs::write(&file, "[policy]\nlocked = [\"network.offline\"]\n").expect("write");
+        assert_eq!(
+            system_dir(Some(elsewhere.clone()), platform.clone()),
+            (platform.clone(), Some(elsewhere))
+        );
+        assert_eq!(system_dir(None, platform.clone()), (platform, None));
     }
 
     #[test]

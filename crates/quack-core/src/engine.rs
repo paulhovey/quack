@@ -634,6 +634,15 @@ impl Engine {
         if let Ok(mut p) = c.perms.lock() {
             match parsed {
                 None => p.plan = true,
+                Some(m) if self.mode_locked() && m != self.config.settings.permissions.mode => {
+                    let locked = self.config.settings.permissions.mode;
+                    self.warn(format!(
+                        "`permissions.mode` is locked by the system policy; staying in {}",
+                        locked.label()
+                    ));
+                    p.mode = locked;
+                    p.plan = false;
+                }
                 Some(m) => {
                     let capped = self
                         .config
@@ -663,9 +672,12 @@ impl Engine {
         self.emit_mode();
     }
 
+    fn mode_locked(&self) -> bool {
+        self.config.settings.policy.locks("permissions.mode")
+    }
+
     fn sandbox_locked(&self) -> bool {
-        let locked = &self.config.settings.policy.locked;
-        locked.iter().any(|k| k == "sandbox" || k == "sandbox.mode")
+        self.config.settings.policy.locks("sandbox.mode")
     }
 
     /// `/sandbox on|off`: run shell commands without the OS sandbox this session, whatever
@@ -1722,12 +1734,15 @@ impl Engine {
         let history = match self.convo.take() {
             Some(c) => {
                 if let Ok(old) = c.perms.lock() {
-                    perms.mode = self
-                        .config
-                        .settings
-                        .policy
-                        .max_permission_mode
-                        .map_or(old.mode, |cap| old.mode.min(cap));
+                    // A locked mode keeps the configured one from `setup`.
+                    if !self.mode_locked() {
+                        perms.mode = self
+                            .config
+                            .settings
+                            .policy
+                            .max_permission_mode
+                            .map_or(old.mode, |cap| old.mode.min(cap));
+                    }
                     perms.plan = old.plan;
                     // A reload that locks `sandbox.mode` turns the sandbox back on.
                     perms.sandbox_off = old.sandbox_off && !self.sandbox_locked();

@@ -411,6 +411,17 @@ pub struct Policy {
     pub max_permission_mode: Option<PermissionMode>,
 }
 
+impl Policy {
+    /// Whether changing `key` would change a locked setting: the key itself is locked, it
+    /// sits inside a locked table, or it is a table holding a locked key.
+    pub fn locks(&self, key: &str) -> bool {
+        let under = |a: &str, b: &str| a.strip_prefix(b).is_some_and(|r| r.starts_with('.'));
+        self.locked
+            .iter()
+            .any(|l| l == key || under(key, l) || under(l, key))
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct AllowList {

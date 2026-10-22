@@ -53,8 +53,7 @@ impl Loaded {
             return None;
         }
         let key = "model.default";
-        let locks = &self.settings.policy.locked;
-        if locks.iter().any(|k| k == key || k == "model") {
+        if self.settings.policy.locks(key) {
             return None;
         }
         if matches!(

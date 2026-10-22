@@ -85,6 +85,22 @@ pub(crate) fn set_path(table: &mut Table, path: &str, value: Value) -> bool {
     true
 }
 
+/// Remove a dotted path. Returns whether anything was there.
+pub(crate) fn remove_path(table: &mut Table, path: &str) -> bool {
+    let (parent, last) = match path.rsplit_once('.') {
+        Some((p, l)) => (p, l),
+        None => return table.remove(path).is_some(),
+    };
+    let mut cur = table;
+    for part in parent.split('.') {
+        let Some(Value::Table(next)) = cur.get_mut(part) else {
+            return false;
+        };
+        cur = next;
+    }
+    cur.remove(last).is_some()
+}
+
 /// Flatten a table into `(dotted key, value)` leaves. Arrays are leaves.
 pub(crate) fn leaves(table: &Table) -> Vec<(String, Value)> {
     fn walk(prefix: &str, t: &Table, out: &mut Vec<(String, Value)>) {

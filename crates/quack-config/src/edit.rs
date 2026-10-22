@@ -48,7 +48,7 @@ impl Loaded {
                     .map(|(_, d)| d.clone())
                     .unwrap_or_default(),
                 is_bool: v.is_bool(),
-                locked: self.settings.policy.locked.contains(&key),
+                locked: self.settings.policy.locks(&key),
                 key,
             })
             .collect()
@@ -66,7 +66,7 @@ impl Loaded {
         if key.starts_with("policy") {
             return Err("policy can only be set in the system layer by an administrator".into());
         }
-        if self.settings.policy.locked.iter().any(|k| k == key) {
+        if self.settings.policy.locks(key) {
             return Err(format!("`{key}` is locked by the system policy"));
         }
         let file = self

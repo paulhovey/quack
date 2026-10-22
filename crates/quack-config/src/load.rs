@@ -195,6 +195,13 @@ fn load_in(found: Dirs, env: Env<'_>, opts: &LoadOptions) -> Result<Loaded, Conf
     let mut dirs = found.clone();
     let mut warnings = Vec::new();
     let mut diagnostics = Vec::new();
+    if let Some(dir) = &dirs.ignored_system_dir {
+        warnings.push(format!(
+            "QUACK_SYSTEM_DIR={} ignored: {} holds a system policy",
+            dir.display(),
+            dirs.system.display()
+        ));
+    }
 
     // The system layer can relocate or disable the defaults bundle, so read it first.
     let system = read_layer(LayerKind::System, Some(&dirs.system), &mut diagnostics);
@@ -440,7 +447,17 @@ fn apply_locks(
 ) {
     for key in &policy.locked {
         let Some(locked) = merge::get_path(base, key) else {
-            warnings.push(format!("policy locks unknown key `{key}`"));
+            // Locked while unset (an optional key like `model.small`): it stays unset.
+            if merge::remove_path(merged, key) {
+                let from = origins
+                    .remove(key)
+                    .map_or_else(|| "a higher layer".into(), |o| o.to_string());
+                warnings.push(format!(
+                    "`{key}` is locked by policy; value from {from} ignored"
+                ));
+            } else {
+                warnings.push(format!("policy locks unknown or unset key `{key}`"));
+            }
             continue;
         };
         if merge::get_path(merged, key) != Some(locked) {
@@ -611,6 +628,64 @@ mod tests {
         assert_eq!(l.settings.permissions.mode, PermissionMode::AutoEdit);
         assert_eq!(l.settings.policy.locked, ["network.offline"]);
         assert_eq!(l.warnings.len(), 3, "{:?}", l.warnings);
+    }
+
+    #[test]
+    fn locks_hold_against_every_higher_layer() {
+        let f = Fixture::new();
+        f.write(
+            "system/config.toml",
+            "[model]\ndefault = \"corp/m\"\n[permissions]\nmode = \"ask\"\n\
+             [policy]\nproject_config = \"always\"\n\
+             locked = [\"model.default\", \"permissions\", \"keys.ctrl-t\"]",
+        );
+        f.write(
+            "user/config.toml",
+            "[permissions]\nmode = \"full-auto\"\n[keys]\nctrl-t = \"yolo\"",
+        );
+        f.write(
+            "repo/.quack/config.toml",
+            "[model]\ndefault = \"proj/m\"\n[permissions]\ndeny = []",
+        );
+        let mut f = f;
+        f.vars.insert("QUACK_MODEL".into(), "env/m".into());
+        let l = f.load(|o| {
+            o.model = Some("cli/m".into());
+            o.overrides.push("permissions.mode=\"yolo\"".into());
+        });
+        assert_eq!(l.settings.model.default, "corp/m");
+        assert_eq!(l.settings.permissions.mode, PermissionMode::Ask);
+        assert!(l.settings.keys.is_empty(), "{:?}", l.settings.keys);
+        assert!(matches!(
+            l.origin_of("model.default"),
+            Origin::File {
+                layer: LayerKind::System,
+                ..
+            }
+        ));
+        assert!(l.settings.policy.locks("permissions.mode"));
+        assert!(l.settings.policy.locks("keys"));
+        assert!(!l.settings.policy.locks("model.small"));
+        assert!(!l.settings.policy.locks("permissions-extra"));
+        assert!(
+            l.save_setting(LayerKind::User, "permissions.mode", "\"yolo\"")
+                .is_err()
+        );
+        assert!(l.save_setting(LayerKind::User, "keys", "{}").is_err());
+    }
+
+    #[test]
+    fn system_dir_variable_cannot_drop_the_policy() {
+        let f = Fixture::new();
+        let mut dirs = Dirs::discover_with(&|k| f.vars.get(k).cloned(), &f.root.join("repo"));
+        dirs.ignored_system_dir = Some(f.root.join("elsewhere"));
+        let opts = LoadOptions::new(f.root.join("repo"));
+        let l = load_in(dirs, &|k| f.vars.get(k).cloned(), &opts).expect("load");
+        assert!(
+            l.warnings.iter().any(|w| w.contains("QUACK_SYSTEM_DIR")),
+            "{:?}",
+            l.warnings
+        );
     }
 
     #[test]
