@@ -131,6 +131,9 @@ pub(crate) fn build_body(req: &ChatRequest, dialect: Dialect) -> Value {
             body.insert(k.into(), v);
         }
     }
+    if req.tool_mode == Some(quack_config::provider::ToolCallMode::Grammar) {
+        body.insert("response_format".into(), json!({ "type": "json_object" }));
+    }
     let mut body = Value::Object(body);
     merge(&mut body, &req.extra_body);
     body

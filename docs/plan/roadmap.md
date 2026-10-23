@@ -227,6 +227,9 @@ Landings (2026-10-21):
 - **Post-edit Tree-sitter syntax validation & fuzzy matching** (2026-10-22): edits in `edit`, `write`, and `apply_patch` validate syntax against Tree-sitter if the file previously parsed cleanly, providing an immediate soft warning with line number to the model. `edit` gained fallback strategies for stripped `read` line numbers and smart quotes/dashes.
 - **Shell test & build output distillation** (2026-10-22): `shell` tool output automatically folds long runs of passing tests ($\ge 3$ lines) and compiler package lines ($\ge 4$ lines) in the model-facing output while preserving errors, stack traces, failure diffs, and the raw detail.
 - **Cycle and edit-thrashing loop guard** (2026-10-22): `turn.rs` detects non-consecutive duplicate mutating tool calls in the same turn, interrupting `edit -> test -> edit(identical) -> test` loops.
+- **Living workspace diff breadcrumbs** (2026-10-22): modified files in the session are summarized at turn boundaries (`[Modified files in this session: ...]`), preventing multi-file amnesia without mutating earlier turns or breaking prefix cache stability.
+- **Transactional multi-file refactors** (2026-10-22): multi-file patch application (`apply_patch`, `edit_blocks`) tracks written files and rolls back all changes to their pre-images if any file fails during application.
+- **Grammar & guided decoding support** (2026-10-22): `ToolCallMode::Grammar` passed through `ChatRequest.tool_mode`, mapping to `"format": "json"` for Ollama and `"response_format": {"type": "json_object"}` for OpenAI-compatible local engines.
 
 **Exit criteria**
 - [ ] Air-gapped VM: build from vendored sources, run against a local vLLM, zero external connections (verified with a network capture)

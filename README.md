@@ -44,6 +44,15 @@ Everything below works today. Planned work is listed separately at the end.
   go test, jest) and compiler builds have their passing lines and progress folded
   automatically (`[... 42 passed tests omitted ...]`), keeping the model's working context
   concise and prompt caches warm without losing any error traces or diffs.
+- **Living workspace diff breadcrumbs.** The session tracks all modified files and reminds
+  the model on turn boundaries (`[Modified files in this session: ...]`), preventing multi-file
+  amnesia without modifying earlier turns or breaking the KV cache prefix.
+- **Atomic multi-file refactors.** Multi-file changes (`apply_patch`, `edit_blocks`) are
+  transactional: if any file write fails, all touched files roll back automatically to their
+  clean pre-images, leaving no dirty half-applied workspaces.
+- **Native grammar & guided decoding.** Local engines (Ollama, vLLM, SGLang, LM Studio)
+  can enforce strict schema-guided decoding (`ToolCallMode::Grammar`), eliminating JSON tool
+  call malformations.
 - **Loop and thrashing guards.** Catches empty responses, consecutive repeated calls, and
   non-consecutive edit-test-edit oscillation loops to keep open models from getting stuck.
 - **Sandboxed by default.** Shell commands can write only in the workspace and have no
@@ -137,8 +146,10 @@ Everything below works today. Planned work is listed separately at the end.
   the input shows progress and the step in hand; `/todo` expands it into the whole list.
 - Sub-agents: the `task` tool starts an agent from `agents.d/` with a fresh context, its
   own todo list and a narrower set of tools, and only its final report comes back, so the
-  main conversation stays small. `explore` searches read-only (on `[model] small` when
-  set), and several started in one reply run in parallel. `general` makes a
+  main conversation stays small. `explore` acts as an isolated scout for broad repo
+  discovery (on `[model] small` when set), returning relevant file paths and line ranges so
+  the caller can jump straight into the solution without cluttering its working context with
+  exploratory reads. Several started in one reply run in parallel. `general` makes a
   self-contained change, one at a time, with its edits asking for approval like any
   other. A task can carry out one item of the plan (`todo: 3`), which ticks off when it
   succeeds. Its steps show under the `task` line, and `/tasks` lists every run with
@@ -162,8 +173,9 @@ Everything below works today. Planned work is listed separately at the end.
   - `search_replace_blocks`: SEARCH/REPLACE blocks under each file's path (`edit_blocks`).
   - `whole_file`: no edit tool; files are rewritten with `write`.
 
-  Multi-file changes are checked whole before anything is written, and `/undo` puts back
-  every file a call changed.
+  Multi-file changes are transactional: changes are checked before writing, and if any
+  file fails during application, all modified files in the call roll back automatically to
+  their clean pre-images. `/undo` puts back every file a call changed.
 - The shell runs bash, zsh or PowerShell. Timeouts kill the whole process tree, and long
   output is trimmed to its start and end. Build and test runs (Cargo, Pytest, Python unittest,
   Go test, Jest, TAP) are automatically distilled: long sequences of passing tests and compiler

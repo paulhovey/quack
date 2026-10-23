@@ -23,6 +23,8 @@ pub struct ChatRequest {
     /// A stable id for the conversation, for servers that route by it to keep their prompt
     /// cache warm (OpenAI's `prompt_cache_key`).
     pub cache_key: Option<String>,
+    /// Tool calling mode (e.g. grammar / guided decoding).
+    pub tool_mode: Option<quack_config::provider::ToolCallMode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

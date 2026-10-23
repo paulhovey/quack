@@ -85,21 +85,43 @@ pub(crate) fn preview(changes: &[Change]) -> ApprovalRequest {
     }
 }
 
-/// Write every change; reports what was done.
+/// Write every change atomically; reports what was done or rolls back if any file fails.
 pub(crate) fn write(changes: &[Change], ctx: &ToolCtx) -> Result<ToolOutput, String> {
     let mut lines = Vec::new();
     let (mut add, mut del) = (0, 0);
+    let mut written: Vec<(&Change, Option<Vec<u8>>)> = Vec::new();
     for c in changes {
         match &c.after {
             Some(text) => {
-                if let Some(dir) = c.path.parent() {
-                    std::fs::create_dir_all(dir).map_err(|e| io_msg(dir, &e))?;
+                if let Some(dir) = c.path.parent()
+                    && let Err(e) = std::fs::create_dir_all(dir)
+                {
+                    rollback(&written);
+                    return Err(io_msg(dir, &e));
                 }
+                let old_bytes = if c.path.exists() {
+                    match std::fs::read(&c.path) {
+                        Ok(b) => Some(b),
+                        Err(e) => {
+                            rollback(&written);
+                            return Err(io_msg(&c.path, &e));
+                        }
+                    }
+                } else {
+                    None
+                };
                 let bytes = match &c.before {
                     Some(f) => f.encode(text),
                     None => text.clone(),
                 };
-                std::fs::write(&c.path, bytes).map_err(|e| io_msg(&c.path, &e))?;
+                if let Err(e) = std::fs::write(&c.path, bytes) {
+                    rollback(&written);
+                    return Err(format!(
+                        "Transaction failed: could not write {}: {e}. All changes in this call were rolled back.",
+                        c.shown
+                    ));
+                }
+                written.push((c, old_bytes));
                 ctx.reads.record(&c.path);
                 lines.push(match c.before {
                     Some(_) => format!("Edited {}", c.shown),
@@ -116,7 +138,22 @@ pub(crate) fn write(changes: &[Change], ctx: &ToolCtx) -> Result<ToolOutput, Str
                 }
             }
             None => {
-                std::fs::remove_file(&c.path).map_err(|e| io_msg(&c.path, &e))?;
+                let old_bytes = if c.path.exists() {
+                    match std::fs::read(&c.path) {
+                        Ok(b) => Some(b),
+                        Err(e) => {
+                            rollback(&written);
+                            return Err(io_msg(&c.path, &e));
+                        }
+                    }
+                } else {
+                    None
+                };
+                if let Err(e) = std::fs::remove_file(&c.path) {
+                    rollback(&written);
+                    return Err(io_msg(&c.path, &e));
+                }
+                written.push((c, old_bytes));
                 lines.push(format!("Deleted {}", c.shown));
             }
         }
@@ -125,6 +162,19 @@ pub(crate) fn write(changes: &[Change], ctx: &ToolCtx) -> Result<ToolOutput, Str
         del += d;
     }
     Ok(ToolOutput::ok(lines.join("\n") + ".", format!("+{add} -{del}")).with_detail(diff(changes)))
+}
+
+fn rollback(written: &[(&Change, Option<Vec<u8>>)]) {
+    for (c, old_bytes) in written.iter().rev() {
+        match old_bytes {
+            Some(b) => {
+                let _ = std::fs::write(&c.path, b);
+            }
+            None => {
+                let _ = std::fs::remove_file(&c.path);
+            }
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]

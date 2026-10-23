@@ -74,15 +74,18 @@ pub(crate) struct Prompt {
 }
 
 impl TurnCtx {
-    /// For an append-only provider, end the step's last tool result with the plan, where it
-    /// stays: the next request extends this one instead of rewriting its end.
+    /// For an append-only provider, end the step's last tool result with the plan and working
+    /// file reminders, where they stay: the next request extends this one instead of rewriting its end.
     fn keep_plan(&self, content: &mut String, last: bool) {
-        if last
-            && self.setup.provider.append_only()
-            && let Some(plan) = self.setup.tool_ctx.plan.reminder()
-        {
-            content.push_str("\n\n");
-            content.push_str(&plan);
+        if last && self.setup.provider.append_only() {
+            if let Some(wf) = working_files_reminder(self) {
+                content.push_str("\n\n");
+                content.push_str(&wf);
+            }
+            if let Some(plan) = self.setup.tool_ctx.plan.reminder() {
+                content.push_str("\n\n");
+                content.push_str(&plan);
+            }
         }
     }
 
@@ -477,6 +480,7 @@ pub(crate) fn request(s: &Setup, messages: Vec<Message>, tools: bool) -> ChatReq
             .and_then(|v| v.as_object().cloned())
             .unwrap_or_default(),
         cache_key: None,
+        tool_mode: Some(s.model.tool_calling.mode),
     }
 }
 
@@ -534,6 +538,28 @@ pub(crate) fn with_session_context(s: &Setup, messages: &mut [Message]) {
     }
 }
 
+fn working_files_reminder(ctx: &TurnCtx) -> Option<String> {
+    let cp = ctx.checkpoints.as_ref()?;
+    let changes = cp.changes();
+    if changes.is_empty() {
+        return None;
+    }
+    let mut files = Vec::new();
+    for c in changes {
+        let shown = quack_tools::paths::display(&ctx.setup.tool_ctx.root, &c.path);
+        if !files.contains(&shown) {
+            files.push(shown);
+        }
+    }
+    if files.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "[Modified files in this session: {}]",
+        files.join(", ")
+    ))
+}
+
 /// One model call. Streams deltas to clients and returns the assembled message.
 async fn stream_step(
     ctx: &TurnCtx,
@@ -548,15 +574,24 @@ async fn stream_step(
     }
     messages.extend_from_slice(history);
     with_session_context(s, &mut messages);
-    // The plan rides on the last message of this request only, so the history (and the
-    // cached prefix before it) stays the same. An append-only provider has it in the
-    // history already (`TurnCtx::keep_plan`).
-    if !s.provider.append_only()
-        && let Some(plan) = s.tool_ctx.plan.reminder()
-        && let Some(Message::Tool { content, .. } | Message::User { content }) = messages.last_mut()
-    {
-        content.push_str("\n\n");
-        content.push_str(&plan);
+    // The plan and modified-files reminders ride on the last message of this request only,
+    // so the history (and the cached prefix before it) stays the same. An append-only provider
+    // has it in the history already (`TurnCtx::keep_plan`).
+    if !s.provider.append_only() {
+        if let Some(wf) = working_files_reminder(ctx)
+            && let Some(Message::Tool { content, .. } | Message::User { content }) =
+                messages.last_mut()
+        {
+            content.push_str("\n\n");
+            content.push_str(&wf);
+        }
+        if let Some(plan) = s.tool_ctx.plan.reminder()
+            && let Some(Message::Tool { content, .. } | Message::User { content }) =
+                messages.last_mut()
+        {
+            content.push_str("\n\n");
+            content.push_str(&plan);
+        }
     }
     let mut req = request(s, messages, true);
     // Sub-agents have their own prefix, so their own key.
