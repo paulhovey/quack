@@ -105,6 +105,15 @@ pub(crate) fn write(changes: &[Change], ctx: &ToolCtx) -> Result<ToolOutput, Str
                     Some(_) => format!("Edited {}", c.shown),
                     None => format!("Created {}", c.shown),
                 });
+                if let Some(before) = &c.before
+                    && let Some(line) =
+                        crate::outline::new_syntax_error(&c.path, &before.text, text)
+                {
+                    lines.push(format!(
+                        "\nWarning: Tree-sitter detected a syntax error in {} at line {line} after this change (the file previously parsed cleanly). Check brackets, indentation or delimiters.",
+                        c.shown
+                    ));
+                }
             }
             None => {
                 std::fs::remove_file(&c.path).map_err(|e| io_msg(&c.path, &e))?;

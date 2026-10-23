@@ -369,10 +369,24 @@ pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: Prompt)
                     .rev()
                     .take_while(|c| **c == recent[recent.len() - 1])
                     .count();
+                let same_count = recent
+                    .iter()
+                    .filter(|c| *c == &recent[recent.len() - 1])
+                    .count();
                 if repeats >= REPEAT_LIMIT {
                     out.model.push_str(&format!(
                         "\n\nNote: this exact call has now been made {repeats} times in a row. \
                          Try a different approach."
+                    ));
+                } else if same_count >= 2
+                    && (call.name.starts_with("edit")
+                        || call.name == "write"
+                        || call.name == "apply_patch")
+                {
+                    out.model.push_str(&format!(
+                        "\n\nNote: this exact edit has already been attempted in this turn ({same_count} times total). \
+                         Repeating identical changes without modifying arguments will not fix the problem. \
+                         Read the file to check its actual state or try a different fix."
                     ));
                 }
                 ctx.keep_plan(&mut out.model, i == calls.len());

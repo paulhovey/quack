@@ -157,7 +157,8 @@ impl Tool for Shell {
                     r.dropped_bytes
                 ));
             }
-            let trimmed = trim_middle(&body, HEAD, TAIL);
+            let distilled = distill_output(&body);
+            let trimmed = trim_middle(&distilled, HEAD, TAIL);
             let mut model = if trimmed.trim().is_empty() {
                 format!("{status}\n(no output)")
             } else {
@@ -179,5 +180,140 @@ impl Tool for Shell {
                 detail: Some(body),
             }
         })
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum LineKind {
+    PassTest,
+    Compiling,
+    Other,
+}
+
+fn classify_line(line: &str) -> LineKind {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return LineKind::Other;
+    }
+
+    if trimmed.contains("FAILED")
+        || trimmed.contains("FAIL")
+        || trimmed.contains("Error")
+        || trimmed.contains("error")
+        || trimmed.contains("Traceback")
+        || trimmed.contains("AssertionError")
+        || trimmed.contains("failures:")
+    {
+        return LineKind::Other;
+    }
+
+    if (trimmed.starts_with("test ")
+        && (trimmed.ends_with("... ok") || trimmed.ends_with("... ignored")))
+        || trimmed.ends_with(" ... ok")
+        || trimmed.ends_with(" PASSED")
+        || trimmed.starts_with("PASSED ")
+        || trimmed.starts_with("--- PASS:")
+        || trimmed.starts_with("✓ ")
+        || (trimmed.starts_with("PASS ") && !trimmed.contains("FAIL"))
+        || (trimmed.starts_with("ok ") && !trimmed.contains("not ok"))
+    {
+        return LineKind::PassTest;
+    }
+
+    if trimmed.starts_with("Compiling ")
+        || (trimmed.starts_with('[')
+            && trimmed.contains(']')
+            && (trimmed.contains("Building ") || trimmed.contains("Compiling ")))
+    {
+        return LineKind::Compiling;
+    }
+
+    LineKind::Other
+}
+
+pub(crate) fn distill_output(raw: &str) -> String {
+    let lines: Vec<&str> = raw.lines().collect();
+    if lines.len() <= 10 {
+        return raw.to_string();
+    }
+
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut i = 0;
+    while i < lines.len() {
+        match classify_line(lines[i]) {
+            LineKind::PassTest => {
+                let start = i;
+                while i < lines.len() && matches!(classify_line(lines[i]), LineKind::PassTest) {
+                    i += 1;
+                }
+                let count = i - start;
+                if count >= 3 {
+                    out.push(format!("[... {count} passed tests omitted ...]"));
+                } else {
+                    for line in &lines[start..i] {
+                        out.push((*line).to_string());
+                    }
+                }
+            }
+            LineKind::Compiling => {
+                let start = i;
+                while i < lines.len() && matches!(classify_line(lines[i]), LineKind::Compiling) {
+                    i += 1;
+                }
+                let count = i - start;
+                if count >= 4 {
+                    out.push(format!("[... compiled {count} packages ...]"));
+                } else {
+                    for line in &lines[start..i] {
+                        out.push((*line).to_string());
+                    }
+                }
+            }
+            LineKind::Other => {
+                out.push(lines[i].to_string());
+                i += 1;
+            }
+        }
+    }
+    let mut result = out.join("\n");
+    if raw.ends_with('\n') {
+        result.push('\n');
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn distills_passing_tests() {
+        let mut raw = String::from("running 20 tests\n");
+        for i in 1..=15 {
+            raw.push_str(&format!("test test_{i} ... ok\n"));
+        }
+        raw.push_str("test test_fail ... FAILED\n");
+        raw.push_str("failures:\n    test_fail\n");
+        raw.push_str("test result: FAILED. 15 passed; 1 failed\n");
+
+        let distilled = distill_output(&raw);
+        assert!(
+            distilled.contains("[... 15 passed tests omitted ...]"),
+            "{distilled}"
+        );
+        assert!(
+            distilled.contains("test test_fail ... FAILED"),
+            "{distilled}"
+        );
+        assert!(
+            distilled.contains("failures:\n    test_fail"),
+            "{distilled}"
+        );
+    }
+
+    #[test]
+    fn preserves_short_output() {
+        let raw = "test a ... ok\ntest b ... ok\n";
+        assert_eq!(distill_output(raw), raw);
     }
 }

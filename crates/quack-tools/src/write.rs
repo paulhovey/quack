@@ -143,11 +143,16 @@ impl Tool for Write {
                 } else {
                     "Created"
                 };
-                Ok(ToolOutput::ok(
-                    format!("{verb} {} ({} lines).", p.shown, p.after.lines().count()),
-                    format!("+{add} -{del}"),
-                )
-                .with_detail(unified_diff(&p.shown, before, &p.after)))
+                let mut msg = format!("{verb} {} ({} lines).", p.shown, p.after.lines().count());
+                if let Some(before) = &p.before
+                    && let Some(line) = crate::outline::new_syntax_error(&p.path, before, &p.after)
+                {
+                    msg.push_str(&format!(
+                        "\n\nWarning: Tree-sitter detected a syntax error at line {line} after this change (the file previously parsed cleanly). Check brackets, indentation or delimiters."
+                    ));
+                }
+                Ok(ToolOutput::ok(msg, format!("+{add} -{del}"))
+                    .with_detail(unified_diff(&p.shown, before, &p.after)))
             };
             run().unwrap_or_else(ToolOutput::error)
         })

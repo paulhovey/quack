@@ -36,8 +36,16 @@ Everything below works today. Planned work is listed separately at the end.
   listed, and one is picked for you.
 - **Linux, macOS and Windows**, x64 and ARM64. Windows is a first-class target: shell
   commands run in Job Objects so they always die cleanly, and PowerShell is supported.
-- **Knows when it broke the build.** Language servers report new errors in the result of
-  the edit that caused them, so the model fixes them before moving on.
+- **Knows when it broke the syntax or build.** Tree-sitter validates syntax immediately
+  after every edit and warns the model if it introduced an unclosed delimiter or parse error.
+  When language servers are installed, they report new type and compile errors in the result
+  of the edit that caused them, so the model fixes them before moving on.
+- **Smart output distillation saves tokens.** Long test suites (pytest, cargo test, unittest,
+  go test, jest) and compiler builds have their passing lines and progress folded
+  automatically (`[... 42 passed tests omitted ...]`), keeping the model's working context
+  concise and prompt caches warm without losing any error traces or diffs.
+- **Loop and thrashing guards.** Catches empty responses, consecutive repeated calls, and
+  non-consecutive edit-test-edit oscillation loops to keep open models from getting stuck.
 - **Sandboxed by default.** Shell commands can write only in the workspace and have no
   network (Landlock + seccomp on Linux, Seatbelt on macOS), with no helper programs to
   install.
@@ -74,7 +82,8 @@ Everything below works today. Planned work is listed separately at the end.
   DeepSeek or Kimi formats become real calls (and the raw markup never shows), loose
   arguments are parsed, duplicate call ids are fixed. Fenced JSON calls are taken too when
   a model's `tool_calling.text_format = "json-block"`.
-- Loop guards: repetition is caught, and an empty reply gets one nudge.
+- Loop guards: repetition is caught (including non-consecutive edit-test-edit cycles),
+  and an empty reply gets one nudge.
 - A native Ollama adapter that sets the context window per request.
 - Besides OpenAI-compatible chat: the Anthropic Messages API (`api = "anthropic-messages"`,
   which several open-model hosts also serve) and the OpenAI Responses API
@@ -134,9 +143,11 @@ Everything below works today. Planned work is listed separately at the end.
   other. A task can carry out one item of the plan (`todo: 3`), which ticks off when it
   succeeds. Its steps show under the `task` line, and `/tasks` lists every run with
   what it did and its report. Add your own agents as two-line TOML files.
-- A forgiving `edit`: exact match first, then ignoring trailing spaces, indentation and blank
-  lines. CRLF line endings and BOMs are kept, and a file changed since the agent read it is
-  not overwritten.
+- A forgiving `edit`: exact match first, then ignoring trailing spaces, indentation, and blank
+  lines. Accidental line-number prefixes copied from `read` output are automatically stripped,
+  and typographic smart quotes and dashes normalize to ASCII. If an edit introduces a syntax
+  error into a previously valid file, Tree-sitter warns the model immediately with the line number.
+  CRLF line endings and BOMs are kept, and a file changed since the agent read it is not overwritten.
 - Edit formats, set by `[tools] edit_format` or by the model's profile:
   - `hashline`: `read` and `grep` put a `[path#tag]` header over
     each file's numbered lines, and edits name lines by number with that tag instead of
@@ -154,7 +165,10 @@ Everything below works today. Planned work is listed separately at the end.
   Multi-file changes are checked whole before anything is written, and `/undo` puts back
   every file a call changed.
 - The shell runs bash, zsh or PowerShell. Timeouts kill the whole process tree, and long
-  output is trimmed to its start and end.
+  output is trimmed to its start and end. Build and test runs (Cargo, Pytest, Python unittest,
+  Go test, Jest, TAP) are automatically distilled: long sequences of passing tests and compiler
+  progress are folded (`[... 42 passed tests omitted ...]`), saving thousands of context tokens
+  while keeping every assertion failure, stack trace, and final test result intact.
 
 ### Code intelligence (LSP)
 

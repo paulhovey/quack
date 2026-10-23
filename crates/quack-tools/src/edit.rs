@@ -133,6 +133,52 @@ pub(crate) fn replace(
         }
     }
 
+    let non_empty = old_lines.iter().filter(|l| !l.trim().is_empty()).count();
+    if non_empty > 0
+        && old_lines
+            .iter()
+            .filter(|l| !l.trim().is_empty())
+            .all(|l| strip_line_prefix(l) != *l)
+    {
+        let stripped: Vec<&str> = old_lines.iter().map(|&l| strip_line_prefix(l)).collect();
+        for (find, _) in strategies {
+            let windows = find(&file_lines, &stripped);
+            if windows.len() == 1 {
+                let (s, e) = windows[0];
+                return Ok((
+                    splice(&file_lines, s, e, new.trim_end_matches('\n')),
+                    Some("matched after stripping line numbers from read output"),
+                    1,
+                ));
+            }
+        }
+    }
+
+    if old.chars().any(is_smart_punct) {
+        let normalized_old = normalize_quotes(old);
+        let normalized_text = normalize_quotes(text);
+        let hits: Vec<usize> = normalized_text
+            .match_indices(&normalized_old)
+            .map(|(i, _)| i)
+            .collect();
+        if hits.len() == 1 {
+            let start_line = text[..hits[0]].matches('\n').count();
+            let end_line = start_line + old_lines.len();
+            if end_line <= file_lines.len() {
+                return Ok((
+                    splice(
+                        &file_lines,
+                        start_line,
+                        end_line,
+                        new.trim_end_matches('\n'),
+                    ),
+                    Some("matched after normalizing unicode punctuation"),
+                    1,
+                ));
+            }
+        }
+    }
+
     let first = old_lines
         .iter()
         .find(|l| !l.trim().is_empty())
@@ -262,6 +308,30 @@ fn line_of(text: &str, byte: usize) -> usize {
     text[..byte].matches('\n').count() + 1
 }
 
+fn strip_line_prefix(s: &str) -> &str {
+    let trimmed = s.trim_start();
+    if let Some(idx) = trimmed.find(['\t', '|', ':']) {
+        let prefix = &trimmed[..idx];
+        if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit()) {
+            return trimmed[idx + 1..].trim_start_matches(' ');
+        }
+    }
+    s
+}
+
+fn is_smart_punct(c: char) -> bool {
+    matches!(
+        c,
+        '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}' | '\u{2013}' | '\u{2014}'
+    )
+}
+
+fn normalize_quotes(s: &str) -> String {
+    s.replace(['\u{2018}', '\u{2019}'], "'")
+        .replace(['\u{201C}', '\u{201D}'], "\"")
+        .replace(['\u{2013}', '\u{2014}'], "--")
+}
+
 impl Tool for StrReplace {
     fn name(&self) -> &str {
         "edit"
@@ -333,6 +403,13 @@ impl Tool for StrReplace {
                     msg.push_str(&format!(" ({note})"));
                 }
                 msg.push('.');
+                if let Some(line) =
+                    crate::outline::new_syntax_error(&p.path, &p.file.text, &p.after)
+                {
+                    msg.push_str(&format!(
+                        "\n\nWarning: Tree-sitter detected a syntax error at line {line} after this edit (the file previously parsed cleanly). Check brackets, indentation or delimiters."
+                    ));
+                }
                 Ok(
                     ToolOutput::ok(msg, format!("+{add} -{del}")).with_detail(unified_diff(
                         &p.shown,
@@ -390,5 +467,36 @@ mod tests {
     fn not_found_points_at_first_line() {
         let err = replace("one\ntwo\nthree\n", "two\nTHREE", "x", false).expect_err("missing");
         assert!(err.contains("line 2"), "{err}");
+    }
+
+    #[test]
+    fn stripping_line_numbers_from_read_output() {
+        let file = "fn main() {\n    let a = 1;\n    let b = 2;\n}\n";
+        let (t, note, _) = replace(
+            file,
+            "   2\t    let a = 1;\n   3\t    let b = 2;",
+            "    let a = 10;\n    let b = 20;",
+            false,
+        )
+        .expect("line numbers");
+        assert_eq!(
+            note,
+            Some("matched after stripping line numbers from read output")
+        );
+        assert!(t.contains("let a = 10;\n    let b = 20;"));
+    }
+
+    #[test]
+    fn smart_quotes_and_dashes_normalize() {
+        let file = "let msg = \"hello--world\";\n";
+        let (t, note, _) = replace(
+            file,
+            "let msg = \u{201C}hello\u{2014}world\u{201D};",
+            "let msg = \"hi\";",
+            false,
+        )
+        .expect("unicode quotes");
+        assert_eq!(note, Some("matched after normalizing unicode punctuation"));
+        assert_eq!(t, "let msg = \"hi\";\n");
     }
 }

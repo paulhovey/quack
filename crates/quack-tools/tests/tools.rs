@@ -106,6 +106,42 @@ async fn write_read_edit_search() {
     assert!(l.model.contains("  src/\n    lib.rs"), "{}", l.model);
 }
 
+#[cfg(feature = "lang-common")]
+#[tokio::test]
+async fn edit_syntax_warning() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let reg = Registry::builtin();
+    let c = ctx(dir.path());
+
+    let w = call(
+        &reg,
+        &c,
+        "write",
+        json!({"path": "src/lib.rs", "content": "fn clean() {\n    let x = 1;\n}\n"}),
+    )
+    .await;
+    assert!(w.ok, "{w:?}");
+    assert!(
+        !w.model
+            .contains("Warning: Tree-sitter detected a syntax error")
+    );
+
+    let e = call(
+        &reg,
+        &c,
+        "edit",
+        json!({"path": "src/lib.rs", "old_string": "    let x = 1;", "new_string": "    let x = ;"}),
+    )
+    .await;
+    assert!(e.ok, "{e:?}");
+    assert!(
+        e.model
+            .contains("Warning: Tree-sitter detected a syntax error at line 2"),
+        "{}",
+        e.model
+    );
+}
+
 #[tokio::test]
 async fn shell_reports_exit_code() {
     let dir = tempfile::tempdir().expect("tempdir");
