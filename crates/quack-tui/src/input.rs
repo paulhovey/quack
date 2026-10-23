@@ -175,9 +175,16 @@ impl Input {
 
     /// Move the cursor to display column `col` of `row` in `layout`, or as near as it gets.
     pub fn place(&mut self, layout: &Layout, row: usize, col: usize) {
-        let Some(&(start, max)) = layout.spans.get(row.min(layout.spans.len() - 1)) else {
-            return;
-        };
+        if let Some(at) = self.index(layout, row, col) {
+            self.cursor = at;
+        }
+    }
+
+    /// The char at display column `col` of `row` in `layout`, or the nearest place on the row.
+    fn index(&self, layout: &Layout, row: usize, col: usize) -> Option<usize> {
+        let &(start, max) = layout
+            .spans
+            .get(row.min(layout.spans.len().checked_sub(1)?))?;
         let mut at = start;
         let mut w = 0;
         for c in self.text.chars().skip(start).take(max - start) {
@@ -187,7 +194,23 @@ impl Input {
             }
             at += 1;
         }
-        self.cursor = at;
+        Some(at)
+    }
+
+    /// The text from cell `from` through cell `to` (both `(row, column)` in `layout`), with
+    /// its real line breaks rather than the wrapping.
+    pub fn slice(&self, layout: &Layout, from: (usize, usize), to: (usize, usize)) -> String {
+        let (Some(a), Some(b)) = (
+            self.index(layout, from.0, from.1),
+            self.index(layout, to.0, to.1 + 1),
+        ) else {
+            return String::new();
+        };
+        self.text
+            .chars()
+            .skip(a)
+            .take(b.saturating_sub(a))
+            .collect()
     }
 
     /// Move the cursor up a row at `width` columns. False when it is already on the top row.
@@ -340,5 +363,20 @@ mod tests {
         let layout = i.layout(10);
         i.place(&layout, 0, 2);
         assert_eq!(i.layout(10).cursor, (0, 1));
+    }
+
+    #[test]
+    fn slice_follows_cells_and_keeps_real_line_breaks() {
+        let mut i = Input::default();
+        // Rows at 10 columns: "hello ", "brave new ", "world", "two".
+        i.insert_str("hello brave new world\ntwo");
+        let l = i.layout(10);
+        assert_eq!(i.slice(&l, (0, 0), (0, 4)), "hello");
+        assert_eq!(i.slice(&l, (1, 0), (1, 4)), "brave");
+        assert_eq!(i.slice(&l, (0, 4), (1, 4)), "o brave");
+        // Past a row's end stops at it; wrapping adds no break, a newline stays one.
+        assert_eq!(i.slice(&l, (1, 6), (3, 40)), "new world\ntwo");
+        i.set("a日b");
+        assert_eq!(i.slice(&i.layout(10), (0, 2), (0, 2)), "日");
     }
 }

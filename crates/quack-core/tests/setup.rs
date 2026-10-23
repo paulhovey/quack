@@ -237,3 +237,54 @@ async fn a_server_added_by_url_lists_its_models_and_a_service_waits_for_its_key(
     }
     engine.shutdown().await;
 }
+
+#[test]
+fn a_new_key_replaces_a_stored_one_or_moves_the_key_to_the_store() {
+    use quack_core::setup::set_provider_key_with;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let loaded = common::workspace(tmp.path(), "http://127.0.0.1:9/v1", "[]", "");
+    let providers_d = tmp.path().join("user/providers.d");
+    let stored = "base_url = \"https://api.example.com/v1\"\n\
+                  api_key = { keyring = \"example/me\" }\n";
+    std::fs::write(providers_d.join("stored.toml"), stored).expect("write");
+    std::fs::write(
+        providers_d.join("from-env.toml"),
+        "base_url = \"https://api.example.org/v1\"\n\
+         api_key = { env = \"QUACK_TEST_UNSET_KEY\" }\n",
+    )
+    .expect("write");
+    let mut saved: Vec<(String, String)> = Vec::new();
+    let mut store = |name: &str, key: &str| {
+        saved.push((name.to_owned(), key.to_owned()));
+        Ok(())
+    };
+
+    // Already in the store: replaced under its own name, and the file is left alone.
+    let path = set_provider_key_with(&loaded, "stored", "new-key", &mut store).expect("stored");
+    assert_eq!(path, None);
+    assert_eq!(
+        std::fs::read_to_string(providers_d.join("stored.toml")).expect("file"),
+        stored
+    );
+
+    // Read from elsewhere: stored under the provider's id, and the file points at it.
+    let path = set_provider_key_with(&loaded, "from-env", "k2", &mut store).expect("moved");
+    assert_eq!(path, Some(providers_d.join("from-env.toml")));
+    let text = std::fs::read_to_string(providers_d.join("from-env.toml")).expect("file");
+    assert!(
+        text.contains("api_key = { keyring = \"from-env\" }"),
+        "{text}"
+    );
+
+    // Nothing is stored for an unknown provider or an empty key.
+    for (id, key) in [("nope", "k"), ("stored", "")] {
+        set_provider_key_with(&loaded, id, key, &mut store).expect_err("refused");
+    }
+    assert_eq!(
+        saved,
+        [
+            ("example/me".to_owned(), "new-key".to_owned()),
+            ("from-env".to_owned(), "k2".to_owned())
+        ]
+    );
+}

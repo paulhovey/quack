@@ -76,8 +76,9 @@ pub struct UiSettings {
     pub startup_panel: StartupPanel,
     /// Use ASCII instead of box-drawing and spinner glyphs.
     pub ascii: bool,
-    /// Capture the mouse for wheel scrolling and clicks in the input. Native text selection
-    /// then needs Shift held; turn this off to select without it.
+    /// Capture the mouse for wheel scrolling, clicks in the input and selecting text to copy.
+    /// The terminal's own selection then needs Shift held; turn this off to leave it to the
+    /// terminal.
     pub mouse: bool,
     /// Replace spinners with static indicators.
     pub reduced_motion: bool,

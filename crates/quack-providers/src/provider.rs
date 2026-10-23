@@ -1,5 +1,6 @@
 //! A provider ready to use: resolved secrets, one HTTP client, retries and streaming.
 
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use futures::StreamExt;
@@ -51,14 +52,15 @@ pub struct Provider {
     api: Api,
     client: reqwest::Client,
     base_url: String,
-    headers: HeaderMap,
+    /// Shared by every clone, so a new key ([`Provider::take_key`]) reaches them all.
+    headers: Arc<RwLock<HeaderMap>>,
     dialect: openai_chat::Dialect,
     /// The file's `extra_body`, under each model's.
     extra: serde_json::Map<String, serde_json::Value>,
     #[cfg(feature = "proto-openai-responses")]
     route: responses::Route,
     #[cfg(feature = "auth-chatgpt")]
-    login: Option<std::sync::Arc<crate::login::Login>>,
+    login: Option<Arc<crate::login::Login>>,
 }
 
 impl Provider {
@@ -147,7 +149,7 @@ impl Provider {
                             "a ChatGPT sign-in needs `api = \"openai-responses\"`".into(),
                         ));
                     }
-                    login = Some(std::sync::Arc::new(crate::login::Login::new(
+                    login = Some(Arc::new(crate::login::Login::new(
                         id,
                         &a.issuer,
                         &file.base_url,
@@ -187,7 +189,7 @@ impl Provider {
             base_url,
             file,
             client,
-            headers,
+            headers: Arc::new(RwLock::new(headers)),
             extra,
             #[cfg(feature = "proto-openai-responses")]
             route,
@@ -216,16 +218,33 @@ impl Provider {
         None
     }
 
+    /// Send `fresh`'s headers from now on: it was built from this provider's file after its
+    /// key changed. Every clone of this provider, in a running turn too, uses them.
+    pub fn take_key(&self, fresh: &Provider) {
+        let headers = fresh.headers();
+        match self.headers.write() {
+            Ok(mut h) => *h = headers,
+            Err(poisoned) => *poisoned.into_inner() = headers,
+        }
+    }
+
+    fn headers(&self) -> HeaderMap {
+        match self.headers.read() {
+            Ok(h) => h.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+
     /// The headers for one request, with a current token for a signed-in provider.
     async fn request_headers(&self) -> Result<HeaderMap, ProviderError> {
         #[cfg(feature = "auth-chatgpt")]
         if let Some(login) = &self.login {
-            let mut h = self.headers.clone();
+            let mut h = self.headers();
             let token = login.bearer().await?;
             insert_header(&mut h, "Authorization", &format!("Bearer {token}"), true)?;
             return Ok(h);
         }
-        Ok(self.headers.clone())
+        Ok(self.headers())
     }
 
     /// Whether the history should only ever grow: per-request text (the plan reminder) is
@@ -765,5 +784,35 @@ mod tests {
             err.message.contains("CA file `/nonexistent/ca.pem`"),
             "{err:?}"
         );
+    }
+
+    /// A clone made before the key changed (a running turn's) sends the new one.
+    #[tokio::test]
+    async fn a_new_key_reaches_every_clone() {
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .and(header("authorization", "Bearer new"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "data": [{ "id": "tiny" }] })),
+            )
+            .mount(&server)
+            .await;
+        let build = |key: &str| {
+            let file: ProviderFile = serde_json::from_value(
+                serde_json::json!({ "base_url": server.uri(), "api_key": key }),
+            )
+            .expect("provider file");
+            Provider::new("mock", file, &NetworkSettings::default(), &|_| None).expect("provider")
+        };
+        let session = build("old");
+        let turn = session.clone();
+        assert!(turn.list_models().await.is_err(), "the old key is refused");
+        session.take_key(&build("new"));
+        let models = turn.list_models().await.expect("the new key is sent");
+        assert_eq!(models[0].id, "tiny");
     }
 }

@@ -511,7 +511,7 @@
         },
         "mouse": {
           "default": true,
-          "description": "Capture the mouse for wheel scrolling and clicks in the input. Native text selection\nthen needs Shift held; turn this off to select without it.",
+          "description": "Capture the mouse for wheel scrolling, clicks in the input and selecting text to copy.\nThe terminal's own selection then needs Shift held; turn this off to leave it to the\nterminal.",
           "type": "boolean"
         },
         "reduced_motion": {

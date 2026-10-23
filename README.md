@@ -52,6 +52,10 @@ Everything below works today. Planned work is listed separately at the end.
   OpenAI-compatible server by its URL. `quack setup` asks the same questions in a plain terminal.
 - API keys come from an environment variable, a file, a command, or the OS keyring (Windows,
   macOS, and Linux through the Secret Service). `quack keyring set|delete` manages them.
+- To replace a provider's key (after rotating it, say), run `/key <provider>`, press Enter on
+  the provider in `/providers`, or press Ctrl-S on a hosted service in `/setup`. A key already
+  in the OS credential store is replaced there; one read from elsewhere moves there. The
+  session sends the new key from its next request, so there is no need to restart.
 - `quack login chatgpt` signs in to a ChatGPT plan in the browser; `quack logout chatgpt`
   revokes it. The sign-in is saved in the data folder, readable by you only, and renewed
   while in use.
@@ -321,22 +325,23 @@ env = { JIRA_URL = "https://jira.example.com", JIRA_TOKEN = { keyring = "jira" }
 
 ### Interface
 
-- A full-screen terminal UI with markdown rendering and an ASCII mode. Code blocks are
+- A full-screen terminal UI with markdown rendering (headings, lists, blockquotes, code blocks, tables with column wrapping and alignment) and an ASCII mode. Code blocks are
   syntax-highlighted with the same tree-sitter grammars once their closing fence arrives;
   large ones are highlighted on a background thread and show plain until then.
 - A scrollable history with a scrollbar: PageUp/PageDown by page, Shift-Up/Down by line,
   Ctrl-Home/Ctrl-End to the top or the latest. The view holds still while a reply streams
-  in below. The wheel scrolls and a click places the input cursor; this takes over the
-  mouse, so hold Shift to select text, or set `ui.mouse = false` to give it back.
+  in below. The wheel scrolls and a click places the input cursor.
+- Drag to select text in the history or the input box; letting go copies it (OSC 52).
+  Copies leave out the transcript's glyphs and gutter. Shift-drag still uses the
+  terminal's own selection, and `ui.mouse = false` hands the mouse back to it.
 - An input box that wraps long lines and grows to six rows. Up/Down move between its rows
   and step through history from the top or bottom row.
 - A slash-command palette that highlights the letters you typed and shows what doesn't fit
   on the row (the rest of a description, aliases) underneath. Every picker (`/models`,
   `/config`, `/help`, …) works the same way, with tabs, match highlighting and a scrollbar.
-- A status bar with the permission mode as a coloured badge, the room left before
-  compaction in tokens and in turns at the recent pace (yellow, then red, as it runs
-  out), generation speed, and what the model is doing right
-  now (thinking, writing, running a tool) with a running clock.
+- A status bar with the permission mode as a coloured badge, context used and the
+  model's maximum context (yellow, then red, as it approaches compaction), generation speed,
+  and what the model is doing right now (thinking, writing, running a tool) with a running clock.
 - The model's plan as a live checklist, plus a strip above the input showing progress and
   the step in hand.
 - Tool calls coloured by kind, with how long slow ones took. Diffs get a coloured gutter.

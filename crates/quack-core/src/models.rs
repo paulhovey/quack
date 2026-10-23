@@ -29,12 +29,18 @@ pub(crate) async fn catalog_of(config: Arc<Loaded>, only: Option<&str>) -> Vec<P
         let network = config.settings.network.clone();
         tasks.spawn(async move {
             let bundled = item.layer == LayerKind::Defaults;
+            let key = item
+                .loaded()
+                .filter(|f| f.auth.is_none())
+                .and_then(|f| f.api_key.as_ref())
+                .map(crate::setup::key_source);
             let mut entry = match item.state {
                 ItemState::Loaded(file) => probe(&item.id, file, network).await,
                 ItemState::Disabled(why) => unavailable(&item.id, why),
                 ItemState::Failed(d) => unavailable(&item.id, d.one_line()),
             };
             entry.bundled = bundled;
+            entry.key = key;
             (order, entry)
         });
     }
@@ -54,6 +60,7 @@ fn unavailable(id: &str, note: String) -> ProviderModels {
         note,
         models: Vec::new(),
         bundled: false,
+        key: None,
     }
 }
 
@@ -124,5 +131,6 @@ async fn probe(
         note,
         models,
         bundled: false,
+        key: None,
     }
 }

@@ -53,7 +53,7 @@ budget = floor(context_window × budget_ratio) − max_output_reserve
 
 The `ContextLedger` tracks tokens per segment: system, tools, instructions, memory, summary, and each history item. It uses local token counts ([02](02-providers.md#tokenizers)), corrected by the server's reported usage.
 
-`/context` shows a breakdown: one band with each segment in its own fill and the compaction point marked, tokens per segment, the room left before compaction in turns at the recent pace, and a suggestion based on what takes the most room. The status bar shows the room left (`34k left · ~4 turns`) rather than a gauge, because "how long can I keep going" is the question a user has.
+`/context` shows a breakdown: one band with each segment in its own fill and the compaction point marked, tokens per segment, the room left before compaction in turns at the recent pace, and a suggestion based on what takes the most room. The status bar shows context growing towards the model's maximum context (`41.2k/220k`), turning yellow and red as it approaches compaction.
 
 ## Tree-sitter: structure first
 

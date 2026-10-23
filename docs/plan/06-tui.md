@@ -90,6 +90,7 @@ All configuration UIs share one modal widget, so they look and behave the same:
 |---|---|---|
 | `/models` | `/model` | Models modal (above). Switch for session, set default (`[model].default`), set `small` model, refresh discovery, set unknown context window |
 | `/providers` | | Provider list: state, protocol, base URL, auth status. Actions: enable/disable, test connection, set API key (keyring/env/cmd wizard), edit file, **add provider** (pick a local engine or hosted service from setup's list, or start blank; writes a new `providers.d/<id>.toml`) |
+| `/key` | | `/key <provider>`: replace a provider's API key, for example after rotating it (a hidden prompt). A key in the OS credential store is replaced under its own name and the provider file stays as it is; a key read from elsewhere (`env`, `file`, `cmd`, a value) moves to the store, and the provider file in the user layer is pointed at it. Providers in use take the new key at once: clones of a `Provider` share its headers, so a running turn and the planner pick it up too. With no argument it opens `/providers`, where Enter on a provider with a key does the same, as Ctrl-S does on a ready hosted service in `/setup` (2026-10-22) |
 | `/setup` | | Find model servers on this machine (loopback ports only) and add one: one row per server and model, Enter writes `providers.d/<id>.toml` to the user layer and switches to the model. Tabs for hosted services (enter the key; it goes to the OS credential store) and any server by its URL. Opens on its own when startup ends with no model ([14](14-packaging-and-distribution.md#setup-in-the-tui-2026-10-20)) |
 | `/profiles` | `/profile` | Each profile rendered for the current model: system prompt, tool names, edit format, and which one `auto` picks. Enter switches the session (`/profiles <id>`, `/profiles auto`), Ctrl-S saves `[model] profile`. Built 2026-10-18; pinning per model and the token cost are still to do |
 | `/resume` | `/sessions` | Session browser for this project (Tab switches to all projects): title, age, turns, model, preview pane with the transcript head. Actions: resume, fork, rename, export, delete (with confirmation) |
@@ -148,6 +149,7 @@ The **approval dialog** shows a diff view for edits (side-by-side at 160 columns
 - **Highlighting**: `tree-sitter-highlight`, reusing the compiled grammars. Highlighting runs off-thread for large code blocks, which render plain first and are highlighted when ready.
   - *As implemented (2026-10-21)*: `quack-tui/src/highlight.rs` keeps a cache of highlighted runs keyed by language and code. `draw` only reads it. The app fills it from `AssistantDelta`, `AssistantRewrite`, `SessionResumed` and `/reload`, for closed fences only (`markdown::code_blocks`), so a block still streaming in stays plain. A block is highlighted on the spot when it is under 8 KiB and its language's queries are already compiled. Otherwise it goes to `spawn_blocking` (the first block in a language compiles its queries, about 25 ms on average in a release build) and comes back over a channel the event loop selects on. Blocks over 256 KiB stay plain. Fence tags map to languages by name or extension (`rust,ignore`, `py`, `sh`). Colours come from the theme's existing styles (`Theme::syntax`), so light, dark and `NO_COLOR` follow. Diffs and tool output are not highlighted yet.
 - **No blocking I/O on the render path.** Everything goes through the engine or a background task.
+- **Markdown tables**: GFM tables rendered with column alignment (left/center/right), proportional width budget allocation with word-wrapping within cells, and an ASCII fallback.
 
 ## Keybindings
 
@@ -166,7 +168,7 @@ Defaults are listed in `quack keys --print`. Users override them in `config.toml
 - Supported: Windows 10 1809+ and Windows 11, on x64 and ARM64. VT processing is required. On legacy conhost without VT, print a clear message suggesting Windows Terminal.
 - Unicode width: use `unicode-width` and avoid ambiguous-width glyphs in chrome. Provide `ui.ascii = true` for fonts that lack box-drawing or spinner glyphs.
 - Clipboard: OSC 52 where supported, with `arboard` as a fallback (Windows clipboard API) for "copy last response" and "copy code block".
-- Mouse: on by default (`ui.mouse = true`): the wheel scrolls the transcript and a left click places the input cursor. Capture breaks native text selection in most terminals, so Shift-drag selects, and `ui.mouse = false` turns capture off; `/reload` follows the setting.
+- Mouse: on by default (`ui.mouse = true`): the wheel scrolls the transcript and a left click places the input cursor. Capture breaks native text selection in most terminals, so quack selects itself (`select.rs`): a drag in the transcript or the input marks the text, and letting go copies it through OSC 52, with "copied N chars" in the status bar. The selection is kept in content rows, so it stays on its text while the view scrolls (dragging past the top or bottom edge scrolls along). Copied transcript text leaves out each row's lead (duck, `›`, tool icon) and the indent the rows share; input text keeps its real line breaks, not the wrapping. Any key, click or resize clears it, and Ctrl-C while it shows copies it again instead of interrupting. Shift-drag still gives the terminal's own selection, and `ui.mouse = false` turns capture off; `/reload` follows the setting.
 
 ## Accessibility
 
@@ -181,5 +183,5 @@ Defaults are listed in `quack keys --print`. Users override them in `config.toml
 
 ## Open questions
 
-- Text selection in full-screen mode: most terminals let users bypass mouse capture with Shift-drag, and `ui.mouse = false` turns capture off. Is in-app selection with a "copy selection" mode worth building? Proposed: `/copy` plus code-block picking in M1, and in-app selection later only if users ask for it.
+- Text selection in full-screen mode: resolved 2026-10-22, in-app drag-to-copy (see Windows terminals above).
 - Should we support a split-pane diff view (side-by-side) for approvals on wide terminals? Proposed: yes, automatically at ≥160 columns.

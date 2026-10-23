@@ -12,7 +12,7 @@ use quack_protocol::{
     CallId, EngineError, EngineErrorKind, Event, InputItem, InstructionFile, Op, SessionId,
     SessionInfo, SessionSummary, TurnId, WriteScope,
 };
-use quack_providers::Message;
+use quack_providers::{Message, Provider};
 use quack_tools::Permissions;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
@@ -985,9 +985,11 @@ impl Engine {
     }
 
     /// `/setup`'s key and URL steps: write the provider in the background, then list its
-    /// models alone so the user can pick one.
+    /// models alone so the user can pick one. The `live` providers (in use, with the same
+    /// id) take the provider's new key.
     fn connect(
         &self,
+        live: Vec<Provider>,
         add: impl FnOnce(&Loaded) -> Result<crate::setup::Added, String> + Send + 'static,
     ) {
         let config = self.config.clone();
@@ -1010,6 +1012,23 @@ impl Engine {
                     return;
                 }
             };
+            if !live.is_empty() {
+                let (cfg, id) = (config.clone(), added.id.clone());
+                let fresh = tokio::task::spawn_blocking(move || fresh_provider(&cfg, &id))
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()));
+                match fresh {
+                    Ok(fresh) => live.iter().for_each(|p| p.take_key(&fresh)),
+                    Err(e) => {
+                        let _ = tx.send(Event::Warning {
+                            message: format!(
+                                "the key is stored, but this session cannot read it ({e}) · \
+                                 restart quack to use it"
+                            ),
+                        });
+                    }
+                }
+            }
             let _ = tx.send(Event::ProviderAdded {
                 id: added.id.clone(),
                 path: added.path.map(|p| p.display().to_string()),
@@ -1525,13 +1544,23 @@ impl Engine {
                     let _ = tx.send(Event::Services { services });
                 });
             }
-            Op::SetProviderKey { id, key } => self.connect(move |config| {
-                crate::setup::set_service_key(config, &id, &key.0).map(|path| crate::setup::Added {
-                    id,
-                    path: Some(path),
-                })
-            }),
-            Op::AddServer { base_url, key } => self.connect(move |config| {
+            Op::SetProviderKey { id, key } => {
+                // The session (and the planner, or the editor it stands in for) sends the
+                // new key from its next request, a running turn's included.
+                let live = self
+                    .convo
+                    .iter()
+                    .flat_map(|c| [Some(&c.setup), c.editor.as_ref()])
+                    .flatten()
+                    .map(|s| s.provider.clone())
+                    .filter(|p| p.id == id)
+                    .collect();
+                self.connect(live, move |config| {
+                    crate::setup::set_provider_key(config, &id, &key.0)
+                        .map(|path| crate::setup::Added { id, path })
+                });
+            }
+            Op::AddServer { base_url, key } => self.connect(Vec::new(), move |config| {
                 crate::setup::add_server(config, &base_url, key.as_ref().map(|k| k.0.as_str()))
             }),
             Op::SetPermissionMode { mode } if !self.started => self.pending_mode = Some(mode),
@@ -2008,6 +2037,17 @@ struct Point {
 }
 
 /// Steps of a reload, reported back to the engine loop.
+/// Provider `id` built again from its file as it is now, with its key read afresh.
+fn fresh_provider(config: &Loaded, id: &str) -> Result<Provider, String> {
+    let file = quack_config::load_providers(config)
+        .into_iter()
+        .find(|i| i.id == id)
+        .and_then(|i| i.loaded().cloned())
+        .ok_or_else(|| format!("provider `{id}` did not load"))?;
+    Provider::new(id, file, &config.settings.network, &|k| std::env::var_os(k))
+        .map_err(|e| e.message)
+}
+
 #[derive(Debug)]
 enum Reload {
     Read(Result<Box<Loaded>, String>),

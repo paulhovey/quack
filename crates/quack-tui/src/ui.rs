@@ -12,6 +12,7 @@ use quack_protocol::ApprovalRequest;
 
 use crate::app::{App, Entry, PlanState, PopupItem, ToolEntry};
 use crate::fuzzy;
+use crate::select::Pane;
 use crate::wrap::wrap;
 
 const MAX_INPUT_LINES: usize = 6;
@@ -138,11 +139,7 @@ fn draw_prompt(f: &mut Frame<'_>, app: &App) {
         .title_bottom(
             key_hints(
                 t,
-                &[
-                    ("⏎", if p.last_step() { "add" } else { "next" }),
-                    ("^u", "clear"),
-                    ("esc", "back"),
-                ],
+                &[("⏎", p.enter_does()), ("^u", "clear"), ("esc", "back")],
             )
             .right_aligned(),
         );
@@ -257,10 +254,28 @@ fn assistant_lead(app: &App, is_head: bool) -> Vec<Span<'static>> {
 }
 
 fn transcript_rows(app: &App, width: usize) -> Vec<Line<'static>> {
+    transcript_rows_with_gutters(app, width).0
+}
+
+/// The transcript's rows, and for each the columns its lead (glyph and indent) takes,
+/// which copying a selection leaves out.
+pub(crate) fn transcript_rows_with_gutters(
+    app: &App,
+    width: usize,
+) -> (Vec<Line<'static>>, Vec<usize>) {
     let t = &app.theme;
     let mut rows = Vec::new();
+    let mut gutters = Vec::new();
+    let mut gutter = 0;
     let body_width = width.saturating_sub(3);
     for (i, entry) in app.transcript.iter().enumerate() {
+        // The rows so far belong to the entry before.
+        gutters.resize(rows.len(), gutter);
+        gutter = match entry {
+            Entry::Assistant(_) => 2 + app.glyphs.assistant.width(),
+            Entry::TurnSummary(_) => 0,
+            _ => 3,
+        };
         let (prefix, prefix_style, body_style, text) = match entry {
             Entry::User(s) => {
                 // A tinted band, so each turn's start is easy to find when scrolling.
@@ -357,7 +372,8 @@ fn transcript_rows(app: &App, width: usize) -> Vec<Line<'static>> {
         }
         rows.push(Line::raw(""));
     }
-    rows
+    gutters.resize(rows.len(), gutter);
+    (rows, gutters)
 }
 
 fn tool_rows(app: &App, tool: &ToolEntry, width: usize, rows: &mut Vec<Line<'static>>) {
@@ -552,6 +568,7 @@ fn agent_rows(
 }
 
 fn draw_transcript(f: &mut Frame<'_>, app: &App, area: Rect) {
+    app.transcript_area.set(area);
     if app.transcript.is_empty() {
         f.render_widget(Paragraph::new(welcome(app, area)), area);
         return;
@@ -575,6 +592,15 @@ fn draw_transcript(f: &mut Frame<'_>, app: &App, area: Rect) {
     let end = total - scroll;
     let start = end.saturating_sub(height);
     f.render_widget(Paragraph::new(rows[start..end].to_vec()), area);
+    if let Some(sel) = app.selection.filter(|s| s.pane == Pane::Transcript) {
+        let text = Rect {
+            width: area.width.saturating_sub(1),
+            ..area
+        };
+        crate::select::paint(f.buffer_mut(), text, start, &sel, |r| {
+            rows.get(r).map_or(0, Line::width)
+        });
+    }
 
     if max > 0 {
         let mut state = ScrollbarState::new(max)
@@ -627,6 +653,7 @@ fn draw_input(f: &mut Frame<'_>, app: &App, area: Rect) {
     let visible = usize::from(inner.height).max(1);
     let first = cur_row.saturating_sub(visible - 1);
     app.input_view.set((inner, first));
+    let widths: Vec<usize> = layout.rows.iter().map(|r| r.width()).collect();
     let lines: Vec<Line<'_>> = layout
         .rows
         .into_iter()
@@ -643,6 +670,16 @@ fn draw_input(f: &mut Frame<'_>, app: &App, area: Rect) {
         })
         .collect();
     f.render_widget(Paragraph::new(lines).block(block), area);
+    if let Some(sel) = app.selection.filter(|s| s.pane == Pane::Input) {
+        let text = Rect {
+            x: inner.x + 2,
+            width: inner.width.saturating_sub(2),
+            ..inner
+        };
+        crate::select::paint(f.buffer_mut(), text, first, &sel, |r| {
+            widths.get(r).copied().unwrap_or(0)
+        });
+    }
     if app.modal.is_none() {
         let x = inner.x + 2 + u16::try_from(cur_col).unwrap_or(0);
         let y = inner.y + u16::try_from(cur_row - first).unwrap_or(0);
@@ -675,32 +712,23 @@ fn draw_status(f: &mut Frame<'_>, app: &App, area: Rect) {
     if app.info.profile != "empty" {
         left.push(Span::styled(format!(" · {}", app.info.profile), t.dim));
     }
-    if let Some((used, budget)) = app.context {
-        // Not a gauge: how much is left before compaction, and how long that lasts.
+    if let Some((used, max)) = app.context {
         let k = crate::theme::tokens;
         left.push(Span::styled(" · ", t.dim));
-        match app.room() {
-            Some((room, turns)) => {
-                let line = app.compact_at.unwrap_or(budget).max(1);
-                #[allow(clippy::cast_precision_loss)]
-                let frac = used as f32 / line as f32;
-                let style = if frac >= 0.85 {
-                    t.error
-                } else if frac >= 0.6 {
-                    t.warn
-                } else {
-                    t.dim
-                };
-                let text = match turns {
-                    _ if room == 0 => "compacts next turn".to_owned(),
-                    Some(0) => format!("{} left · compacts soon", k(room)),
-                    Some(1) => format!("{} left · ~1 turn", k(room)),
-                    Some(n) => format!("{} left · ~{n} turns", k(room)),
-                    None => format!("{} left", k(room)),
-                };
-                left.push(Span::styled(text, style));
-            }
-            None => left.push(Span::styled(format!("{} in context", k(used)), t.dim)),
+        if max > 0 {
+            let line = app.compact_at.unwrap_or(max).max(1);
+            #[allow(clippy::cast_precision_loss)]
+            let frac = used as f32 / line as f32;
+            let style = if frac >= 0.85 {
+                t.error
+            } else if frac >= 0.6 {
+                t.warn
+            } else {
+                t.dim
+            };
+            left.push(Span::styled(format!("{}/{}", k(used), k(max)), style));
+        } else {
+            left.push(Span::styled(format!("{} in context", k(used)), t.dim));
         }
     }
     if let Some(tps) = app.speed {
@@ -725,6 +753,10 @@ fn draw_status(f: &mut Frame<'_>, app: &App, area: Rect) {
         right.push(Span::styled(format!("{} queued", app.spinner()), t.warn));
     } else if !app.startup_done {
         right.push(Span::styled(format!("{} starting", app.spinner()), t.dim));
+    }
+    if let Some(n) = app.copied() {
+        let s = if n == 1 { "" } else { "s" };
+        right.push(Span::styled(format!("  copied {n} char{s}"), t.ok));
     }
     let issues = app.startup_issues();
     if issues > 0 && !app.panel_visible() {
@@ -1725,6 +1757,7 @@ mod tests {
         };
         let catalog = [ProviderModels {
             bundled: false,
+            key: None,
             id: "charm".into(),
             available: true,
             note: String::new(),
@@ -1827,19 +1860,18 @@ mod tests {
     }
 
     #[test]
-    fn status_bar_shows_room_left_in_turns() {
+    fn status_bar_shows_context_growing_to_maximum() {
         let mut app = started_app();
         app.context = Some((60_000, 104_000));
         app.compact_at = Some(83_200);
         let s = render(&app, 100, 24);
-        assert!(s.contains("23.2k left"), "{s}");
-        assert!(!s.contains("turns"), "no pace without turns: {s}");
-        app.growth = vec![30_000, 38_000, 44_000, 52_000, 60_000];
-        let s = render(&app, 100, 24);
-        assert!(s.contains("23.2k left · ~2 turns"), "{s}");
+        assert!(s.contains("60k/104k"), "{s}");
         app.context = Some((90_000, 104_000));
         let s = render(&app, 100, 24);
-        assert!(s.contains("compacts next turn"), "{s}");
+        assert!(s.contains("90k/104k"), "{s}");
+        app.context = Some((12_345, 0));
+        let s = render(&app, 100, 24);
+        assert!(s.contains("12.3k in context"), "{s}");
     }
 
     #[test]
@@ -2276,6 +2308,75 @@ mod tests {
     }
 
     #[test]
+    fn dragging_selects_and_copies_from_the_transcript_and_the_input() {
+        use crossterm::event::{
+            Event as TermEvent, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        };
+        let mut app = App::new(test_info());
+        started(&mut app);
+        app.transcript
+            .push(Entry::Assistant("alpha beta\n\ngamma delta".into()));
+        app.input.set("hello brave world");
+        let mut terminal = Terminal::new(TestBackend::new(40, 16)).expect("terminal");
+        terminal.draw(|f| draw(f, &app)).expect("draw");
+        // Where a word was drawn.
+        let find = |terminal: &Terminal<TestBackend>, word: &str| -> (u16, u16) {
+            let buf = terminal.backend().buffer();
+            (0..buf.area.height)
+                .find_map(|y| {
+                    let row: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
+                    row.find(word)
+                        .map(|x| (u16::try_from(row[..x].width()).expect("narrow"), y))
+                })
+                .expect(word)
+        };
+        let mouse = |app: &mut App, kind, (column, row): (u16, u16)| {
+            app.on_terminal(TermEvent::Mouse(MouseEvent {
+                kind,
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            }));
+        };
+        let left = MouseButton::Left;
+
+        // From "beta" back up past the duck to the row's start, then down to "delta".
+        let beta = find(&terminal, "beta");
+        let delta = find(&terminal, "delta");
+        mouse(&mut app, MouseEventKind::Down(left), beta);
+        mouse(&mut app, MouseEventKind::Drag(left), (0, beta.1));
+        mouse(&mut app, MouseEventKind::Drag(left), (delta.0 + 4, delta.1));
+        mouse(&mut app, MouseEventKind::Up(left), (delta.0 + 4, delta.1));
+        assert_eq!(app.take_clipboard().as_deref(), Some("beta\n\ngamma delta"));
+        terminal.draw(|f| draw(f, &app)).expect("draw");
+        let buf = terminal.backend().buffer();
+        let marked = |x, y| buf[(x, y)].modifier.contains(Modifier::REVERSED);
+        assert!(marked(beta.0, beta.1) && marked(delta.0 + 4, delta.1));
+        assert!(!marked(delta.0 + 5, delta.1) && !marked(beta.0 - 1, beta.1));
+        let s = render(&app, 40, 16);
+        assert!(s.contains("copied 17 chars"), "{s}");
+
+        // A key lets go of it; a plain click copies nothing.
+        key(&mut app, KeyCode::End, KeyModifiers::NONE);
+        assert_eq!(app.selection, None);
+        mouse(&mut app, MouseEventKind::Down(left), beta);
+        mouse(&mut app, MouseEventKind::Up(left), beta);
+        assert_eq!(app.take_clipboard(), None);
+
+        // In the input, the drag copies, and Ctrl-C copies again instead of quitting.
+        let brave = find(&terminal, "brave");
+        mouse(&mut app, MouseEventKind::Down(left), brave);
+        mouse(&mut app, MouseEventKind::Drag(left), (brave.0 + 4, brave.1));
+        mouse(&mut app, MouseEventKind::Up(left), (brave.0 + 4, brave.1));
+        assert_eq!(app.take_clipboard().as_deref(), Some("brave"));
+        key(&mut app, KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(app.take_clipboard().as_deref(), Some("brave"));
+        assert_eq!(app.selection, None);
+        assert!(!app.should_quit());
+        assert_eq!(app.input.text(), "hello brave world");
+    }
+
+    #[test]
     fn slash_popup_highlights_matched_letters() {
         let mut app = App::new(test_info());
         started(&mut app);
@@ -2428,6 +2529,9 @@ mod tests {
                 base_url: "https://api.example.com/v1".into(),
                 env: Some("EXAMPLE_KEY".into()),
                 ready: false,
+                key: Some(quack_protocol::KeySource::Env {
+                    var: "EXAMPLE_KEY".into(),
+                }),
             }],
         });
         key(&mut app, KeyCode::Tab, none);
@@ -2479,6 +2583,93 @@ mod tests {
         });
         assert_eq!(app.modal.as_ref().map(|m| m.title.as_str()), Some("Models"));
         assert!(app.prompt.is_none());
+    }
+
+    #[test]
+    fn a_providers_key_is_replaced_from_providers_or_setup() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        use quack_protocol::{KeySource, Op, ProviderModels, SecretText, ServiceInfo};
+        let none = KeyModifiers::NONE;
+        let mut info = test_info();
+        info.model = Some("example/tiny".into());
+        let mut app = App::new(info);
+        app.on_engine(Event::StartupComplete);
+
+        // /providers says where the key is read from; ⏎ asks for a new one.
+        app.input.set("/providers");
+        key(&mut app, KeyCode::Enter, none);
+        assert_eq!(app.take_ops(), vec![Op::ListModels]);
+        app.on_engine(Event::ModelCatalog {
+            providers: vec![ProviderModels {
+                id: "example".into(),
+                available: true,
+                note: "1 model".into(),
+                models: Vec::new(),
+                bundled: false,
+                key: Some(KeySource::Keyring {
+                    name: "example".into(),
+                }),
+            }],
+            current: Some("example/tiny".into()),
+        });
+        let s = render(&app, 100, 30);
+        assert!(s.contains("OS credential store"), "{s}");
+        assert!(s.contains("(`example`)"), "{s}");
+        assert!(s.contains("replace its key"), "{s}");
+        key(&mut app, KeyCode::Enter, none);
+        assert!(app.modal.is_none());
+        let s = render(&app, 100, 30);
+        assert!(s.contains("New example key"), "{s}");
+        assert!(s.contains("provider file stays as it is"), "{s}");
+        assert!(s.contains("replace"), "{s}");
+        key(&mut app, KeyCode::Enter, none);
+        assert!(render(&app, 100, 30).contains("paste the new key"));
+        for c in "sk-rotated".chars() {
+            key(&mut app, KeyCode::Char(c), none);
+        }
+        assert!(!render(&app, 100, 30).contains("sk-rotated"));
+        key(&mut app, KeyCode::Enter, none);
+        assert_eq!(
+            app.take_ops(),
+            vec![Op::SetProviderKey {
+                id: "example".into(),
+                key: SecretText("sk-rotated".into()),
+            }]
+        );
+        // Replaced in place: no model to pick.
+        app.on_engine(Event::ProviderAdded {
+            id: "example".into(),
+            path: None,
+        });
+        assert!(app.modal.is_none());
+        assert!(render(&app, 100, 30).contains("replaced the example key"));
+
+        // In /setup, ^s on a service whose key is set asks for a new one; esc just closes.
+        app.input.set("/setup");
+        key(&mut app, KeyCode::Enter, none);
+        app.on_engine(Event::Services {
+            services: vec![ServiceInfo {
+                id: "hosted".into(),
+                name: "Hosted".into(),
+                group: "Hosted".into(),
+                base_url: "https://api.example.org/v1".into(),
+                env: Some("HOSTED_KEY".into()),
+                ready: true,
+                key: Some(KeySource::Env {
+                    var: "HOSTED_KEY".into(),
+                }),
+            }],
+        });
+        key(&mut app, KeyCode::Tab, none);
+        let s = render(&app, 100, 30);
+        assert!(s.contains("read from the HOSTED_KEY"), "{s}");
+        key(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
+        let s = render(&app, 100, 30);
+        assert!(s.contains("New hosted key"), "{s}");
+        assert!(s.contains("To keep using HOSTED_KEY"), "{s}");
+        key(&mut app, KeyCode::Esc, none);
+        assert!(app.prompt.is_none());
+        assert!(app.modal.is_none());
     }
 
     #[test]

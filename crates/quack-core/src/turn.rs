@@ -121,6 +121,7 @@ impl TurnCtx {
         self.emit(Event::ContextUpdate {
             used: estimate(&self.setup, history),
             budget: self.setup.budget.unwrap_or(0),
+            window: self.setup.model.context_window,
             cache_hit_tokens: None,
             threshold: crate::context::threshold(&self.setup),
         });
@@ -283,6 +284,7 @@ pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: Prompt)
                 ctx.emit(Event::ContextUpdate {
                     used: u.prompt_tokens + u.completion_tokens,
                     budget: ctx.setup.budget.unwrap_or(0),
+                    window: ctx.setup.model.context_window,
                     cache_hit_tokens: u.cached_prompt_tokens,
                     threshold: crate::context::threshold(&ctx.setup),
                 });

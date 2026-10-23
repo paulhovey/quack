@@ -12,6 +12,7 @@ mod highlight;
 mod input;
 mod markdown;
 mod modal;
+mod select;
 mod theme;
 mod ui;
 mod wrap;

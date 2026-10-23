@@ -10,7 +10,7 @@ expression: s
 " ⠋ to│                                                                                        │     "
 " · in│╭──────────────────────────────────────╮╭──────────────────────────────────────────────╮│     "
 " · sk││                                      ││                                              ││     "
-" · co││  Overview                 47.3k left ││ ░ Tool results                               ││     "
+" · co││  Overview                 41.9k/131k ││ ░ Tool results                               ││     "
 " · me││  █ System prompt                1.2k ││                                              ││     "
 " · mc││  ▓ Tool definitions             1.6k ││ tokens    ~31700                             ││     "
 " ✗ ls││  ▒ Summary                      2.4k ││                                              ││     "

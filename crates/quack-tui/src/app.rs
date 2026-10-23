@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
@@ -7,8 +8,9 @@ use crossterm::event::{
 use quack_config::settings::{ShowReasoning, StartupPanel, UiSettings};
 use quack_config::{LayerStatus, Loaded, SettingRow};
 use quack_protocol::{
-    Answer, ApprovalDecision, ApprovalRequest, CallId, Event, InputItem, LoadState, ModelId, Op,
-    ProviderId, Question, ReplayItem, SecretText, SessionId, Subsystem, TurnOverrides, WriteScope,
+    Answer, ApprovalDecision, ApprovalRequest, CallId, Event, InputItem, KeySource, LoadState,
+    ModelId, Op, ProviderId, Question, ReplayItem, SecretText, SessionId, Subsystem, TurnOverrides,
+    WriteScope,
 };
 use ratatui::layout::Rect;
 
@@ -16,6 +18,7 @@ use crate::commands::{self, COMMANDS, Command};
 use crate::fuzzy;
 use crate::input::Input;
 use crate::modal::{self, Modal, ModalOutcome};
+use crate::select::{self, Pane, Selection};
 use crate::theme::{Glyphs, Theme};
 
 const DOUBLE_CTRL_C: Duration = Duration::from_millis(1500);
@@ -29,6 +32,8 @@ const DUCK_ANIM_EVERY: u64 = 8;
 const PANEL_GRACE: u64 = 30;
 /// Transcript rows one mouse-wheel notch scrolls.
 const WHEEL_ROWS: usize = 3;
+/// Frames (16 ms each) the status bar says a selection was copied.
+const COPIED_FRAMES: u64 = 125;
 
 /// Static facts the UI shows, captured once at startup.
 #[derive(Debug, Clone)]
@@ -350,8 +355,16 @@ pub(crate) struct Prompt {
 #[derive(Debug)]
 enum PromptThen {
     ServerUrl,
-    ServerKey { url: String },
-    ServiceKey { id: String },
+    ServerKey {
+        url: String,
+    },
+    ServiceKey {
+        id: String,
+    },
+    /// `/key`: replace the key of a provider that may be in use.
+    NewKey {
+        id: String,
+    },
 }
 
 /// Never shows the text: it may be a key.
@@ -365,9 +378,13 @@ impl std::fmt::Debug for Prompt {
 }
 
 impl Prompt {
-    /// Enter sends the answer instead of asking another question.
-    pub(crate) fn last_step(&self) -> bool {
-        !matches!(self.then, PromptThen::ServerUrl)
+    /// What Enter does: send the answer, or ask the next question.
+    pub(crate) fn enter_does(&self) -> &'static str {
+        match self.then {
+            PromptThen::ServerUrl => "next",
+            PromptThen::NewKey { .. } => "replace",
+            _ => "add",
+        }
     }
 
     fn server_url() -> Self {
@@ -400,6 +417,41 @@ impl Prompt {
             text: String::new(),
             error: None,
             then: PromptThen::ServerKey { url },
+        }
+    }
+
+    fn new_key(id: &str, source: Option<&KeySource>) -> Self {
+        let mut help = vec![format!(
+            "Paste the new API key for `{id}`, for example after rotating it at the provider."
+        )];
+        help.push(match source {
+            Some(KeySource::Keyring { name }) => format!(
+                "It replaces the key stored in the OS credential store as `{name}`; the \
+                 provider file stays as it is."
+            ),
+            Some(source) => format!(
+                "Its key is read from {} now. The new one goes to the OS credential store \
+                 instead, and the provider file in your config folder is pointed at it.",
+                modal::key_source(source)
+            ),
+            None => "It goes to the OS credential store, and the provider file in your \
+                     config folder is pointed at it."
+                .into(),
+        });
+        if let Some(KeySource::Env { var }) = source {
+            help.push(format!(
+                "To keep using {var}, press esc, change it in your shell and start quack again."
+            ));
+        }
+        help.push("This session sends the new key from its next request.".into());
+        Self {
+            title: format!("New {id} key"),
+            label: "API key".into(),
+            help,
+            secret: true,
+            text: String::new(),
+            error: None,
+            then: PromptThen::NewKey { id: id.to_owned() },
         }
     }
 
@@ -452,6 +504,12 @@ pub struct App {
     pub(crate) view: Cell<(usize, usize)>,
     /// The input box's text area and its first visible row, as last drawn.
     pub(crate) input_view: Cell<(Rect, usize)>,
+    /// The transcript's area as last drawn, scrollbar column included.
+    pub(crate) transcript_area: Cell<Rect>,
+    /// Text being selected with the mouse, or selected and copied.
+    pub(crate) selection: Option<Selection>,
+    /// The frame a selection was copied on, and how many chars it had.
+    copied: Option<(u64, usize)>,
     /// How reasoning shows right now: `ui.show_reasoning`, flipped by Ctrl-T.
     pub(crate) show_reasoning: ShowReasoning,
     pub(crate) popup_selected: usize,
@@ -463,7 +521,7 @@ pub struct App {
     pub(crate) asking: Option<Asking>,
     /// The plan review bar, with its highlighted choice.
     pub(crate) review: Option<usize>,
-    /// `(used, budget)` tokens from the last response.
+    /// `(used, max)` tokens from the last response.
     pub(crate) context: Option<(u32, u32)>,
     /// Where compaction starts, in tokens.
     pub(crate) compact_at: Option<u32>,
@@ -505,6 +563,10 @@ pub struct App {
     pub(crate) prompt: Option<Prompt>,
     /// `/setup` sent a key or URL and waits for the provider to be added.
     setup_adding: bool,
+    /// `/key` sent a new key and waits for it to be stored.
+    rekeying: bool,
+    /// Where each provider's key is read from, as last listed.
+    key_sources: BTreeMap<String, KeySource>,
     /// `/setup` opened on its own once this run, because no model was ready.
     setup_offered: bool,
     /// A `.quack/` waiting for a trust decision.
@@ -537,6 +599,9 @@ impl App {
             scroll: Cell::new(0),
             view: Cell::new((0, 0)),
             input_view: Cell::new((Rect::default(), 0)),
+            transcript_area: Cell::new(Rect::default()),
+            selection: None,
+            copied: None,
             show_reasoning: info.ui.show_reasoning,
             popup_selected: 0,
             popup_dismissed: false,
@@ -567,6 +632,8 @@ impl App {
             setup: modal::SetupView::default(),
             prompt: None,
             setup_adding: false,
+            rekeying: false,
+            key_sources: BTreeMap::new(),
             setup_offered: false,
             trust: None,
             frame: 0,
@@ -589,6 +656,13 @@ impl App {
 
     pub fn take_clipboard(&mut self) -> Option<String> {
         self.clipboard.take()
+    }
+
+    /// Chars in the selection just copied, while the status bar says so.
+    pub(crate) fn copied(&self) -> Option<usize> {
+        self.copied
+            .filter(|(at, _)| self.frame.wrapping_sub(*at) < COPIED_FRAMES)
+            .map(|(_, n)| n)
     }
 
     pub fn take_ops(&mut self) -> Vec<Op> {
@@ -700,6 +774,12 @@ impl App {
         if animating && !self.info.ui.reduced_motion && self.frame.is_multiple_of(SPIN_EVERY) {
             self.dirty = true;
         }
+        if self
+            .copied
+            .is_some_and(|(at, _)| self.frame.wrapping_sub(at) == COPIED_FRAMES)
+        {
+            self.dirty = true;
+        }
         // A slow startup's panel appears once the grace period ends.
         if !self.startup_done && self.frame.wrapping_sub(self.startup_frame) == PANEL_GRACE {
             self.dirty = true;
@@ -725,6 +805,14 @@ impl App {
             Event::AssistantRewrite { .. } | Event::SessionResumed { .. } => Some(true),
             _ => None,
         };
+        if let Event::ModelCatalog { providers, .. } = &event {
+            for p in providers {
+                match &p.key {
+                    Some(key) => self.key_sources.insert(p.id.clone(), key.clone()),
+                    None => self.key_sources.remove(&p.id),
+                };
+            }
+        }
         self.on_engine_event(event);
         if let Some(all) = code {
             self.highlight_code(all);
@@ -922,8 +1010,23 @@ impl App {
                 self.refresh_setup();
             }
             Event::Services { services } => {
+                self.key_sources.extend(
+                    services
+                        .iter()
+                        .filter_map(|s| Some((s.id.clone(), s.key.clone()?))),
+                );
                 self.setup.services = Some(services);
                 self.refresh_setup();
+            }
+            Event::ProviderAdded { id, path } if self.rekeying => {
+                self.rekeying = false;
+                self.note(match path {
+                    Some(path) => format!(
+                        "stored the new {id} key in the OS credential store; {path} now reads \
+                         it from there"
+                    ),
+                    None => format!("replaced the {id} key"),
+                });
             }
             Event::ProviderAdded { id, path } if self.setup_adding => {
                 // Its models follow; the user picks one.
@@ -1114,10 +1217,12 @@ impl App {
             Event::ContextUpdate {
                 used,
                 budget,
+                window,
                 threshold,
                 ..
             } => {
-                self.context = Some((used, budget));
+                let max = window.filter(|w| *w > 0).unwrap_or(budget);
+                self.context = Some((used, max));
                 self.compact_at = threshold;
             }
             Event::Speed { tokens_per_sec, .. } => {
@@ -1234,6 +1339,7 @@ impl App {
                 if std::mem::take(&mut self.setup_adding) {
                     self.note("run /setup to try again".into());
                 }
+                self.rekeying = false;
                 self.transcript.push(Entry::Error(error.message));
             }
             _ => self.dirty = false,
@@ -1245,6 +1351,7 @@ impl App {
             // Windows reports Release events too; act on Press and Repeat only.
             TermEvent::Key(key) if key.kind != KeyEventKind::Release => self.on_key(key),
             TermEvent::Paste(text) => {
+                self.selection = None;
                 if let Some(p) = &mut self.prompt {
                     p.text
                         .push_str(text.lines().next().unwrap_or_default().trim());
@@ -1257,11 +1364,17 @@ impl App {
                 }
                 self.dirty = true;
             }
-            TermEvent::Resize(..) => self.dirty = true,
+            TermEvent::Resize(..) => {
+                // Rows wrap differently now, so the selected cells hold other text.
+                self.selection = None;
+                self.dirty = true;
+            }
             TermEvent::Mouse(m) if self.modal.is_none() => match m.kind {
                 MouseEventKind::ScrollUp => self.scroll_up(WHEEL_ROWS),
                 MouseEventKind::ScrollDown => self.scroll_down(WHEEL_ROWS),
-                MouseEventKind::Down(MouseButton::Left) => self.click_input(m.column, m.row),
+                MouseEventKind::Down(MouseButton::Left) => self.press(m.column, m.row),
+                MouseEventKind::Drag(MouseButton::Left) => self.drag(m.column, m.row),
+                MouseEventKind::Up(MouseButton::Left) => self.release(),
                 _ => {}
             },
             _ => {}
@@ -1290,10 +1403,110 @@ impl App {
         self.dirty = true;
     }
 
+    /// The button went down: a click in the input places the cursor, and either pane
+    /// starts a selection there.
+    fn press(&mut self, x: u16, y: u16) {
+        self.selection = None;
+        self.dirty = true;
+        let at = (x, y).into();
+        if self.input_view.get().0.contains(at) {
+            self.click_input(x, y);
+            self.selection = Some(Selection::new(Pane::Input, self.input_cell(x, y)));
+        } else if !self.transcript.is_empty() && self.transcript_area.get().contains(at) {
+            self.selection = Some(Selection::new(Pane::Transcript, self.transcript_cell(x, y)));
+        }
+    }
+
+    fn drag(&mut self, x: u16, y: u16) {
+        let Some(pane) = self.selection.map(|s| s.pane) else {
+            return;
+        };
+        let head = match pane {
+            Pane::Transcript => {
+                // Past the top or bottom edge, the view scrolls along.
+                let area = self.transcript_area.get();
+                if y < area.y {
+                    self.scroll_up(1);
+                } else if y >= area.bottom() {
+                    self.scroll_down(1);
+                }
+                self.transcript_cell(x, y)
+            }
+            Pane::Input => self.input_cell(x, y),
+        };
+        if let Some(s) = &mut self.selection {
+            s.head = head;
+            // A shaky click that stays in its cell is still a click.
+            s.dragged |= s.head != s.anchor;
+        }
+        self.dirty = true;
+    }
+
+    /// The button came up: a drag copies what it selected, which stays marked until the
+    /// next key or click.
+    fn release(&mut self) {
+        match self.selection {
+            Some(sel) if sel.dragged => self.copy_selection(&sel),
+            _ => self.selection = None,
+        }
+        self.dirty = true;
+    }
+
+    fn copy_selection(&mut self, sel: &Selection) {
+        let text = match sel.pane {
+            Pane::Transcript => {
+                let width = usize::from(self.transcript_area.get().width.saturating_sub(1));
+                let (lines, gutters) = crate::ui::transcript_rows_with_gutters(self, width);
+                let rows: Vec<(String, usize)> = lines
+                    .iter()
+                    .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+                    .zip(gutters)
+                    .collect();
+                select::transcript_text(&rows, sel)
+            }
+            Pane::Input => {
+                let (from, to) = sel.bounds();
+                let layout = self.input.layout(self.input_width());
+                self.input.slice(&layout, from, to)
+            }
+        };
+        if !text.is_empty() {
+            self.copied = Some((self.frame, text.chars().count()));
+            self.clipboard = Some(text);
+        }
+    }
+
+    /// The transcript cell under `(x, y)`, held to the transcript's rows.
+    fn transcript_cell(&self, x: u16, y: u16) -> (usize, usize) {
+        let area = self.transcript_area.get();
+        let (total, height) = self.view.get();
+        // The first row on screen, as drawing worked it out.
+        let first = total
+            .saturating_sub(self.scroll.get())
+            .saturating_sub(height);
+        let y = y.clamp(area.y, area.bottom().saturating_sub(1));
+        let row = (first + usize::from(y - area.y)).min(total.saturating_sub(1));
+        (row, usize::from(x.saturating_sub(area.x)))
+    }
+
+    /// The input cell under `(x, y)`, held to the box; columns leave out the prompt.
+    fn input_cell(&self, x: u16, y: u16) -> (usize, usize) {
+        let (area, first) = self.input_view.get();
+        let y = y.clamp(area.y, area.bottom().saturating_sub(1));
+        let col = usize::from(x.saturating_sub(area.x)).saturating_sub(2);
+        (first + usize::from(y - area.y), col)
+    }
+
     fn on_key(&mut self, key: KeyEvent) {
         self.dirty = true;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        // Any key lets go of a selection. Ctrl-C, out of habit, copies it again rather than
+        // interrupting or quitting.
+        let selection = self.selection.take().filter(|s| s.dragged);
         if ctrl && key.code == KeyCode::Char('c') {
+            if let Some(sel) = selection {
+                return self.copy_selection(&sel);
+            }
             return self.ctrl_c();
         }
         if self.approval.is_some() {
@@ -1448,15 +1661,6 @@ impl App {
         self.dirty = true;
     }
 
-    /// Tokens left before compaction (or the budget), and how many turns that is at the
-    /// recent pace, once there are turns to measure. `None` without a budget.
-    pub(crate) fn room(&self) -> Option<(u32, Option<u32>)> {
-        let (used, budget) = self.context?;
-        let line = self.compact_at.or((budget > 0).then_some(budget))?;
-        let room = line.saturating_sub(used);
-        Some((room, turns_left(&self.growth, room)))
-    }
-
     /// Whether the terminal should capture the mouse (`ui.mouse`), for wheel scrolling and input clicks.
     pub fn wants_mouse(&self) -> bool {
         self.info.ui.mouse
@@ -1494,8 +1698,11 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc => {
+                let back = !matches!(p.then, PromptThen::NewKey { .. });
                 self.prompt = None;
-                self.open_setup();
+                if back {
+                    self.open_setup();
+                }
             }
             KeyCode::Enter => self.answer_prompt(),
             KeyCode::Backspace => {
@@ -1541,6 +1748,18 @@ impl App {
             }
             PromptThen::ServiceKey { .. } if text.is_empty() => {
                 retry(p, "paste the key, or press esc to go back")
+            }
+            PromptThen::NewKey { .. } if text.is_empty() => {
+                retry(p, "paste the new key, or press esc to keep the old one")
+            }
+            PromptThen::NewKey { id } => {
+                self.note(format!("storing the new {id} key…"));
+                self.rekeying = true;
+                self.ops.push(Op::SetProviderKey {
+                    id: id.clone(),
+                    key: SecretText(text),
+                });
+                None
             }
             PromptThen::ServiceKey { id } => {
                 self.note(format!("storing the {id} key…"));
@@ -1988,7 +2207,12 @@ impl App {
                 }
                 _ => self.note("usage: /memory, or /memory delete <global|project>/<name>".into()),
             },
-            "providers" => {
+            "key" if !args.trim().is_empty() => {
+                let id = args.trim();
+                self.modal = None;
+                self.prompt = Some(Prompt::new_key(id, self.key_sources.get(id)));
+            }
+            "providers" | "key" => {
                 self.modal = Some(modal::providers(
                     None,
                     self.info.model.as_deref(),
@@ -2786,6 +3010,7 @@ mod tests {
             providers: vec![
                 ProviderModels {
                     bundled: false,
+                    key: None,
                     id: "charm".into(),
                     available: true,
                     note: "2 models".into(),
@@ -2804,6 +3029,7 @@ mod tests {
                 },
                 ProviderModels {
                     bundled: false,
+                    key: None,
                     id: "novita".into(),
                     available: false,
                     note: "set NOVITA_API_KEY to use this provider".into(),
@@ -2834,6 +3060,7 @@ mod tests {
         app.on_engine(Event::ModelCatalog {
             providers: vec![ProviderModels {
                 bundled: false,
+                key: None,
                 id: "charm".into(),
                 available: true,
                 note: String::new(),

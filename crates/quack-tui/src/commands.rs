@@ -48,6 +48,13 @@ pub(crate) const COMMANDS: &[Command] = &[
         None,
     ),
     c(
+        "key",
+        &[],
+        "[provider]",
+        "Replace a provider's API key, for example after rotating it",
+        None,
+    ),
+    c(
         "setup",
         &[],
         "",

@@ -119,9 +119,12 @@ pub enum Op {
     /// Ask for the hosted services in `providers.d` that take a key; answered with
     /// `Event::Services`.
     ListServices,
-    /// Store a configured service's API key in the OS credential store and point its
-    /// provider file (copied to the user layer) at it. Answered with `Event::ProviderAdded`
-    /// and then `Event::ModelCatalog` for that provider alone.
+    /// Store a provider's API key in the OS credential store. When its key is already read
+    /// from there, the entry is replaced and the provider file left alone
+    /// (`Event::ProviderAdded` without a `path`); otherwise its provider file (copied to the
+    /// user layer) is pointed at the new entry. A session using the provider sends the new
+    /// key from its next request. Answered with `Event::ProviderAdded` and then
+    /// `Event::ModelCatalog` for that provider alone.
     SetProviderKey {
         id: String,
         key: SecretText,
@@ -294,6 +297,8 @@ pub enum Event {
     ContextUpdate {
         used: u32,
         budget: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window: Option<u32>,
         cache_hit_tokens: Option<u32>,
         /// Above this the next request is pruned, then compacted.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -603,6 +608,9 @@ pub struct ProviderModels {
     /// offer (a key not set, a server not running), not a problem.
     #[serde(default)]
     pub bundled: bool,
+    /// Where its key is read from, when it takes one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<KeySource>,
 }
 
 /// A language server from `lsp.d/` and its state (one per project folder it serves).
@@ -687,6 +695,29 @@ pub struct ServiceInfo {
     pub env: Option<String>,
     /// Its key can be read now.
     pub ready: bool,
+    /// Where its key is read from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<KeySource>,
+}
+
+/// Where a provider's `api_key` is read from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "from", rename_all = "kebab-case")]
+pub enum KeySource {
+    /// The OS credential store, under this name.
+    Keyring {
+        name: String,
+    },
+    Env {
+        var: String,
+    },
+    File {
+        path: String,
+    },
+    /// The output of a command.
+    Cmd,
+    /// The value written in the provider file.
+    Value,
 }
 
 /// Text the user typed that must not be shown: serialized as is, but `Debug` hides it, so

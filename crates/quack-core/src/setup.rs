@@ -16,7 +16,7 @@ use std::time::Duration;
 use quack_config::{
     ItemState, LayerKind, Loaded, ProviderFile, Secret, is_loopback, load_providers,
 };
-use quack_protocol::{DetectedServer, ModelInfo, ProviderModels};
+use quack_protocol::{DetectedServer, KeySource, ModelInfo, ProviderModels};
 use quack_providers::Provider;
 use tokio::task::JoinSet;
 
@@ -71,6 +71,8 @@ pub struct Service {
     pub env: Option<String>,
     /// Its key can be read now: the variable is set, or the key comes from elsewhere.
     pub ready: bool,
+    /// Where its key is read from.
+    pub key: KeySource,
     /// The file it is configured in.
     pub path: PathBuf,
 }
@@ -89,6 +91,7 @@ pub fn service_infos(config: &Loaded) -> Vec<quack_protocol::ServiceInfo> {
             base_url: s.base_url,
             env: s.env,
             ready: s.ready,
+            key: Some(s.key),
         })
         .collect()
 }
@@ -118,6 +121,7 @@ pub fn services(config: &Loaded) -> Vec<Service> {
                 base_url: f.base_url.clone(),
                 ready: env.as_ref().is_none_or(|e| std::env::var_os(e).is_some()),
                 env,
+                key: key_source(key),
                 id: i.id.clone(),
                 path: i.path.clone(),
             })
@@ -134,15 +138,32 @@ pub fn services(config: &Loaded) -> Vec<Service> {
     out
 }
 
+/// Where an `api_key` is read from, without its value.
+pub fn key_source(key: &Secret) -> KeySource {
+    match key {
+        Secret::Keyring { keyring } => KeySource::Keyring {
+            name: keyring.clone(),
+        },
+        Secret::Env { env, .. } => KeySource::Env { var: env.clone() },
+        Secret::File { file } => KeySource::File { path: file.clone() },
+        Secret::Cmd { .. } => KeySource::Cmd,
+        Secret::Plain(_) => KeySource::Value,
+    }
+}
+
 /// Read a service's key from the OS credential store: its provider file is copied to the
 /// user layer (or edited there) with `api_key = { keyring = "<id>" }`. Store the key with
 /// `keyring_set(id, ..)` first. Returns the file written.
 pub fn use_keyring_key(config: &Loaded, service: &Service) -> Result<PathBuf, String> {
-    let text = std::fs::read_to_string(&service.path)
-        .map_err(|e| format!("cannot read {}: {e}", service.path.display()))?;
-    let text = quack_config::provider::with_keyring_key(&text, &service.id)?;
-    let target = providers_dir(config)?.join(format!("{}.toml", service.id));
-    if target == service.path {
+    point_at_keyring(config, &service.id, &service.path)
+}
+
+fn point_at_keyring(config: &Loaded, id: &str, path: &Path) -> Result<PathBuf, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let text = quack_config::provider::with_keyring_key(&text, id)?;
+    let target = providers_dir(config)?.join(format!("{id}.toml"));
+    if target == path {
         std::fs::write(&target, text)
             .map_err(|e| format!("cannot write {}: {e}", target.display()))?;
     } else {
@@ -395,18 +416,45 @@ pub fn add_server(config: &Loaded, base_url: &str, key: Option<&str>) -> Result<
     })
 }
 
-/// Store a configured service's key in the OS credential store and read it from there.
-/// Returns the provider file written.
-pub fn set_service_key(config: &Loaded, id: &str, key: &str) -> Result<PathBuf, String> {
-    let service = services(config)
-        .into_iter()
-        .find(|s| s.id == id)
-        .ok_or_else(|| format!("`{id}` is not a configured service that takes a key"))?;
+/// Store a provider's key in the OS credential store and read it from there. A key already
+/// read from the store is replaced under its own name, and nothing else changes (`None`);
+/// otherwise the provider file is pointed at the new entry, and the file written is returned.
+pub fn set_provider_key(config: &Loaded, id: &str, key: &str) -> Result<Option<PathBuf>, String> {
+    set_provider_key_with(config, id, key, |name, key| {
+        quack_config::keyring_set(name, key).map_err(|e| e.to_string())
+    })
+}
+
+/// [`set_provider_key`] with `store` in place of the OS credential store.
+pub fn set_provider_key_with(
+    config: &Loaded,
+    id: &str,
+    key: &str,
+    store: impl FnOnce(&str, &str) -> Result<(), String>,
+) -> Result<Option<PathBuf>, String> {
+    let items = load_providers(config);
+    let item = items
+        .iter()
+        .find(|i| i.id == id)
+        .ok_or_else(|| format!("`{id}` is not a configured provider · /providers lists them"))?;
+    let file = item
+        .loaded()
+        .ok_or_else(|| format!("provider `{id}` did not load · /providers says why"))?;
+    if file.auth.is_some() {
+        return Err(format!(
+            "provider `{id}` uses a sign-in, not a key · run `quack login {id}`"
+        ));
+    }
     if key.is_empty() {
         return Err("nothing entered; nothing stored".into());
     }
-    quack_config::keyring_set(id, key).map_err(|e| e.to_string())?;
-    use_keyring_key(config, &service)
+    match &file.api_key {
+        Some(Secret::Keyring { keyring }) => store(keyring, key).map(|()| None),
+        _ => {
+            store(id, key)?;
+            point_at_keyring(config, id, &item.path).map(Some)
+        }
+    }
 }
 
 /// A provider id for a URL: `https://api.example.com/v1` → `example`,

@@ -1431,8 +1431,8 @@ pub(crate) fn context(
 
     let mut items = vec![ModalItem {
         label: "Overview".into(),
-        hint: match line {
-            Some(l) => format!("{} left", k(l.saturating_sub(r.used))),
+        hint: match r.window.or(r.budget).filter(|m| *m > 0) {
+            Some(max) => format!("{}/{}", k(r.used), k(max)),
             None => k(r.used),
         },
         detail: over,
@@ -1947,6 +1947,18 @@ pub(crate) fn doctor(checks: Option<&[quack_protocol::DoctorCheck]>, theme: &The
 }
 
 /// The `/providers` modal: each provider file with its state. `None` while probing.
+/// Where a key is read from, as the end of "read from …".
+pub(crate) fn key_source(key: &quack_protocol::KeySource) -> String {
+    use quack_protocol::KeySource;
+    match key {
+        KeySource::Keyring { name } => format!("the OS credential store (`{name}`)"),
+        KeySource::Env { var } => format!("the {var} environment variable"),
+        KeySource::File { path } => format!("the file {path}"),
+        KeySource::Cmd => "a command in its provider file".into(),
+        KeySource::Value => "its provider file".into(),
+    }
+}
+
 pub(crate) fn providers(
     catalog: Option<&[quack_protocol::ProviderModels]>,
     current: Option<&str>,
@@ -1986,6 +1998,14 @@ pub(crate) fn providers(
                 if in_use {
                     detail.push(Line::styled("the current model is from here", theme.dim));
                 }
+                if let Some(key) = &p.key {
+                    detail.push(Line::raw(""));
+                    detail.push(field(theme, "key", key_source(key)));
+                    detail.push(Line::styled(
+                        "⏎ replace its key, for example after rotating it",
+                        theme.dim,
+                    ));
+                }
                 detail.push(Line::raw(""));
                 detail.extend(p.models.iter().take(30).map(|m| {
                     Line::raw(format!(
@@ -2019,8 +2039,8 @@ pub(crate) fn providers(
                         "unavailable".into()
                     },
                     detail,
-                    action: None,
-                    run: false,
+                    run: p.key.is_some(),
+                    action: p.key.as_ref().map(|_| format!("/key {}", p.id)),
                     alt: None,
                     charts: Vec::new(),
                 }
@@ -2599,9 +2619,19 @@ pub(crate) fn setup(view: &SetupView, theme: &Theme) -> Modal {
                     Line::raw(""),
                 ];
                 let action = if s.ready {
-                    detail.push(Line::styled("Its key is set.", theme.ok));
+                    detail.push(Line::styled(
+                        match &s.key {
+                            Some(key) => format!("Its key is read from {}.", key_source(key)),
+                            None => "Its key is set.".into(),
+                        },
+                        theme.ok,
+                    ));
                     detail.push(Line::raw(""));
                     detail.push(Line::styled("⏎ pick one of its models", theme.dim));
+                    detail.push(Line::styled(
+                        format!("{ALT_KEY} replace its key, for example after rotating it"),
+                        theme.dim,
+                    ));
                     format!("/setup models {}", s.id)
                 } else {
                     detail.push(Line::styled(
@@ -2618,12 +2648,15 @@ pub(crate) fn setup(view: &SetupView, theme: &Theme) -> Modal {
                     }
                     format!("/setup key {}", s.id)
                 };
-                item(
-                    &s.name,
-                    if s.ready { "ready" } else { "needs a key" },
-                    detail,
-                    Some(action),
-                )
+                ModalItem {
+                    alt: s.ready.then(|| format!("/key {}", s.id)),
+                    ..item(
+                        &s.name,
+                        if s.ready { "ready" } else { "needs a key" },
+                        detail,
+                        Some(action),
+                    )
+                }
             })
             .collect(),
     };
