@@ -66,6 +66,7 @@ async fn ask(p: &Provider) -> Result<String, quack_providers::ProviderError> {
         model: "m".into(),
         messages: vec![Message::User {
             content: "hi".into(),
+            images: Vec::new(),
         }],
         ..ChatRequest::default()
     };

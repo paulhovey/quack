@@ -26,6 +26,7 @@ fn ctx(root: &std::path::Path) -> ToolCtx {
         agents: Default::default(),
         spawn: None,
         edit_format: quack_config::settings::EditFormat::StrReplace,
+        vision: false,
         outline_above: 0,
         grammars: quack_tools::grammar::Grammars::builtin(),
     }
@@ -238,4 +239,35 @@ async fn index_and_outlined_reads() {
         "{}",
         missing.model
     );
+}
+
+/// A 2x1 PNG header, enough for the probe.
+const PNG: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D, b'I', b'H', b'D', b'R', 0, 0, 0,
+    2, 0, 0, 0, 1, 8, 2, 0, 0, 0, 0x7D, 0x0C, 0xC0, 0xFA,
+];
+
+#[tokio::test]
+async fn view_image_needs_vision_and_sends_the_pixels() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let reg = Registry::builtin();
+    let mut c = ctx(dir.path());
+    std::fs::write(dir.path().join("pic.png"), PNG).expect("png");
+
+    // Without vision the tool is not offered at all.
+    assert!(!reg.get("view_image").expect("tool").available(&c));
+
+    c.vision = true;
+    let v = call(&reg, &c, "view_image", json!({"path": "pic.png"})).await;
+    assert!(v.ok, "{v:?}");
+    assert_eq!(v.model, "[image: pic.png 1KB 2x1]");
+    assert_eq!(v.images.len(), 1);
+    assert_eq!(v.images[0].media_type, "image/png");
+    assert_eq!(v.images[0].width, Some(2));
+
+    // A non-image is refused, with the path in the message.
+    std::fs::write(dir.path().join("not.txt"), b"plain").expect("txt");
+    let bad = call(&reg, &c, "view_image", json!({"path": "not.txt"})).await;
+    assert!(!bad.ok && bad.model.contains("not.txt"), "{bad:?}");
+    assert!(bad.images.is_empty());
 }

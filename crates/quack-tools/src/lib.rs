@@ -6,6 +6,7 @@ mod blocks;
 mod edit;
 pub mod grammar;
 mod hashline;
+mod image;
 mod index;
 mod lsp;
 mod memory;

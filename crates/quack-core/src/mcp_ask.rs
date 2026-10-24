@@ -223,7 +223,10 @@ impl Sampler {
                     sealed: None,
                 }
             } else {
-                Message::User { content: m.text }
+                Message::User {
+                    content: m.text,
+                    images: Vec::new(),
+                }
             }
         }));
         let mut req = turn::request(s, messages, false);

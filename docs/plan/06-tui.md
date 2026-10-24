@@ -138,7 +138,7 @@ The **approval dialog** shows a diff view for edits (side-by-side at 160 columns
 - Multi-line with Shift-Enter / Alt-Enter for newlines. Ctrl-J also works, for terminals that can't distinguish Shift-Enter. The kitty keyboard protocol is enabled when supported.
 - History (↑/↓, Ctrl-R search), persisted per project.
 - `@` fuzzy file completion (via `ignore` walker + `nucleo` matcher), `/` command completion (built-in + custom commands + skills), `!` shell escape.
-- Bracketed paste. Large pastes collapse into a `[pasted 340 lines]` chip that expands on demand. Image paste and drag-drop paths attach images when the model supports vision.
+- Bracketed paste. Large pastes collapse into a `[pasted 340 lines]` chip that expands on demand. Image paste and drag-drop paths attach images when the model supports vision. As implemented (2026-10-24): a paste whose every token (after stripping `file://`) is an existing image file attaches them — the drag-drop case — while anything else inserts as text. Attachments show as a chips line above the input (`[image] name 1024x768 · …`, Backspace on empty input removes the last), and Enter with attachments but no text sends them alone.
 - An external editor (Ctrl-G opens `$EDITOR` / `%EDITOR%` / `notepad`) for long prompts.
 
 ## Rendering performance

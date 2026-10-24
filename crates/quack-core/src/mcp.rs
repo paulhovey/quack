@@ -352,6 +352,7 @@ impl Tool for McpTool {
                 .collect();
             ToolOutput {
                 ok: out.ok,
+                images: Vec::new(),
                 summary: if out.ok {
                     first
                 } else {
@@ -718,6 +719,7 @@ impl Tool for ReadResource {
             let chars = out.text.chars().count();
             ToolOutput {
                 ok: true,
+                images: Vec::new(),
                 summary: format!("{chars} characters"),
                 detail: Some(out.text.clone()),
                 model: out.text,

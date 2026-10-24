@@ -86,7 +86,7 @@ pub fn cut_point(
 }
 
 pub fn is_summary(m: &Message) -> bool {
-    matches!(m, Message::User { content } if content.starts_with(SUMMARY_MARKER))
+    matches!(m, Message::User { content, .. } if content.starts_with(SUMMARY_MARKER))
 }
 
 /// The part being summarized as plain text, which any model can read regardless of its
@@ -113,10 +113,10 @@ pub fn transcript(history: &[Message], max_chars: usize) -> String {
 fn render(m: &Message) -> String {
     match m {
         Message::System { content } => format!("### System\n{content}"),
-        Message::User { content } if is_summary(m) => {
+        Message::User { content, .. } if is_summary(m) => {
             format!("### Summary of the session before this point\n{content}")
         }
-        Message::User { content } => format!("### User\n{content}"),
+        Message::User { content, .. } => format!("### User\n{content}"),
         Message::Assistant {
             content,
             tool_calls,
@@ -166,11 +166,11 @@ pub fn fallback_summary(history: &[Message]) -> String {
     let mut lines: Vec<String> = Vec::new();
     for m in history {
         match m {
-            Message::User { content } if is_summary(m) => {
+            Message::User { content, .. } if is_summary(m) => {
                 // A model wrote it, so it says more than this list can; keep it whole.
                 lines.push(format!("- earlier summary:\n{}", summary_body(content)));
             }
-            Message::User { content } => {
+            Message::User { content, .. } => {
                 let first = content.lines().next().unwrap_or_default();
                 lines.push(format!("- user: {}", clip_line(first, 200)));
             }
@@ -227,7 +227,10 @@ pub fn summary_message(summary: &str, request: Option<&str>, changed: &[String])
         content.push_str(&format!("\n\n{REQUEST_HEADING}\n"));
         content.push_str(r);
     }
-    Message::User { content }
+    Message::User {
+        content,
+        images: Vec::new(),
+    }
 }
 
 /// The latest user request before `cut`, when the cut leaves no user message after it.
@@ -240,10 +243,10 @@ pub fn carried_request(history: &[Message], cut: usize) -> Option<&str> {
         return None;
     }
     history[..cut].iter().rev().find_map(|m| match m {
-        Message::User { content } if is_summary(m) => content
+        Message::User { content, .. } if is_summary(m) => content
             .split_once(&format!("\n\n{REQUEST_HEADING}\n"))
             .map(|(_, request)| request),
-        Message::User { content } => Some(content.as_str()),
+        Message::User { content, .. } => Some(content.as_str()),
         _ => None,
     })
 }
@@ -300,7 +303,10 @@ mod tests {
     use super::*;
 
     fn user(s: &str) -> Message {
-        Message::User { content: s.into() }
+        Message::User {
+            content: s.into(),
+            images: Vec::new(),
+        }
     }
     fn asst(s: &str) -> Message {
         Message::Assistant {
@@ -313,7 +319,7 @@ mod tests {
     fn chars(h: &[Message]) -> u32 {
         h.iter()
             .map(|m| match m {
-                Message::User { content }
+                Message::User { content, .. }
                 | Message::Assistant { content, .. }
                 | Message::Tool { content, .. }
                 | Message::System { content } => content.len() as u32,
@@ -349,7 +355,7 @@ mod tests {
         apply(&mut h, cut, summary);
         assert_eq!(h.len(), 3);
         assert!(is_summary(&h[0]));
-        let Message::User { content } = &h[0] else {
+        let Message::User { content, .. } = &h[0] else {
             panic!("summary is a user message")
         };
         assert!(content.ends_with("fix the bug"));
@@ -370,7 +376,7 @@ mod tests {
             let summary = summary_message(&format!("round {round}"), request, &["a.py".into()]);
             apply(&mut h, cut, summary);
         }
-        let Message::User { content } = &h[0] else {
+        let Message::User { content, .. } = &h[0] else {
             panic!("summary is a user message")
         };
         assert_eq!(content.matches("add partial shipments").count(), 1);
@@ -384,7 +390,7 @@ mod tests {
             Some("fix it"),
             &["src/a.rs".into(), "b.py".into()],
         );
-        let Message::User { content } = &m else {
+        let Message::User { content, .. } = &m else {
             panic!("summary is a user message")
         };
         assert!(content.contains("## Files changed in this session\n- src/a.rs\n- b.py"));

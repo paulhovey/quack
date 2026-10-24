@@ -699,6 +699,7 @@ async fn build_setup(
         ),
         spawn: None,
         edit_format: EditFormat::StrReplace,
+        vision: false,
         // About 3.5 bytes per token.
         outline_above: config.settings.tools.read_outline_tokens as usize * 7 / 2,
         grammars: Arc::new(quack_tools::grammar::Grammars::from_layers(
@@ -727,6 +728,8 @@ async fn build_setup(
         }),
         ..PromptVars::default()
     };
+    // `shape` reads `vision` to decide whether `view_image` is offered.
+    tool_ctx.vision = model.vision;
     let shaped = shape(
         &profile,
         config.settings.tools.edit_format,

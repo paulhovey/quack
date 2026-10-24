@@ -786,7 +786,7 @@ impl Engine {
                 Message::Assistant { tool_calls, .. } => {
                     calls.extend(tool_calls.iter().map(|c| c.id.clone()));
                 }
-                Message::User { content }
+                Message::User { content, .. }
                     if !content.starts_with(quack_context::compact::SUMMARY_MARKER) =>
                 {
                     let mut files: Vec<String> = Vec::new();
@@ -1870,6 +1870,18 @@ impl Engine {
             })
             .collect::<Vec<_>>()
             .join("\n");
+        // Attached images load here, so the turn itself stays synchronous.
+        let mut images = Vec::new();
+        if let Some(convo) = &self.convo {
+            for item in &items {
+                if let InputItem::Image { path } = item {
+                    match load_image(&convo.setup, &self.config.dirs.cwd, path) {
+                        Ok(img) => images.push(img),
+                        Err(e) => self.warn(e),
+                    }
+                }
+            }
+        }
 
         // `/<server>:<prompt> args` runs an MCP prompt, unless a skill or custom command
         // has that name. Arguments are checked here; the prompt is fetched in the turn.
@@ -2018,6 +2030,7 @@ impl Engine {
             let prompt = turn::Prompt {
                 text: compose(body),
                 typed,
+                images,
                 start,
             };
             let history = turn::run(ctx, history, prompt).await;
@@ -2052,6 +2065,27 @@ fn fresh_provider(config: &Loaded, id: &str) -> Result<Provider, String> {
 enum Reload {
     Read(Result<Box<Loaded>, String>),
     Ready(Box<StartupOutcome>),
+}
+
+/// Load an image the user attached to a turn. Relative paths resolve against the
+/// working directory, the way the model's do.
+fn load_image(
+    setup: &Setup,
+    cwd: &std::path::Path,
+    path: &str,
+) -> Result<quack_protocol::Image, String> {
+    if !setup.tool_ctx.vision {
+        return Err(format!(
+            "{path}: this model takes no images (set `vision = true` on it to attach them)"
+        ));
+    }
+    let resolved = std::path::Path::new(path);
+    let resolved = if resolved.is_absolute() {
+        resolved.to_path_buf()
+    } else {
+        cwd.join(resolved)
+    };
+    quack_protocol::Image::from_path(&resolved)
 }
 
 /// The request appended to each message in plan mode: the profile's `plan.md` (or the

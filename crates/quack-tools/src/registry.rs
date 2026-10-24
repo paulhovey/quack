@@ -74,6 +74,8 @@ pub struct ToolOutput {
     pub ok: bool,
     /// Model-facing text, already trimmed to budget.
     pub model: String,
+    /// Images the model is to see (`view_image`); sent where the protocol takes them.
+    pub images: Vec<quack_protocol::Image>,
     /// One line for the transcript.
     pub summary: String,
     /// Full diff or output for the UI, when it differs from `model`.
@@ -85,6 +87,7 @@ impl ToolOutput {
         Self {
             ok: true,
             model: model.into(),
+            images: Vec::new(),
             summary: summary.into(),
             detail: None,
         }
@@ -96,6 +99,7 @@ impl ToolOutput {
             ok: false,
             summary: message.lines().next().unwrap_or_default().to_owned(),
             model: format!("Error: {message}"),
+            images: Vec::new(),
             detail: None,
         }
     }
@@ -236,6 +240,8 @@ pub struct ToolCtx {
     pub spawn: Option<crate::task::Spawner>,
     /// Which edit tool the model gets (never `auto`: resolved at session start).
     pub edit_format: EditFormat,
+    /// The model takes images: `view_image` exists and attached images are sent.
+    pub vision: bool,
     /// `read` without a range returns the outline of files longer than this many bytes,
     /// when their language has one. 0: always the content.
     pub outline_above: usize,
@@ -295,6 +301,7 @@ impl Registry {
     pub fn builtin() -> Self {
         let tools: Vec<Arc<dyn Tool>> = vec![
             Arc::new(crate::read::Read),
+            Arc::new(crate::image::ViewImage),
             Arc::new(crate::search::ListDir),
             Arc::new(crate::search::Glob),
             Arc::new(crate::search::Grep),
@@ -344,6 +351,7 @@ pub(crate) fn test_ctx() -> ToolCtx {
         agents: Arc::default(),
         spawn: None,
         edit_format: EditFormat::StrReplace,
+        vision: false,
         outline_above: 0,
         grammars: crate::grammar::Grammars::builtin(),
     }

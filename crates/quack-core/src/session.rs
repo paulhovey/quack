@@ -80,7 +80,7 @@ pub(crate) fn replay(records: &[Record]) -> (Vec<Message>, Vec<ReplayItem>, u32)
                     continue;
                 };
                 match &m {
-                    Message::User { content } => {
+                    Message::User { content, .. } => {
                         turns += 1;
                         marks.push((history.len(), items.len()));
                         items.push(ReplayItem::User {
@@ -210,6 +210,7 @@ fn repair_dangling_calls(history: &mut Vec<Message>) {
             Message::Tool {
                 call_id: id,
                 content: "Not run: the session ended before this call completed.".into(),
+                images: Vec::new(),
             },
         );
     }
@@ -254,12 +255,16 @@ mod tests {
     #[test]
     fn replay_applies_prune_and_compaction_in_order() {
         let msg = |m: Message| rec("message", json!({ "message": m }));
-        let user = |s: &str| Message::User { content: s.into() };
+        let user = |s: &str| Message::User {
+            content: s.into(),
+            images: Vec::new(),
+        };
         let records = vec![
             msg(user("one")),
             msg(Message::Tool {
                 call_id: "a".into(),
                 content: "long output".into(),
+                images: Vec::new(),
             }),
             rec(
                 "prune",
@@ -284,7 +289,10 @@ mod tests {
     #[test]
     fn replay_applies_rewind_to_history_and_transcript() {
         let msg = |m: Message| rec("message", json!({ "message": m }));
-        let user = |s: &str| Message::User { content: s.into() };
+        let user = |s: &str| Message::User {
+            content: s.into(),
+            images: Vec::new(),
+        };
         let asst = |s: &str| Message::Assistant {
             content: s.into(),
             reasoning: None,
@@ -319,6 +327,7 @@ mod tests {
         let mut h = vec![
             Message::User {
                 content: "go".into(),
+                images: Vec::new(),
             },
             Message::Assistant {
                 content: String::new(),

@@ -48,7 +48,15 @@ pub(crate) fn build_body(req: &ChatRequest) -> Value {
         .iter()
         .map(|m| match m {
             Message::System { content } => json!({ "role": "system", "content": content }),
-            Message::User { content } => json!({ "role": "user", "content": content }),
+            Message::User { content, images } => {
+                let mut v = json!({ "role": "user", "content": content });
+                if !images.is_empty() {
+                    // Ollama takes base64 strings on the message, not content parts.
+                    v["images"] =
+                        Value::Array(images.iter().map(|i| json!(i.data.clone())).collect());
+                }
+                v
+            }
             Message::Assistant {
                 content,
                 reasoning,
@@ -78,10 +86,18 @@ pub(crate) fn build_body(req: &ChatRequest) -> Value {
                 }
                 v
             }
-            Message::Tool { call_id, content } => {
+            Message::Tool {
+                call_id,
+                content,
+                images,
+            } => {
                 let mut v = json!({ "role": "tool", "content": content });
                 if let Some(name) = names.get(call_id.as_str()) {
                     v["tool_name"] = json!(name);
+                }
+                if !images.is_empty() {
+                    v["images"] =
+                        Value::Array(images.iter().map(|i| json!(i.data.clone())).collect());
                 }
                 v
             }
@@ -337,6 +353,7 @@ mod tests {
             messages: vec![
                 Message::User {
                     content: "hi".into(),
+                    images: Vec::new(),
                 },
                 Message::Assistant {
                     content: String::new(),
@@ -351,6 +368,7 @@ mod tests {
                 Message::Tool {
                     call_id: "c1".into(),
                     content: "fn a() {}".into(),
+                    images: Vec::new(),
                 },
             ],
             tools: vec![ToolSpec {
@@ -373,6 +391,47 @@ mod tests {
         );
         assert_eq!(b["messages"][2]["tool_name"], "read");
         assert_eq!(b["tools"][0]["function"]["name"], "read");
+    }
+
+    #[test]
+    fn images_ride_the_message_itself() {
+        let img = || quack_protocol::Image {
+            media_type: "image/png".into(),
+            data: "eHk=".into(),
+            width: Some(2),
+            height: Some(1),
+        };
+        let req = ChatRequest {
+            model: "llava".into(),
+            messages: vec![
+                Message::User {
+                    content: "look".into(),
+                    images: vec![img()],
+                },
+                Message::Assistant {
+                    content: String::new(),
+                    reasoning: None,
+                    tool_calls: vec![ToolCall {
+                        id: "c1".into(),
+                        name: "view_image".into(),
+                        arguments: "{}".into(),
+                    }],
+                    sealed: None,
+                },
+                Message::Tool {
+                    call_id: "c1".into(),
+                    content: "cap".into(),
+                    images: vec![img()],
+                },
+            ],
+            ..ChatRequest::default()
+        };
+        let b = build_body(&req);
+        // Ollama takes base64 strings on the message, not content parts.
+        assert_eq!(b["messages"][0]["images"], json!(["eHk="]));
+        assert_eq!(b["messages"][0]["content"], "look");
+        assert_eq!(b["messages"][2]["content"], "cap");
+        assert_eq!(b["messages"][2]["images"], json!(["eHk="]));
     }
 
     #[test]

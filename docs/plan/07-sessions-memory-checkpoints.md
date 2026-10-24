@@ -17,11 +17,11 @@
     └── 2026-10-17T21-14-03_<uuidv7>/
         ├── events.jsonl               # append-only event log (source of truth)
         ├── outputs/<call-id>.log      # full tool outputs referenced from events
-        ├── attachments/<sha256>.<ext> # pasted images, large pastes
+        ├── attachments/<sha256>.<ext> # planned: pasted images, large pastes (unused so far)
         └── checkpoints/               # file pre-images (see Checkpoints)
 ```
 
-Implemented in M1: `session_start`, `resume`, `message` (each chat message exactly as sent, so replay is exact), `tool` (UI summary), `approval`, `usage`. A session directory is created at the first turn, so starting and quitting leaves nothing behind. Resume also repairs a tool call left without a result by a crash.
+Implemented in M1: `session_start`, `resume`, `message` (each chat message exactly as sent, so replay is exact), `tool` (UI summary), `approval`, `usage`. A session directory is created at the first turn, so starting and quitting leaves nothing behind. Resume also repairs a tool call left without a result by a crash. Images (2026-10-24) are not written to `attachments/`: they ride inside the `message` records, base64 in the history itself, so replay is byte-exact with no sidecar files to keep or lose.
 
 ### Event log format
 

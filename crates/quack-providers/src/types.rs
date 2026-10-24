@@ -1,7 +1,7 @@
 //! Provider-neutral request and stream types. Adapters translate these to and from the wire.
 
 use quack_config::provider::{Cost, Sampling};
-use quack_protocol::Usage;
+use quack_protocol::{Image, Usage};
 use serde::{Deserialize, Serialize};
 
 /// One request to a model. The profile layer shapes it before an adapter serializes it.
@@ -35,6 +35,10 @@ pub enum Message {
     },
     User {
         content: String,
+        /// Images sent with the message (pasted, attached, or from a tool the profile
+        /// turned into input); sent by adapters that support vision.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<Image>,
     },
     Assistant {
         #[serde(default)]
@@ -51,6 +55,10 @@ pub enum Message {
     Tool {
         call_id: String,
         content: String,
+        /// Images the tool returned (`view_image`); sent where the protocol takes them,
+        /// next to or after the text.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<Image>,
     },
 }
 

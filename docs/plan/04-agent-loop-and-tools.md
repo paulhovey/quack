@@ -85,6 +85,7 @@ Internal tools have stable internal names and schemas. Profiles map onto them ([
 |---|---|---|
 | `read` | ReadOnly | Read a file or line range. Large files return a tree-sitter skeleton plus a hint, not full contents ([05](05-context-management.md)) |
 | `index` | ReadOnly | Tree-sitter skeleton of a file or directory: symbols with line ranges (maki-style) |
+| `view_image` | ReadOnly | An image file (png, jpeg, gif, webp, ≤ 3 MB) as vision input: a caption in the result, the pixels as `ToolOutput.images`. Offered only when the model sets `vision = true` ([02](02-providers.md#vision-2026-10-24)) |
 | `glob` | ReadOnly | File discovery via `ignore` + `globset`. Respects .gitignore |
 | `grep` | ReadOnly | ripgrep library. Results capped, grouped by file, with context lines |
 | `list_dir` | ReadOnly | Shallow tree, capped |

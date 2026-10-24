@@ -85,7 +85,20 @@ pub(crate) fn build_body(req: &ChatRequest, route: Route) -> Value {
             Message::System { content } => {
                 input.push(json!({ "role": "developer", "content": content }));
             }
-            Message::User { content } => input.push(json!({ "role": "user", "content": content })),
+            Message::User { content, images } => {
+                if images.is_empty() {
+                    input.push(json!({ "role": "user", "content": content }))
+                } else {
+                    let mut parts: Vec<Value> = images
+                        .iter()
+                        .map(|i| json!({ "type": "input_image", "image_url": i.data_url() }))
+                        .collect();
+                    if !content.is_empty() {
+                        parts.push(json!({ "type": "input_text", "text": content }));
+                    }
+                    input.push(json!({ "role": "user", "content": parts }))
+                }
+            }
             Message::Assistant {
                 content,
                 tool_calls,
@@ -104,12 +117,26 @@ pub(crate) fn build_body(req: &ChatRequest, route: Route) -> Value {
                 }
                 input.extend(tool_calls.iter().map(|c| call_item(c, route)));
             }
-            Message::Tool { call_id, content } => {
+            Message::Tool {
+                call_id,
+                content,
+                images,
+            } => {
                 let mut item = json!({
                     "type": "function_call_output",
                     "call_id": call_id,
                     "output": content,
                 });
+                if !images.is_empty() {
+                    // The output takes text and image content items.
+                    let mut parts = vec![json!({ "type": "input_text", "text": content })];
+                    parts.extend(
+                        images
+                            .iter()
+                            .map(|i| json!({ "type": "input_image", "image_url": i.data_url() })),
+                    );
+                    item["output"] = Value::Array(parts);
+                }
                 if route == Route::ChatgptPlan {
                     item["namespace"] = json!(NAMESPACE);
                 }
@@ -359,6 +386,7 @@ mod tests {
                 },
                 Message::User {
                     content: "hi".into(),
+                    images: Vec::new(),
                 },
                 Message::Assistant {
                     content: "Looking.".into(),
@@ -373,6 +401,7 @@ mod tests {
                 Message::Tool {
                     call_id: "c1".into(),
                     content: "a b".into(),
+                    images: Vec::new(),
                 },
             ],
             tools: vec![ToolSpec {
@@ -394,6 +423,60 @@ mod tests {
         assert_eq!(input[3]["output"], "a b");
         assert_eq!(b["tools"][0]["type"], "function");
         assert_eq!(b["tools"][0]["name"], "shell");
+    }
+
+    #[test]
+    fn images_ride_user_content_and_call_outputs() {
+        let img = || quack_protocol::Image {
+            media_type: "image/png".into(),
+            data: "eHk=".into(),
+            width: Some(2),
+            height: Some(1),
+        };
+        let req = ChatRequest {
+            model: "gpt-oss".into(),
+            messages: vec![
+                Message::User {
+                    content: "look".into(),
+                    images: vec![img()],
+                },
+                Message::Assistant {
+                    content: String::new(),
+                    reasoning: None,
+                    tool_calls: vec![ToolCall {
+                        id: "c1".into(),
+                        name: "view_image".into(),
+                        arguments: "{}".into(),
+                    }],
+                    sealed: None,
+                },
+                Message::Tool {
+                    call_id: "c1".into(),
+                    content: "cap".into(),
+                    images: vec![img()],
+                },
+            ],
+            ..ChatRequest::default()
+        };
+        let b = build_body(&req, Route::Api);
+        let input = b["input"].as_array().expect("input");
+        assert_eq!(input.len(), 3, "{input:?}");
+        // User images become content parts ahead of the text.
+        assert_eq!(
+            input[0]["content"],
+            json!([
+                {"type": "input_image", "image_url": "data:image/png;base64,eHk="},
+                {"type": "input_text", "text": "look"},
+            ])
+        );
+        // Tool-result images ride inside the function_call_output, next to the text.
+        assert_eq!(
+            input[2]["output"],
+            json!([
+                {"type": "input_text", "text": "cap"},
+                {"type": "input_image", "image_url": "data:image/png;base64,eHk="},
+            ])
+        );
     }
 
     #[test]
@@ -485,11 +568,13 @@ mod tests {
             messages: vec![
                 Message::User {
                     content: "go".into(),
+                    images: Vec::new(),
                 },
                 msg,
                 Message::Tool {
                     call_id: "c1".into(),
                     content: "x".into(),
+                    images: Vec::new(),
                 },
             ],
             tools: vec![ToolSpec {

@@ -230,6 +230,7 @@ impl Tool for Task {
                         "Error: the {} agent did not finish. {}{note}",
                         a.id, report.text
                     ),
+                    images: Vec::new(),
                     summary: report.summary,
                     detail: Some(report.text),
                 }

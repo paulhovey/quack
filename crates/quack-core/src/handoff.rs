@@ -22,7 +22,7 @@ pub(crate) fn brief(
     let mut asks: Vec<&str> = Vec::new();
     for m in segment {
         match m {
-            Message::User { content } => {
+            Message::User { content, .. } => {
                 let text = content.strip_suffix(&suffix).unwrap_or(content).trim();
                 if !text.is_empty() {
                     requests.push(text);
@@ -43,7 +43,9 @@ pub(crate) fn brief(
                         .map(|c| c.id.as_str()),
                 );
             }
-            Message::Tool { call_id, content } if asks.contains(&call_id.as_str()) => {
+            Message::Tool {
+                call_id, content, ..
+            } if asks.contains(&call_id.as_str()) => {
                 answers.push(content.trim());
             }
             _ => {}
@@ -83,6 +85,7 @@ mod tests {
         let segment = [
             Message::User {
                 content: "Add retries\n\n[Plan mode] plan first".into(),
+                images: Vec::new(),
             },
             Message::Assistant {
                 content: "Looking around.".into(),
@@ -93,10 +96,12 @@ mod tests {
             Message::Tool {
                 call_id: "r".into(),
                 content: "fn fetch() {}".into(),
+                images: Vec::new(),
             },
             Message::Tool {
                 call_id: "q".into(),
                 content: "Q: How many?\nA: 3".into(),
+                images: Vec::new(),
             },
             Message::Assistant {
                 content: "1. Wrap fetch in a loop.".into(),

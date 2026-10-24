@@ -285,6 +285,7 @@ async fn start(parent: &TurnCtx, call_key: &str, req: TaskRequest) -> TaskReport
     let prompt = turn::Prompt {
         text: req.prompt.clone(),
         typed: req.prompt,
+        images: Vec::new(),
         start: None,
     };
     let history = turn::run(ctx, Vec::new(), prompt).await;
@@ -358,6 +359,7 @@ mod tests {
         let h = vec![
             Message::User {
                 content: "find it".into(),
+                images: Vec::new(),
             },
             said("found it in a.rs:3"),
         ];
@@ -376,6 +378,7 @@ mod tests {
             Message::Tool {
                 call_id: "c".into(),
                 content: "x".into(),
+                images: Vec::new(),
             },
         ];
         let r = report(&h, false, 1);

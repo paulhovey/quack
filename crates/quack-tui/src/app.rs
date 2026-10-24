@@ -485,6 +485,13 @@ pub(crate) struct Approval {
     pub request: ApprovalRequest,
 }
 
+/// An image attached to the next message, with the path it came from.
+#[derive(Debug, Clone)]
+pub(crate) struct Attachment {
+    pub path: String,
+    pub image: quack_protocol::Image,
+}
+
 #[derive(Debug)]
 pub struct App {
     pub(crate) info: AppInfo,
@@ -496,6 +503,8 @@ pub struct App {
     /// Highlighted code blocks, filled as assistant text arrives; drawing only reads it.
     pub(crate) highlights: crate::highlight::Highlights,
     pub(crate) input: Input,
+    /// Images attached to the next message (pasted or dropped paths), oldest first.
+    pub(crate) attachments: Vec<Attachment>,
     pub(crate) modal: Option<Modal>,
     /// Transcript rows scrolled up from the bottom. Drawing clamps it and keeps the view
     /// still while new rows arrive below, so it lives in a `Cell`.
@@ -595,6 +604,7 @@ impl App {
                 quack_core::grammar::Grammars::new(info.grammar_dirs.clone()),
             )),
             input: Input::default(),
+            attachments: Vec::new(),
             modal: None,
             scroll: Cell::new(0),
             view: Cell::new((0, 0)),
@@ -1359,7 +1369,12 @@ impl App {
                 } else {
                     match &mut self.modal {
                         Some(m) => m.paste(&text),
-                        None => self.input.insert_str(&text),
+                        None => {
+                            // A dropped image file arrives as its path; attach it.
+                            if !self.attach_pasted(&text) {
+                                self.input.insert_str(&text);
+                            }
+                        }
                     }
                 }
                 self.dirty = true;
@@ -1593,7 +1608,13 @@ impl App {
             KeyCode::Char('e') if ctrl => self.input.end(),
             KeyCode::Char('u') if ctrl => self.input.clear(),
             KeyCode::Char('p') if ctrl => self.modal = Some(modal::help(&self.theme)),
-            KeyCode::Backspace => self.edited(Input::backspace),
+            KeyCode::Backspace => {
+                if self.input.is_empty() && self.attachments.pop().is_some() {
+                    self.dirty = true;
+                } else {
+                    self.edited(Input::backspace);
+                }
+            }
             KeyCode::Delete => self.edited(Input::delete),
             KeyCode::Char(c) if !ctrl => {
                 self.input.insert(c);
@@ -1979,24 +2000,69 @@ impl App {
             None => {}
         }
         let text = self.input.submit();
-        if text.trim().is_empty() {
+        let attachments = std::mem::take(&mut self.attachments);
+        if text.trim().is_empty() && attachments.is_empty() {
             return;
         }
         self.scroll.set(0);
         if text.starts_with('/') {
             return self.execute(&text);
         }
-        self.send(text);
+        self.send(text, attachments);
     }
 
-    fn send(&mut self, text: String) {
+    fn send(&mut self, text: String, attachments: Vec<Attachment>) {
         self.review = None;
         self.panel_collapsed = true;
-        self.transcript.push(Entry::User(text.clone()));
+        let shown = if text.trim().is_empty() {
+            format!(
+                "attached: {}",
+                attachments
+                    .iter()
+                    .map(|a| a.path.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        } else {
+            text.clone()
+        };
+        self.transcript.push(Entry::User(shown));
+        let mut items: Vec<InputItem> = attachments
+            .into_iter()
+            .map(|a| InputItem::Image { path: a.path })
+            .collect();
+        if !text.trim().is_empty() {
+            items.push(InputItem::text(text));
+        }
         self.ops.push(Op::UserTurn {
-            items: vec![InputItem::text(text)],
+            items,
             overrides: TurnOverrides::default(),
         });
+    }
+
+    /// A paste that is nothing but image file paths attaches them instead of inserting
+    /// text: that is what dropping a file on the terminal sends. Anything else is pasted.
+    fn attach_pasted(&mut self, text: &str) -> bool {
+        let tokens: Vec<&str> = text.split_whitespace().collect();
+        if tokens.is_empty()
+            || !tokens.iter().all(|t| {
+                let p = std::path::Path::new(t.strip_prefix("file://").unwrap_or(t));
+                p.is_file() && quack_protocol::image::is_image(p)
+            })
+        {
+            return false;
+        }
+        for token in tokens {
+            let raw = token.strip_prefix("file://").unwrap_or(token);
+            match quack_protocol::Image::from_path(std::path::Path::new(raw)) {
+                Ok(image) => self.attachments.push(Attachment {
+                    path: raw.to_owned(),
+                    image,
+                }),
+                Err(e) => self.note(e),
+            }
+        }
+        true
     }
 
     fn set_mode(&mut self, mode: &str) {
@@ -2095,7 +2161,7 @@ impl App {
                 || self.custom.iter().any(|c| c.name == name)
                 || self.mcp_prompts.iter().any(|c| c.name == name) =>
             {
-                self.send(text.trim().to_owned());
+                self.send(text.trim().to_owned(), Vec::new());
             }
             None => self.note(format!("unknown command /{name}; /help lists commands")),
         }
@@ -2358,7 +2424,7 @@ impl App {
                 "off" | "exit" => self.end_plan(),
                 task => {
                     self.set_mode("plan");
-                    self.send(task.to_owned());
+                    self.send(task.to_owned(), Vec::new());
                 }
             },
             "context" => {

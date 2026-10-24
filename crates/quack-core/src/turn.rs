@@ -69,6 +69,8 @@ pub(crate) struct TurnCtx {
 pub(crate) struct Prompt {
     pub text: String,
     pub typed: String,
+    /// Images the user attached, encoded and ready for the wire.
+    pub images: Vec<quack_protocol::Image>,
     /// Context from `session_start` hooks, for the session's first prompt.
     pub start: Option<tokio::task::JoinHandle<Vec<String>>>,
 }
@@ -237,7 +239,13 @@ pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: Prompt)
     } else {
         format!("{}\n\n{}", prompt.text, extra.join("\n\n"))
     };
-    ctx.push(&mut history, Message::User { content });
+    ctx.push(
+        &mut history,
+        Message::User {
+            content,
+            images: prompt.images,
+        },
+    );
     let mut total = Usage::default();
     let mut recent: Vec<(String, String)> = Vec::new();
     let mut nudged = false;
@@ -310,6 +318,7 @@ pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: Prompt)
                     &mut history,
                     Message::User {
                         content: EMPTY_NUDGE.into(),
+                        images: Vec::new(),
                     },
                 );
                 continue;
@@ -337,6 +346,7 @@ pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: Prompt)
                             Message::Tool {
                                 call_id: c.id.clone(),
                                 content: "Not run: interrupted by the user.".into(),
+                                images: Vec::new(),
                             },
                         );
                     }
@@ -350,13 +360,18 @@ pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: Prompt)
                         futures::future::join_all(batch.iter().map(|c| run_call(&ctx, c))).await;
                     let end = i + together == calls.len();
                     for (n, (call, out)) in batch.iter().zip(outs).enumerate() {
-                        let mut content = out.model;
+                        let ToolOutput {
+                            model: mut content,
+                            images,
+                            ..
+                        } = out;
                         ctx.keep_plan(&mut content, end && n + 1 == together);
                         ctx.push(
                             &mut history,
                             Message::Tool {
                                 call_id: call.id.clone(),
                                 content,
+                                images,
                             },
                         );
                     }
@@ -394,6 +409,7 @@ pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: Prompt)
                     Message::Tool {
                         call_id: call.id.clone(),
                         content: out.model,
+                        images: out.images,
                     },
                 );
             }
@@ -435,15 +451,35 @@ pub(crate) fn estimate(s: &Setup, history: &[Message]) -> u32 {
 }
 
 /// Uncorrected estimate of a request's prompt: system prompt, history and tool definitions.
+/// Image payloads are counted as their rough token cost, not their base64 bytes, which
+/// would count a screenshot as tens of thousands of tokens.
 fn raw_estimate(s: &Setup, history: &[Message]) -> u32 {
-    let history = serde_json::to_string(history).unwrap_or_default();
+    let json = serde_json::to_string(history).unwrap_or_default();
+    let image_bytes: usize = history
+        .iter()
+        .flat_map(|m| match m {
+            Message::User { images, .. } | Message::Tool { images, .. } => images.as_slice(),
+            _ => &[],
+        })
+        .map(|i| i.data.len())
+        .sum();
+    let image_tokens: u32 = history
+        .iter()
+        .flat_map(|m| match m {
+            Message::User { images, .. } | Message::Tool { images, .. } => images.as_slice(),
+            _ => &[],
+        })
+        .map(quack_protocol::Image::tokens)
+        .sum();
+    let history = tokens::estimate(&json[..json.len().saturating_sub(image_bytes)])
+        .saturating_add(image_tokens);
     let tools: usize = tool_specs(s)
         .iter()
         .map(|t| t.description.len() + t.name.len() + t.parameters.to_string().len())
         .sum();
     tokens::estimate(&s.system)
         .saturating_add(tokens::estimate(&s.session_context))
-        .saturating_add(tokens::estimate(&history))
+        .saturating_add(history)
         .saturating_add(u32::try_from(tools * 2 / 7).unwrap_or(u32::MAX))
 }
 
@@ -526,7 +562,7 @@ pub(crate) fn with_session_context(s: &Setup, messages: &mut [Message]) {
     if s.session_context.is_empty() {
         return;
     }
-    if let Some(Message::User { content }) = messages
+    if let Some(Message::User { content, .. }) = messages
         .iter_mut()
         .find(|m| matches!(m, Message::User { .. }))
     {
@@ -576,14 +612,14 @@ async fn stream_step(
     // has it in the history already (`TurnCtx::keep_plan`).
     if !s.provider.append_only() {
         if let Some(wf) = working_files_reminder(ctx)
-            && let Some(Message::Tool { content, .. } | Message::User { content }) =
+            && let Some(Message::Tool { content, .. } | Message::User { content, .. }) =
                 messages.last_mut()
         {
             content.push_str("\n\n");
             content.push_str(&wf);
         }
         if let Some(plan) = s.tool_ctx.plan.reminder()
-            && let Some(Message::Tool { content, .. } | Message::User { content }) =
+            && let Some(Message::Tool { content, .. } | Message::User { content, .. }) =
                 messages.last_mut()
         {
             content.push_str("\n\n");
@@ -1205,6 +1241,7 @@ mod tests {
         let history = vec![Message::Tool {
             call_id: "call_0".into(),
             content: String::new(),
+            images: Vec::new(),
         }];
         let mut calls = vec![ToolCall {
             id: "call_0".into(),

@@ -251,6 +251,7 @@ mod tests {
             agents: Default::default(),
             spawn: None,
             edit_format: quack_config::settings::EditFormat::StrReplace,
+            vision: false,
             outline_above: 0,
             grammars: crate::grammar::Grammars::builtin(),
         }

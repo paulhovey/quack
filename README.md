@@ -34,6 +34,9 @@ Everything below works today. Planned work is listed separately at the end.
   MCP servers may reach.
 - **Short provider files.** Only `base_url` is required. Models are discovered when none are
   listed, and one is picked for you.
+- **Images, when the model can see them.** A `view_image` tool sends png, jpeg, gif or webp
+  files to the model as images, and pasting image paths into the input attaches them to the
+  turn. Both appear only when the model entry sets `vision = true`.
 - **Linux, macOS and Windows**, x64 and ARM64. Windows is a first-class target: shell
   commands run in Job Objects so they always die cleanly, and PowerShell is supported.
 - **Knows when it broke the syntax or build.** Tree-sitter validates syntax immediately

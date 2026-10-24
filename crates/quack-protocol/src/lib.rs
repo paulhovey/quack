@@ -5,9 +5,11 @@
 //! headless output and tests without pulling in tokio.
 
 mod ids;
+pub mod image;
 mod startup;
 
 pub use ids::{CallId, CheckpointId, EventIndex, ModelId, ProviderId, SessionId, TurnId};
+pub use image::Image;
 pub use startup::{LoadState, Subsystem};
 
 use serde::{Deserialize, Serialize};
@@ -443,9 +445,17 @@ pub enum Event {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum InputItem {
-    Text { text: String },
-    Image { path: String },
-    File { path: String },
+    Text {
+        text: String,
+    },
+    /// An image file to send with the turn; the engine probes and encodes it, and
+    /// the turn warns instead when the model has no vision.
+    Image {
+        path: String,
+    },
+    File {
+        path: String,
+    },
 }
 
 impl InputItem {

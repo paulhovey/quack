@@ -53,6 +53,23 @@ struct Shape<'a> {
     names: HashMap<&'a str, &'a str>,
 }
 
+/// An image as an OpenAI-compatible content part.
+fn image_part(img: &quack_protocol::Image) -> Value {
+    json!({ "type": "image_url", "image_url": { "url": img.data_url() } })
+}
+
+/// Images from tool results ride in a user message after the run of tool messages:
+/// many chat-completions servers take image parts only on user content, and a tool
+/// message's `content` must stay a string.
+fn flush_images(messages: &mut Vec<Value>, pending: &mut Vec<Value>) {
+    if !pending.is_empty() {
+        messages.push(json!({
+            "role": "user",
+            "content": Value::Array(std::mem::take(pending)),
+        }));
+    }
+}
+
 /// Serialize a request. Earlier reasoning is sent back, since thinking models expect
 /// it across tool calls (DeepSeek rejects a tool request without it; MiniMax, Kimi and GLM
 /// lose the thread). Chat templates on local servers drop what they don't use.
@@ -77,11 +94,26 @@ pub(crate) fn build_body(req: &ChatRequest, dialect: Dialect) -> Value {
             .map(|c| (c.id.as_str(), c.name.as_str()))
             .collect(),
     };
-    let messages: Vec<Value> = req
-        .messages
-        .iter()
-        .map(|m| message_json(m, &shape))
-        .collect();
+    let mut messages: Vec<Value> = Vec::with_capacity(req.messages.len() + 1);
+    let mut pending: Vec<Value> = Vec::new();
+    for m in &req.messages {
+        match m {
+            Message::Tool { images, .. } if !images.is_empty() => {
+                // The text goes back as the tool result; the pixels follow as user parts.
+                messages.push(message_json(m, &shape));
+                pending.extend(images.iter().map(image_part));
+            }
+            Message::Tool { .. } => {
+                // A run of tool results stays contiguous; the pixels wait for its end.
+                messages.push(message_json(m, &shape));
+            }
+            m => {
+                flush_images(&mut messages, &mut pending);
+                messages.push(message_json(m, &shape));
+            }
+        }
+    }
+    flush_images(&mut messages, &mut pending);
     let mut body = Map::new();
     body.insert("model".into(), json!(req.model));
     body.insert("messages".into(), Value::Array(messages));
@@ -173,7 +205,7 @@ fn short_id(id: &str) -> String {
 fn cache_key(messages: &[Message]) -> String {
     let mut bytes = Vec::new();
     for m in messages.iter().take(2) {
-        if let Message::System { content } | Message::User { content } = m {
+        if let Message::System { content } | Message::User { content, .. } = m {
             bytes.extend_from_slice(content.as_bytes());
             bytes.push(0);
         }
@@ -198,7 +230,17 @@ fn message_json(m: &Message, shape: &Shape<'_>) -> Value {
     };
     match m {
         Message::System { content } => json!({ "role": "system", "content": content }),
-        Message::User { content } => json!({ "role": "user", "content": content }),
+        Message::User { content, images } => {
+            if images.is_empty() {
+                json!({ "role": "user", "content": content })
+            } else {
+                let mut parts: Vec<Value> = images.iter().map(image_part).collect();
+                if !content.is_empty() {
+                    parts.push(json!({ "type": "text", "text": content }));
+                }
+                json!({ "role": "user", "content": parts })
+            }
+        }
         Message::Assistant {
             content,
             reasoning,
@@ -240,7 +282,9 @@ fn message_json(m: &Message, shape: &Shape<'_>) -> Value {
             }
             v
         }
-        Message::Tool { call_id, content } => {
+        Message::Tool {
+            call_id, content, ..
+        } => {
             let mut v = json!({ "role": "tool", "tool_call_id": id(call_id), "content": content });
             if shape.mistral
                 && let Some(name) = shape.names.get(call_id.as_str())
@@ -585,6 +629,7 @@ mod tests {
                 Message::Tool {
                     call_id: "c1".into(),
                     content: "ok".into(),
+                    images: Vec::new(),
                 },
             ],
             tools: vec![ToolSpec {
@@ -615,6 +660,83 @@ mod tests {
         assert!(b.get("temperature").is_none());
     }
 
+    fn img() -> quack_protocol::Image {
+        quack_protocol::Image {
+            media_type: "image/png".into(),
+            data: "eHk=".into(),
+            width: Some(2),
+            height: Some(1),
+        }
+    }
+
+    #[test]
+    fn user_and_tool_images_take_their_places() {
+        let req = ChatRequest {
+            model: "m".into(),
+            messages: vec![
+                Message::User {
+                    content: "go".into(),
+                    images: vec![img()],
+                },
+                Message::Assistant {
+                    content: String::new(),
+                    reasoning: None,
+                    tool_calls: vec![
+                        ToolCall {
+                            id: "c1".into(),
+                            name: "view_image".into(),
+                            arguments: "{}".into(),
+                        },
+                        ToolCall {
+                            id: "c2".into(),
+                            name: "read".into(),
+                            arguments: "{}".into(),
+                        },
+                    ],
+                    sealed: None,
+                },
+                Message::Tool {
+                    call_id: "c1".into(),
+                    content: "[image: pic.png]".into(),
+                    images: vec![img()],
+                },
+                Message::Tool {
+                    call_id: "c2".into(),
+                    content: "text".into(),
+                    images: Vec::new(),
+                },
+                Message::User {
+                    content: "and?".into(),
+                    images: Vec::new(),
+                },
+            ],
+            ..ChatRequest::default()
+        };
+        let b = build_body(&req, Dialect::Standard);
+        let m = b["messages"].as_array().expect("messages");
+        assert_eq!(m.len(), 6, "{m:?}");
+        // Attached images become parts ahead of the user message's text.
+        assert_eq!(
+            m[0]["content"],
+            json!([
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,eHk="}},
+                {"type": "text", "text": "go"},
+            ])
+        );
+        // The captioned result stays a plain tool string...
+        assert_eq!(m[2]["role"], "tool");
+        assert_eq!(m[2]["content"], "[image: pic.png]");
+        // ...nothing is inserted inside the run of tool results...
+        assert_eq!(m[3]["role"], "tool");
+        // ...and the pixels follow as their own user message.
+        assert_eq!(m[4]["role"], "user");
+        assert_eq!(
+            m[4]["content"],
+            json!([{"type": "image_url", "image_url": {"url": "data:image/png;base64,eHk="}}])
+        );
+        assert_eq!(m[5]["content"], "and?");
+    }
+
     fn mistral_history() -> ChatRequest {
         ChatRequest {
             model: "mistral-large-4".into(),
@@ -624,6 +746,7 @@ mod tests {
                 },
                 Message::User {
                     content: "fix it".into(),
+                    images: Vec::new(),
                 },
                 Message::Assistant {
                     content: String::new(),
@@ -638,6 +761,7 @@ mod tests {
                 Message::Tool {
                     call_id: "call_0".into(),
                     content: "fn main() {}".into(),
+                    images: Vec::new(),
                 },
             ],
             sampling: Sampling {

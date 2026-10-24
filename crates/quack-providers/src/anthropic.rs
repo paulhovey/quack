@@ -46,13 +46,38 @@ fn push(turns: &mut Vec<Value>, role: &str, block: Value) {
     turns.push(json!({ "role": role, "content": [block] }));
 }
 
+/// An image as an Anthropic content block.
+fn image_block(img: &quack_protocol::Image) -> Value {
+    json!({
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": img.media_type,
+            "data": img.data,
+        }
+    })
+}
+
+/// The image blocks of a message, empty for everything but user messages with images.
+fn m_images(m: &Message) -> Vec<Value> {
+    match m {
+        Message::User { images, .. } if !images.is_empty() => {
+            images.iter().map(image_block).collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
 pub(crate) fn build_body(req: &ChatRequest) -> Value {
     let mut system: Vec<String> = Vec::new();
     let mut turns: Vec<Value> = Vec::new();
     for (i, m) in req.messages.iter().enumerate() {
         match m {
             Message::System { content } if i == 0 => system.push(content.clone()),
-            Message::System { content } | Message::User { content } => {
+            Message::System { content } | Message::User { content, .. } => {
+                for block in m_images(m) {
+                    push(&mut turns, "user", block);
+                }
                 if !content.is_empty() {
                     push(
                         &mut turns,
@@ -95,11 +120,25 @@ pub(crate) fn build_body(req: &ChatRequest) -> Value {
                     push(&mut turns, "assistant", b);
                 }
             }
-            Message::Tool { call_id, content } => push(
-                &mut turns,
-                "user",
-                json!({ "type": "tool_result", "tool_use_id": call_id, "content": content }),
-            ),
+            Message::Tool {
+                call_id,
+                content,
+                images,
+            } => {
+                // Tool results take image blocks directly, unlike chat-completions.
+                let content = if images.is_empty() {
+                    json!(content)
+                } else {
+                    let mut parts = vec![json!({ "type": "text", "text": content })];
+                    parts.extend(images.iter().map(image_block));
+                    Value::Array(parts)
+                };
+                push(
+                    &mut turns,
+                    "user",
+                    json!({ "type": "tool_result", "tool_use_id": call_id, "content": content }),
+                );
+            }
         }
     }
     // The conversation must start with the user.
@@ -411,6 +450,7 @@ mod tests {
                 },
                 Message::User {
                     content: "hi".into(),
+                    images: Vec::new(),
                 },
                 Message::Assistant {
                     content: String::new(),
@@ -432,13 +472,16 @@ mod tests {
                 Message::Tool {
                     call_id: "a".into(),
                     content: "A".into(),
+                    images: Vec::new(),
                 },
                 Message::Tool {
                     call_id: "b".into(),
                     content: "B".into(),
+                    images: Vec::new(),
                 },
                 Message::User {
                     content: "and?".into(),
+                    images: Vec::new(),
                 },
             ],
             tools: vec![ToolSpec {
@@ -462,6 +505,68 @@ mod tests {
         assert_eq!(last[2]["cache_control"]["type"], "ephemeral");
         assert_eq!(b["tools"][0]["input_schema"]["type"], "object");
         assert!(!b.to_string().contains("hmm"));
+    }
+
+    #[test]
+    fn images_ride_user_blocks_and_tool_results() {
+        let img = || quack_protocol::Image {
+            media_type: "image/png".into(),
+            data: "eHk=".into(),
+            width: Some(2),
+            height: Some(1),
+        };
+        let req = ChatRequest {
+            model: "claude".into(),
+            messages: vec![
+                Message::System {
+                    content: "sys".into(),
+                },
+                Message::User {
+                    content: "look".into(),
+                    images: vec![img()],
+                },
+                Message::Assistant {
+                    content: String::new(),
+                    reasoning: None,
+                    tool_calls: vec![ToolCall {
+                        id: "c1".into(),
+                        name: "view_image".into(),
+                        arguments: "{}".into(),
+                    }],
+                    sealed: None,
+                },
+                Message::Tool {
+                    call_id: "c1".into(),
+                    content: "cap".into(),
+                    images: vec![img()],
+                },
+            ],
+            ..ChatRequest::default()
+        };
+        let b = build_body(&req);
+        let turns = b["messages"].as_array().expect("turns");
+        assert_eq!(turns.len(), 3, "{turns:?}");
+        // Image blocks lead the user turn, ahead of its text.
+        let user = turns[0]["content"].as_array().expect("user blocks");
+        assert_eq!(user.len(), 2);
+        assert_eq!(
+            user[0],
+            json!({
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/png", "data": "eHk="},
+            })
+        );
+        assert_eq!(user[1]["text"], "look");
+        // A tool result carries its images inside the tool_result, unlike chat-completions.
+        let result = &turns[2]["content"][0];
+        assert_eq!(result["type"], "tool_result");
+        assert_eq!(
+            result["content"],
+            json!([
+                {"type": "text", "text": "cap"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "eHk="}},
+            ])
+        );
     }
 
     #[test]
@@ -557,11 +662,13 @@ mod tests {
             messages: vec![
                 Message::User {
                     content: "go".into(),
+                    images: Vec::new(),
                 },
                 sealed_reply(items.clone()),
                 Message::Tool {
                     call_id: "t1".into(),
                     content: "A".into(),
+                    images: Vec::new(),
                 },
             ],
             reasoning_effort: Some("high".into()),
@@ -596,6 +703,7 @@ mod tests {
             messages: vec![
                 Message::User {
                     content: "go".into(),
+                    images: Vec::new(),
                 },
                 changed,
             ],

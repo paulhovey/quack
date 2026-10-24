@@ -176,6 +176,7 @@ impl Tool for Shell {
             ToolOutput {
                 ok,
                 model,
+                images: Vec::new(),
                 summary: format!("{status} · {lines} lines"),
                 detail: Some(body),
             }

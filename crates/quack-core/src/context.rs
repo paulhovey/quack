@@ -178,7 +178,10 @@ pub(crate) async fn compact_now(
     let text = compact::transcript(&history[..cut], budget as usize * 2);
     let messages = vec![
         Message::System { content: prompt },
-        Message::User { content: text },
+        Message::User {
+            content: text,
+            images: Vec::new(),
+        },
     ];
     let mut req = turn::request(s, messages, false);
     // A looping model (small ones sometimes think forever) fails fast instead.

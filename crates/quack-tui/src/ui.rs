@@ -45,6 +45,7 @@ pub(crate) fn draw(f: &mut Frame<'_>, app: &App) {
     } else {
         u16::from(plan_open(app))
     };
+    let attach_rows = u16::from(!app.attachments.is_empty());
     let choice_rows = choices.as_ref().map_or(0, |c| {
         let room = f
             .area()
@@ -52,12 +53,22 @@ pub(crate) fn draw(f: &mut Frame<'_>, app: &App) {
             .saturating_sub(1 + panel_rows + plan_rows + input_rows + 1 + 3);
         u16::try_from(c.height()).unwrap_or(u16::MAX).min(room)
     });
-    let [header, panel, transcript, choice_area, plan, input, status] = Layout::vertical([
+    let [
+        header,
+        panel,
+        transcript,
+        choice_area,
+        plan,
+        attach,
+        input,
+        status,
+    ] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(panel_rows),
         Constraint::Min(1),
         Constraint::Length(choice_rows),
         Constraint::Length(plan_rows),
+        Constraint::Length(attach_rows),
         Constraint::Length(input_rows),
         Constraint::Length(1),
     ])
@@ -72,6 +83,9 @@ pub(crate) fn draw(f: &mut Frame<'_>, app: &App) {
         draw_plan_list(f, app, plan);
     } else if plan_rows > 0 {
         draw_plan(f, app, plan);
+    }
+    if attach_rows > 0 {
+        draw_attachments(f, app, attach);
     }
     draw_input(f, app, input);
     draw_status(f, app, status);
@@ -641,6 +655,27 @@ fn draw_transcript(f: &mut Frame<'_>, app: &App, area: Rect) {
 /// Columns for input text: the box's borders and the prompt take four.
 fn input_width(area_width: u16) -> usize {
     usize::from(area_width.saturating_sub(4))
+}
+
+/// The attached-image chips above the input, one per image: `name WxH`.
+fn draw_attachments(f: &mut Frame<'_>, app: &App, area: Rect) {
+    let t = &app.theme;
+    let mut spans: Vec<Span<'_>> = vec![Span::raw(" ")];
+    for (n, a) in app.attachments.iter().enumerate() {
+        if n > 0 {
+            spans.push(Span::styled(" · ", t.dim));
+        }
+        let dims = match (a.image.width, a.image.height) {
+            (Some(w), Some(h)) => format!(" {w}x{h}"),
+            _ => String::new(),
+        };
+        let name = std::path::Path::new(&a.path)
+            .file_name()
+            .map_or_else(|| a.path.clone(), |s| s.to_string_lossy().into_owned());
+        spans.push(Span::styled(format!("[image] {name}{dims}"), t.accent));
+    }
+    spans.push(Span::styled("  (backspace removes)", t.dim));
+    f.render_widget(Line::from(spans), area);
 }
 
 fn draw_input(f: &mut Frame<'_>, app: &App, area: Rect) {

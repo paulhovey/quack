@@ -104,7 +104,7 @@ Both APIs return reasoning that must go back unchanged for the model to keep it:
 
 - None of this has been run against the live APIs; everything is checked against mock servers and the published docs. A first live run should confirm the beta headers, `reasoning.context`, and that the plan route accepts `prompt_cache_key` and `reasoning.summary`.
 - `quack setup` lists `anthropic` and `openai` (they have keys) but not `chatgpt`; it says nothing about `quack login`.
-- Images, server tools (web search) and Anthropic's mid-conversation system messages are not used.
+- Server tools (web search) and Anthropic's mid-conversation system messages are not used. Images are: see [Vision](#vision-2026-10-24).
 
 ## Provider file schema
 
@@ -168,7 +168,7 @@ alias = "qwen3-coder"                  # what the user types / shows in UI
 context_window = 262144
 max_output = 32768
 profile = "auto"                       # or explicit "qwen-code" → 03-model-profiles
-vision = false
+vision = false                         # image support: the view_image tool and attached images (see Vision)
 
 [models.tool_calling]
 mode = "native"                        # native | text | grammar
@@ -288,6 +288,24 @@ Errors are normalized into `ProviderError { kind, status, retryable, message, ra
 `Auth`, `RateLimited { retry_after }`, `ContextLengthExceeded`, `ServerOverloaded`, `BadRequest`, `Network`, `Timeout`, `Protocol`.
 
 `ContextLengthExceeded` triggers an automatic compaction and a single retry ([05](05-context-management.md)). These messages are recognised by pattern for servers that return them as 400s with different texts.
+
+## Vision (2026-10-24)
+
+One model flag, `vision = true`, turns image support on; without it the tool is not offered, attached paths warn with the fix, and no pixels are ever sent.
+
+- **`view_image`** (`quack-tools/src/image.rs`) is offered only when `ctx.vision`: it probes the file's header (`quack_protocol::Image`: png, jpeg, gif, webp; nothing is decoded, no image crate ships), base64-encodes it, and returns a caption — `[image: path 32KB 1024x768]` — in the tool result plus the pixels as `ToolOutput.images`. Files over 3 MB raw are refused with the limit in the message, because base64 would exceed what providers accept; nothing is resized.
+- **Pasted and dropped images** attach to the turn ([06](06-tui.md)); the engine loads them (`engine.rs`, relative to the working directory) and a model without `vision` gets a warning that names the flag.
+- **On the wire**, each adapter puts them where its API takes them:
+
+| Adapter | User message | Tool result |
+|---|---|---|
+| `openai-chat` | `image_url` content parts before the text | the caption stays the tool message's string; the pixels follow the whole run of tool results as one `user` message of image parts (chat-completions servers take image parts only on user content, so the run of tool results stays contiguous) |
+| `anthropic-messages` | `image` blocks (base64 `source`) before the text | `image` blocks inside the `tool_result` content |
+| `openai-responses` | `input_image` parts before `input_text` | `input_image` parts inside `function_call_output.output` |
+| `ollama` | `images: [<base64>...]` on the message | the same `images` field |
+
+- **Tokens are estimated by pixels, not base64 length** — `(w*h)/750`, floor 256, 1000 when the header gave no size — so a 1 MB PNG does not read as hundreds of thousands of tokens and trigger compaction for nothing. Pruning that collapses a tool result to its caption drops the pixels (the model can call `view_image` again).
+- **History keeps them inline**: images ride inside the messages, so the session log replays them exactly on resume with no sidecar files.
 
 ## Servers, not engines (2026-10-18)
 

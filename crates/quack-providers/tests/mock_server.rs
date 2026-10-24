@@ -30,6 +30,7 @@ fn request() -> ChatRequest {
         model: "m".into(),
         messages: vec![Message::User {
             content: "hi".into(),
+            images: Vec::new(),
         }],
         ..ChatRequest::default()
     }
@@ -316,14 +317,17 @@ async fn sealed_replies_go_back_only_where_they_came_from() {
         reply("anthropic", &fp, "KEEP"),
         Message::User {
             content: "and".into(),
+            images: Vec::new(),
         },
         reply("elsewhere", &fp, "OTHER-PROVIDER"),
         Message::User {
             content: "then".into(),
+            images: Vec::new(),
         },
         reply("anthropic", "0000", "OLD-SETUP"),
         Message::User {
             content: "now".into(),
+            images: Vec::new(),
         },
     ]);
     let mut rx = p.stream(req, ReasoningFormat::Auto, CancellationToken::new());

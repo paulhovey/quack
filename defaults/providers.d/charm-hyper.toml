@@ -5,3 +5,8 @@ name = "Charm Hyper"
 group = "Open-model services"
 base_url = "https://hyper.charm.land/v1"
 api_key = { env = "CHARM_API_KEY" }
+
+# Kimi K3 takes images; the entry only marks that, and discovery fills in the rest.
+[[models]]
+id = "kimi-k3"
+vision = true

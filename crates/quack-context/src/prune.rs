@@ -337,9 +337,15 @@ pub fn apply(history: &mut [Message], ops: &[PruneOp]) -> usize {
     }
     let mut removed = 0;
     for op in ops {
-        if let Some(Message::Tool { content, .. }) = history.get_mut(op.index) {
+        if let Some(Message::Tool {
+            content, images, ..
+        }) = history.get_mut(op.index)
+        {
             removed += content.len().saturating_sub(op.content.len());
             content.clone_from(&op.content);
+            // A collapsed tool result takes its images with it; the model has the
+            // caption and can call `view_image` again if it needs the pixels.
+            images.clear();
         }
     }
     removed
@@ -366,6 +372,7 @@ mod tests {
         Message::Tool {
             call_id: id.into(),
             content,
+            images: Vec::new(),
         }
     }
 
@@ -416,6 +423,7 @@ mod tests {
             Message::Tool {
                 call_id: "a".into(),
                 content: "long".into(),
+                images: Vec::new(),
             },
         ];
         apply(&mut history, &[]);
@@ -512,6 +520,7 @@ mod tests {
         let mut h = vec![
             Message::User {
                 content: "go".into(),
+                images: Vec::new(),
             },
             call("1", "read", "a.rs"),
             result("1", body.clone()),
