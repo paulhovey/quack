@@ -51,6 +51,8 @@ Activating a deferred MCP tool mid-session would change the tool list. In native
 budget = floor(context_window × budget_ratio) − max_output_reserve
 ```
 
+`context_window` is the model's (provider file, then the models endpoint), held to `[context] window` when that is set (2026-10-23); with no window known, the setting gives one. The cap applies where the model is resolved, so the budget, `/context`, the status bar and Ollama's `num_ctx` all see it.
+
 The `ContextLedger` tracks tokens per segment: system, tools, instructions, memory, summary, and each history item. It uses local token counts ([02](02-providers.md#tokenizers)), corrected by the server's reported usage.
 
 `/context` shows a breakdown: one band with each segment in its own fill and the compaction point marked, tokens per segment, the room left before compaction in turns at the recent pace, and a suggestion based on what takes the most room. The status bar shows context growing towards the model's maximum context (`41.2k/220k`), turning yellow and red as it approaches compaction.
@@ -119,12 +121,13 @@ Compaction prompts are profile-overridable templates (`compact.md` in a profile 
 
 - **When:** before each request, if the corrected estimate is over `compaction_threshold × budget`, rules 1 and 3 run first (rules 2 and 4–6 wait for the index and the eval). If the request is still over, compaction runs. A `ContextLengthExceeded` from the server compacts once and retries; a second overflow ends the turn. `cache_strategy = "aggressive"` prunes before every request. `auto` currently behaves like `preserve`, until the prefill measurements exist.
 - **Pruning** never touches the last 8 messages, results under 400 characters, or results already pruned. Rule 1 counts only the `read` tool; `glob`, `grep` and `list_dir` read many files.
-- **Cut:** automatic compaction keeps up to 3 recent turns that fit in 35% of the budget. `/compact [focus]` keeps only the current turn. If the current turn alone is too big, the cut falls inside it, and the user's request is carried into the summary verbatim.
+- **Cut:** automatic compaction keeps up to 3 recent turns that fit in 35% of the budget. `/compact [focus]` keeps only the current turn. If the current turn alone is too big, the cut falls inside it, and the user's request is carried into the summary verbatim, through every later compaction too (it is taken from the earlier summary once the original message is gone; until 2026-10-23 only the first compaction carried it).
 - **Summarizer:** the session's model (the `small` model comes later) gets a system prompt (`compact.md`, or a compiled-in default) and the summarized span rendered as plain text.
   - It gets plain text, not the raw messages, so tool-call templates don't matter.
   - Tool results are cut to 1,500 characters each, and the oldest messages are dropped above about 60% of the budget.
   - The reply is capped at `budget / 4` tokens (1,024–8,192). Small thinking models can otherwise loop until the window is full.
-- **Fallback:** if the model returns an error or an empty summary, the summary becomes a plain list of the user's requests and the tool calls, built without a model. The session continues either way.
+- **Summary message** (2026-10-23): the summary, then `## Files changed in this session` from the engine's checkpoints (not from the summarizer), then the verbatim request. Its header says the work is on disk and to read a file again only for lines the model needs; it used to say to read files again before editing, and at a 32k window the re-reads filled the context again within a few steps, a compaction loop (roadmap, 2026-10-23).
+- **Fallback:** if the model returns an error, an empty or very short summary, or a tool call written as text (DeepSeek's DSML, `<tool_call>`, `[TOOL_CALLS]`, ...: some models answer a request without tools that way), it is asked once more, told it cannot call tools, and then the summary becomes a plain list of the user's requests and the tool calls, built without a model. An earlier summary in the span is kept whole in that list. The session continues either way.
 - **Log:** `prune` records hold the replaced contents and `compaction` records hold the cut and the summary message. Replay applies them in order, and repairs dangling tool calls at each `resume` record, as the live session did. Resume therefore rebuilds the same history.
 - **Tested** with mock servers (threshold, overflow retry, `/compact`, resume after compaction) and locally with Qwen3.5-0.8B on llama.cpp with a 6k window: three turns, two compactions in one turn, and the facts from the first turn recalled after them.
 

@@ -516,6 +516,7 @@ pub(crate) async fn eval(
         model: first(|r| r.model.as_str()),
         profile: first(|r| r.profile.as_str()),
         planner: args.planner.clone(),
+        window: loaded.settings.context.window,
         sampling: results
             .iter()
             .find(|r| r.skipped.is_none() && !r.model.is_empty())
@@ -535,8 +536,15 @@ pub(crate) async fn eval(
             "tasks" => String::new(),
             s => format!("{s}-"),
         };
-        let name = format!("{prefix}{}-{}{planned}.json", report.model, report.profile)
-            .replace(['/', '\\', ':'], "_");
+        let window = report
+            .window
+            .map(|w| format!("-{}k", w / 1024))
+            .unwrap_or_default();
+        let name = format!(
+            "{prefix}{}-{}{planned}{window}.json",
+            report.model, report.profile
+        )
+        .replace(['/', '\\', ':'], "_");
         suite
             .parent()
             .unwrap_or(&suite)

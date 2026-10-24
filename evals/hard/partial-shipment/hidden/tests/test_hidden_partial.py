@@ -80,3 +80,33 @@ class PartialShipmentTest(unittest.TestCase):
         self.assertEqual(len(orders), 8)
         paid = {o.id: o for o in orders}["1002"]
         self.assertTrue(all(not ln.shipped for ln in paid.lines))
+
+    def test_each_email_names_its_parcel(self):
+        self.shop.ship(self.order.id, FRIDAY, skus=["LAMP-01"])
+        self.shop.ship(self.order.id, FRIDAY)
+        first, second = self.world.mailer.sent("shipped")
+        self.assertIn("Desk lamp", first.body)
+        self.assertNotIn("Enamel mug", first.body)
+        self.assertIn("Enamel mug", second.body)
+        self.assertIn("Brass pen", second.body)
+        self.assertNotIn("Desk lamp", second.body)
+        self.assertIn("Estimated delivery", second.body)
+
+    def test_still_open_until_it_has_all_gone(self):
+        self.shop.ship(self.order.id, FRIDAY, skus=["LAMP-01"])
+        self.assertIn(self.order, self.shop.open_orders())
+        self.shop.ship(self.order.id, FRIDAY)
+        self.assertNotIn(self.order, self.shop.open_orders())
+
+    def test_the_rest_ships_after_a_restart(self):
+        self.shop.ship(self.order.id, FRIDAY, skus=["LAMP-01"])
+        later = load_world(orders_dir=self.shop.store.root)
+        again = later.shop.get(self.order.id)
+        self.assertEqual(again.state, "partially_shipped")
+        with self.assertRaises(ValueError):
+            later.shop.ship(again.id, FRIDAY, skus=["LAMP-01"])
+        later.shop.ship(again.id, FRIDAY)
+        self.assertEqual(again.state, "shipped")
+        (event,) = [e for e in later.bus.log if e.name == "order_shipped"]
+        self.assertEqual([ln.product.sku for ln in event.data["lines"]], ["MUG-01", "PEN-01"])
+        self.assertEqual(later.inventory.on_hand["LAMP-01"], 6)

@@ -425,8 +425,11 @@ async fn shipped_jira_hook_fetches_linked_issues() {
     std::fs::create_dir_all(hooks.join("jira")).expect("mkdir");
     std::fs::copy(shipped.join("jira/jira.py"), hooks.join("jira/jira.py")).expect("script");
     // Enabled, pointed at the mock, with a token written in (tests never read real env).
+    // Normalize line endings first: a Windows checkout has CRLF, and the replaces below
+    // (notably removing the `enabled = false` line) match LF text.
     let toml = std::fs::read_to_string(shipped.join("jira.toml"))
         .expect("jira.toml")
+        .replace("\r\n", "\n")
         .replace("enabled = false\n", "")
         .replace("https://jira.example.com", &jira.uri())
         .replace("{ env = \"JIRA_TOKEN\" }", "\"pat-123\"");

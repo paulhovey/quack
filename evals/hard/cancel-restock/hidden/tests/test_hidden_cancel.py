@@ -48,3 +48,11 @@ class CancelTest(unittest.TestCase):
         names = self.world.bus.names()
         self.assertEqual(names.count("order_cancelled"), 1)
         self.assertEqual(names.count("order_refunded"), 1)
+
+    def test_the_stock_report_after_a_paid_cancel(self):
+        o = self.shop.place_order("ada@example.com", "UK", [("RUG-01", 2)], (), FRIDAY)
+        self.shop.pay(o.id)
+        self.shop.cancel(o.id)
+        again = self.shop.place_order("bo@example.com", "UK", [("RUG-01", 2)], (), FRIDAY)
+        self.assertEqual(again.state, "placed")
+        self.assertEqual(self.stock.available("RUG-01"), 0)

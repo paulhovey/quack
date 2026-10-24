@@ -172,3 +172,175 @@ async fn compact_command_keeps_only_the_last_turn() {
     assert!(!last.contains("\"ONE\""));
     engine.shutdown().await;
 }
+
+const DSML: &str = "<｜DSML｜ calls>\n<｜DSML｜ invoke name=\"read\">\n<｜DSML｜ parameter name=\"path\" \
+                    string=\"true\">src/shop.py</｜DSML｜ parameter>\n</｜DSML｜ invoke>";
+
+/// Three big turns, so the third one compacts the first two (as in the threshold test).
+async fn three_turns(server: &MockServer, tmp: &std::path::Path) -> Vec<Event> {
+    let loaded = Arc::new(workspace(
+        tmp,
+        &server.uri(),
+        r#"[{ id = "tiny", context_window = 20000 }]"#,
+    ));
+    let big = "x".repeat(17_000);
+    let mut engine = Engine::spawn(loaded);
+    turn(&mut engine, &format!("FIRST {big}")).await;
+    turn(&mut engine, &format!("SECOND {big}")).await;
+    let third = turn(&mut engine, &format!("THIRD {big}")).await;
+    engine.shutdown().await;
+    third
+}
+
+#[tokio::test]
+async fn a_tool_call_for_a_summary_is_asked_again() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(body_string_contains(SUMMARIZER))
+        .respond_with(sse(DSML))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(body_string_contains(SUMMARIZER))
+        .respond_with(sse("## Goal\nSUMMARY-TEXT, written the second time round."))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(sse("ok"))
+        .mount(&server)
+        .await;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let third = three_turns(&server, tmp.path()).await;
+    assert!(compacted(&third), "{third:?}");
+    assert!(
+        !third.iter().any(|e| matches!(e, Event::Warning { .. })),
+        "{third:?}"
+    );
+    let all = bodies(&server).await;
+    let retry = &all[all.len() - 2];
+    assert!(retry.contains("You cannot call tools here"));
+    let last = all.last().expect("request");
+    assert!(last.contains("SUMMARY-TEXT") && !last.contains("DSML"));
+}
+
+#[tokio::test]
+async fn a_summary_that_is_a_tool_call_twice_falls_back_to_the_list() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(body_string_contains(SUMMARIZER))
+        .respond_with(sse(DSML))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(sse("ok"))
+        .mount(&server)
+        .await;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let third = three_turns(&server, tmp.path()).await;
+    assert!(compacted(&third), "{third:?}");
+    assert!(third.iter().any(|e| matches!(
+        e,
+        Event::Warning { message } if message.contains("tool call instead of a summary")
+    )));
+    let last = bodies(&server).await.pop().expect("request");
+    assert!(last.contains("No summary could be written") && !last.contains("DSML"));
+    assert!(last.contains("THIRD"));
+}
+
+#[tokio::test]
+async fn the_summary_lists_the_files_the_session_changed() {
+    let server = MockServer::start().await;
+    // Mounted first: the summarizer's transcript holds the other turns' text too.
+    Mock::given(method("POST"))
+        .and(body_string_contains(SUMMARIZER))
+        .respond_with(sse("SUMMARY-TEXT"))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(body_string_contains("FIRST"))
+        .respond_with(common::sse_call(
+            "w1",
+            "write",
+            serde_json::json!({"path": "notes.txt", "content": "written"}),
+        ))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(sse("ok"))
+        .mount(&server)
+        .await;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let loaded = Arc::new(workspace(
+        tmp.path(),
+        &server.uri(),
+        r#"[{ id = "tiny", context_window = 20000 }]"#,
+    ));
+    let ws = loaded.dirs.workspace_root.clone();
+    let big = "x".repeat(17_000);
+    let mut engine = Engine::spawn(loaded);
+    engine
+        .submit(Op::SetPermissionMode {
+            mode: "full-auto".into(),
+        })
+        .await;
+    turn(&mut engine, &format!("FIRST {big}")).await;
+    assert!(ws.join("notes.txt").exists());
+    turn(&mut engine, &format!("SECOND {big}")).await;
+    assert!(compacted(&turn(&mut engine, &format!("THIRD {big}")).await));
+    let last = bodies(&server).await.pop().expect("request");
+    assert!(
+        last.contains("## Files changed in this session\\n- notes.txt"),
+        "{last}"
+    );
+    assert!(!last.contains("read them again"));
+    engine.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_context_window_setting_caps_the_models_window() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(body_string_contains(SUMMARIZER))
+        .respond_with(sse("SUMMARY-TEXT"))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(sse("ok"))
+        .mount(&server)
+        .await;
+
+    // The model says 200k; the setting holds it to 20k, so the third turn compacts, as in
+    // the threshold test.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(tmp.path().join("user")).expect("mkdir");
+    std::fs::write(
+        tmp.path().join("user").join("config.toml"),
+        "[context]\nwindow = 20000\n",
+    )
+    .expect("config");
+    let loaded = Arc::new(workspace(
+        tmp.path(),
+        &server.uri(),
+        r#"[{ id = "tiny", context_window = 200000 }]"#,
+    ));
+    assert_eq!(loaded.settings.context.window, Some(20_000));
+    let big = "x".repeat(17_000);
+    let mut engine = Engine::spawn(loaded);
+    assert!(!compacted(
+        &turn(&mut engine, &format!("FIRST {big}")).await
+    ));
+    assert!(!compacted(
+        &turn(&mut engine, &format!("SECOND {big}")).await
+    ));
+    assert!(compacted(&turn(&mut engine, &format!("THIRD {big}")).await));
+    engine.shutdown().await;
+}

@@ -25,10 +25,13 @@ def main(args):
     runs = {}
     for f in sorted(files, key=lambda f: (str(f.parent), newest_first(f))):
         r = json.loads(f.read_text())
-        runs[(r.get("suite", "tasks"), r["model"], r["profile"], r.get("planner") or "-")] = r
+        suite = r.get("suite", "tasks")
+        if r.get("window"):
+            suite += f"@{r['window'] // 1024}k"
+        runs[(suite, r["model"], r["profile"], r.get("planner") or "-")] = r
     print("| suite | model | profile | planner | pass | steps | tool err | parse | edit fail "
-          "| prompt k (cached) | out k | cost | time | failures |")
-    print("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+          "| prompt k (cached) | out k | peak k | compact / pruned | cost | time | failures |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     total = 0.0
     for (suite, model, profile, planner), r in sorted(runs.items()):
         rs = [x for x in r["results"] if not x.get("skipped")]
@@ -44,7 +47,9 @@ def main(args):
         print(f"| {suite} | {model} | {profile} | {planner} | {sum(x['passed'] for x in rs)}/{len(rs)} "
               f"| {s('steps')} | {s('tool_errors')} | {s('parse_failures')} "
               f"| {s('edit_failures')} | {s('prompt_tokens') / 1000:.0f} ({cached:.0f}%) "
-              f"| {s('completion_tokens') / 1000:.1f} | ${cost:.3f} | {s('seconds'):.0f}s "
+              f"| {s('completion_tokens') / 1000:.1f} "
+              f"| {max((x.get('peak_prompt') or 0 for x in rs), default=0) / 1000:.0f} "
+              f"| {s('compactions')} / {s('pruned')} | ${cost:.3f} | {s('seconds'):.0f}s "
               f"| {labels} |")
     print(f"\ntotal ${total:.2f}")
     for (suite, model, profile, planner), r in sorted(runs.items()):

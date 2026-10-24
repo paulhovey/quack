@@ -1,0 +1,7 @@
+category = "fix-symptom"
+prompt = "We raised some prices in data/catalog.json this morning, and now orders placed before that look different: `python -m orderly invoice 1004` shows a bigger total than the customer was charged, and the report for 2026-10-16 no longer matches what we took that day. An order must keep the prices it was placed at (its file has them); only orders placed from now on get the new prices. Fix it."
+requires = ["python"]
+base = "../_projects/orderly"
+
+[[check]]
+command = "{python} -m unittest discover -s tests -t ."

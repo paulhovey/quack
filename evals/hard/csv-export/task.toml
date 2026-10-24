@@ -1,5 +1,5 @@
 category = "fix-symptom"
-prompt = "`python -m orderly export` writes a broken CSV when a customer's name contains a comma, a quote or a line break: the columns shift when the file is opened in a spreadsheet (order 1006 shows it). Fix the export so that every value reads back exactly with Python's csv module. Keep the header and the columns as they are."
+prompt = "Accounting loads the file from `python -m orderly export` into their own system, and it doesn't match the saved orders: some rows have their columns shifted (order 1006 shows it), and some customers come out different from what was saved. Fix the export so that every value reads back exactly with Python's csv module. Keep the header and the columns as they are."
 requires = ["python"]
 base = "../_projects/orderly"
 

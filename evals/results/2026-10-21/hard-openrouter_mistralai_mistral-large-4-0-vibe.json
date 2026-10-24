@@ -1,0 +1,302 @@
+{
+  "harness": "quack 0.1.0",
+  "date": "2026-10-21",
+  "suite": "hard",
+  "model": "openrouter/mistralai/mistral-large-4-0",
+  "profile": "vibe",
+  "sampling": {},
+  "results": [
+    {
+      "task": "cancel-restock",
+      "category": "fix-symptom",
+      "passed": true,
+      "changed": [
+        "orderly/shop.py",
+        "tests/test_shop.py"
+      ],
+      "steps": 13,
+      "tool_calls": 23,
+      "tool_errors": 0,
+      "parse_failures": 0,
+      "edit_failures": 0,
+      "prompt_tokens": 166992,
+      "cached_tokens": 140028,
+      "completion_tokens": 5033,
+      "compactions": 0,
+      "seconds": 67.481672819,
+      "cost": 0.0773129
+    },
+    {
+      "task": "category-cents",
+      "category": "fix-symptom",
+      "passed": true,
+      "changed": [
+        "orderly/money.py"
+      ],
+      "steps": 14,
+      "tool_calls": 20,
+      "tool_errors": 1,
+      "parse_failures": 0,
+      "edit_failures": 0,
+      "prompt_tokens": 154147,
+      "cached_tokens": 132328,
+      "completion_tokens": 5453,
+      "compactions": 0,
+      "seconds": 90.009142175,
+      "cost": 0.0709933
+    },
+    {
+      "task": "csv-export",
+      "category": "fix-symptom",
+      "passed": true,
+      "changed": [
+        "orderly/reports.py"
+      ],
+      "steps": 13,
+      "tool_calls": 16,
+      "tool_errors": 0,
+      "parse_failures": 0,
+      "edit_failures": 0,
+      "prompt_tokens": 102460,
+      "cached_tokens": 88316,
+      "completion_tokens": 3274,
+      "compactions": 0,
+      "seconds": 60.507624727,
+      "cost": 0.045285399999999996
+    },
+    {
+      "task": "delivery-dates",
+      "category": "fix-symptom",
+      "passed": true,
+      "changed": [
+        "orderly/config.py",
+        "orderly/util/dates.py"
+      ],
+      "steps": 15,
+      "tool_calls": 21,
+      "tool_errors": 0,
+      "parse_failures": 0,
+      "edit_failures": 0,
+      "prompt_tokens": 138804,
+      "cached_tokens": 118484,
+      "completion_tokens": 5928,
+      "compactions": 0,
+      "seconds": 70.445937399,
+      "cost": 0.069002
+    },
+    {
+      "task": "exclusive-coupons",
+      "category": "feature",
+      "passed": true,
+      "changed": [
+        "data/coupons.json",
+        "orderly/discounts.py",
+        "tests/test_discounts.py"
+      ],
+      "steps": 12,
+      "tool_calls": 20,
+      "tool_errors": 0,
+      "parse_failures": 0,
+      "edit_failures": 0,
+      "prompt_tokens": 111689,
+      "cached_tokens": 94480,
+      "completion_tokens": 4483,
+      "compactions": 0,
+      "seconds": 56.392127958,
+      "cost": 0.055370380000000004
+    },
+    {
+      "task": "flaky-order",
+      "category": "fix-flaky",
+      "passed": true,
+      "changed": [
+        "scheduler/plan.py"
+      ],
+      "steps": 7,
+      "tool_calls": 7,
+      "tool_errors": 0,
+      "parse_failures": 0,
+      "edit_failures": 0,
+      "prompt_tokens": 37929,
+      "cached_tokens": 31092,
+      "completion_tokens": 1287,
+      "compactions": 0,
+      "seconds": 19.014281908,
+      "cost": 0.019030860000000004
+    },
+    {
+      "task": "js-lru",
+      "category": "create",
+      "passed": true,
+      "changed": [
+        "src/cache.js"
+      ],
+      "steps": 7,
+      "tool_calls": 10,
+      "tool_errors": 0,
+      "parse_failures": 0,
+      "edit_failures": 0,
+      "prompt_tokens": 44039,
+      "cached_tokens": 34676,
+      "completion_tokens": 3837,
+      "compactions": 0,
+      "seconds": 51.794619893,
+      "cost": 0.03362698
+    },
+    {
+      "task": "log-parser",
+      "category": "fix-test",
+      "passed": true,
+      "changed": [
+        "logsum/parse.py"
+      ],
+      "steps": 8,
+      "tool_calls": 13,
+      "tool_errors": 0,
+      "parse_failures": 0,
+      "edit_failures": 0,
+      "prompt_tokens": 60764,
+      "cached_tokens": 48992,
+      "completion_tokens": 3053,
+      "compactions": 0,
+      "seconds": 37.986525585,
+      "cost": 0.03563034
+    },
+    {
+      "task": "migrate-fetch",
+      "category": "refactor",
+      "passed": true,
+      "changed": [
+        "scripts/backfill.py",
+        "tests/test_net.py",
+        "weather/alerts.py",
+        "weather/cache.py",
+        "weather/forecast.py",
+        "weather/net.py",
+        "weather/sources.py",
+        "weather/stations.py"
+      ],
+      "steps": 9,
+      "tool_calls": 25,
+      "tool_errors": 1,
+      "parse_failures": 0,
+      "edit_failures": 0,
+      "prompt_tokens": 66261,
+      "cached_tokens": 53580,
+      "completion_tokens": 4863,
+      "compactions": 0,
+      "seconds": 65.409107873,
+      "cost": 0.045074699999999995
+    },
+    {
+      "task": "partial-shipment",
+      "category": "feature",
+      "passed": true,
+      "changed": [
+        "orderly/inventory.py",
+        "orderly/orders.py",
+        "orderly/serialize.py",
+        "orderly/shop.py",
+        "tests/test_shop.py",
+        "tests/test_storage.py"
+      ],
+      "steps": 22,
+      "tool_calls": 44,
+      "tool_errors": 0,
+      "parse_failures": 0,
+      "edit_failures": 0,
+      "prompt_tokens": 454332,
+      "cached_tokens": 409160,
+      "completion_tokens": 18006,
+      "compactions": 0,
+      "seconds": 216.682546548,
+      "cost": 0.1939814
+    },
+    {
+      "task": "quote-total",
+      "category": "navigate",
+      "passed": true,
+      "steps": 8,
+      "tool_calls": 14,
+      "tool_errors": 1,
+      "parse_failures": 0,
+      "edit_failures": 0,
+      "prompt_tokens": 74171,
+      "cached_tokens": 58720,
+      "completion_tokens": 2981,
+      "compactions": 0,
+      "seconds": 37.409028951,
+      "cost": 0.04169474000000001
+    },
+    {
+      "task": "rename-total",
+      "category": "refactor",
+      "passed": true,
+      "changed": [
+        "config/settings.json",
+        "orderly/invoices.py",
+        "orderly/notifications.py",
+        "orderly/orders.py",
+        "orderly/reports.py",
+        "orderly/serialize.py",
+        "orderly/shop.py",
+        "tests/test_orders.py",
+        "tests/test_storage.py"
+      ],
+      "steps": 13,
+      "tool_calls": 35,
+      "tool_errors": 1,
+      "parse_failures": 0,
+      "edit_failures": 0,
+      "prompt_tokens": 163663,
+      "cached_tokens": 141564,
+      "completion_tokens": 5370,
+      "compactions": 0,
+      "seconds": 65.322564732,
+      "cost": 0.0723202
+    },
+    {
+      "task": "rust-calc",
+      "category": "fix-test",
+      "passed": true,
+      "changed": [
+        "Cargo.lock",
+        "src/parser.rs"
+      ],
+      "steps": 6,
+      "tool_calls": 9,
+      "tool_errors": 0,
+      "parse_failures": 0,
+      "edit_failures": 0,
+      "prompt_tokens": 45168,
+      "cached_tokens": 34696,
+      "completion_tokens": 4934,
+      "compactions": 0,
+      "seconds": 50.768825451,
+      "cost": 0.03972348
+    },
+    {
+      "task": "tax-included",
+      "category": "feature",
+      "passed": true,
+      "changed": [
+        "config/settings.json",
+        "orderly/config.py",
+        "orderly/invoices.py",
+        "orderly/orders.py",
+        "tests/test_orders.py"
+      ],
+      "steps": 25,
+      "tool_calls": 39,
+      "tool_errors": 1,
+      "parse_failures": 0,
+      "edit_failures": 1,
+      "prompt_tokens": 427343,
+      "cached_tokens": 389132,
+      "completion_tokens": 8168,
+      "compactions": 0,
+      "seconds": 95.173102912,
+      "cost": 0.14058768
+    }
+  ]
+}

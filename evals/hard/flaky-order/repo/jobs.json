@@ -4,6 +4,6 @@
   { "name": "typecheck", "priority": 1, "after": ["fetch"] },
   { "name": "unit", "priority": 3, "after": ["fetch"] },
   { "name": "docs", "priority": 1, "after": ["fetch"] },
-  { "name": "package", "priority": 2, "after": ["lint", "typecheck", "unit"] },
+  { "name": "package", "priority": 2, "after": ["unit", "lint", "typecheck", "unit"] },
   { "name": "publish", "priority": 0, "after": ["package", "docs"] }
 ]

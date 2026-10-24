@@ -48,3 +48,13 @@ class TaxIncludedTest(unittest.TestCase):
         o = self.shop.place_order("ada@example.com", "NZ", [("RUG-01", 1)], (), FRIDAY)
         again = self.shop.store.load(o.id, self.shop)
         self.assertEqual(again.grand_total, Money("129.00"))
+
+    def test_the_daily_report(self):
+        from orderly import reports
+
+        nz = self.shop.place_order("ada@example.com", "NZ", [("RUG-01", 1)], (), FRIDAY)
+        uk = self.shop.place_order("bo@example.com", "UK", [("MUG-01", 2)], ["WELCOME10"], FRIDAY)
+        s = reports.daily_summary([nz, uk], FRIDAY)
+        self.assertEqual(s["total"], Money("147.36"))
+        self.assertEqual(s["tax"], Money("19.89"))
+        self.assertEqual(s["net"], Money("144.30"))

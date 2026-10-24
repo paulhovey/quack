@@ -91,6 +91,7 @@ There is one engine and three in-process clients, connected by an Op/Event proto
    - **parse failures**: the profile's tool names or argument shapes don't suit the model. Any non-zero count is a profile bug.
    - **edit failures**: the edit tool's description or format confuses the model.
    - **steps and prompt tokens**: each step re-sends the whole context, so they decide the cost.
+   - **small windows**: a model's full window hides pruning and compaction. Add `-c context.window=16384` (results get a `-16k` name and show as `hard@16k`) and read `peak k` and `compact / pruned`; see `evals/hard/README.md`.
    - **cached %**: a low share means the request prefix is changing somewhere it shouldn't.
    - **tool errors** count shell commands that exit non-zero (a `grep` with no match, `pytest` finding no tests), so they run high for shell-first profiles like `codex`. Look at a session before reading much into them.
 5. **Look at a run before blaming the model.** Rerun the task with `--keep`. The session log is in `~/.cache/quack/eval/<pid>/<task>-<run>/data/sessions/*/*/events.jsonl`. Fix false negatives in the check first.
@@ -101,7 +102,7 @@ There is one engine and three in-process clients, connected by an Op/Event proto
 
 `evals/hard` has not been run live yet, so its difficulty is a guess. Calibrate the suite once before trusting any comparison on it, and again after adding or changing tasks.
 
-1. **Calibrate the suite.** Run one cheap and one strong model with `generic`: `EVAL_ARGS="--suite evals/hard" scripts/eval-matrix.sh charm-hyper/deepseek-v4.1-flash:generic charm-hyper/kimi-k3:generic`. Expect about $1–2 per model per pass, so roughly $3 for both; check the cost column after the first few tasks. For each task, look at the result:
+1. **Calibrate the suite.** Run one cheap and one strong model with `generic`: `EVAL_ARGS="--suite evals/hard" scripts/eval-matrix.sh charm-hyper/deepseek-v4.1-flash:generic charm-hyper/kimi-k3:generic`. One pass (then 14 tasks) cost $0.35–0.55 on the flash models on 2026-10-21; a strong model costs several times that. Check the cost column after the first few tasks. For each task, look at the result:
    - **Both models pass:** the task is too easy and tells you nothing. Make it harder (move the symptom further from the cause, or add a second file that must change), or replace it.
    - **Both fail:** read one session (`--keep`, step 5 above) before blaming the models. A false negative in a hidden test or check is the usual cause. If the task really is too hard, cut it down.
    - **They split:** keep it. Aim for the strong model at about 60–80% and the cheap one clearly lower.

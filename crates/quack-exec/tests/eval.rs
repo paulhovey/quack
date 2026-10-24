@@ -28,18 +28,19 @@ fn task(suite: &Path, id: &str, toml: &str, files: &[(&str, &str)]) {
 #[tokio::test]
 async fn runs_checks_and_reports() {
     let server = MockServer::start().await;
-    // The edit task: one edit call, then an answer.
+    // The edit task: one edit call, then an answer, each reporting its prompt size.
     Mock::given(method("POST"))
         .and(body_string_contains("\"role\":\"tool\""))
-        .respond_with(sse(
-            json!({"choices":[{"delta":{"content":"Done, it is 7."},"finish_reason":"stop"}]}),
-        ))
+        .respond_with(sse(json!({
+            "choices":[{"delta":{"content":"Done, it is 7."},"finish_reason":"stop"}],
+            "usage":{"prompt_tokens":150,"completion_tokens":5}
+        })))
         .mount(&server)
         .await;
     let args = json!({"path":"a.txt","old_string":"six","new_string":"seven"}).to_string();
     Mock::given(method("POST"))
         .and(body_string_contains("Change six"))
-        .respond_with(sse(json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"edit","arguments":args}}]},"finish_reason":"tool_calls"}]})))
+        .respond_with(sse(json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"edit","arguments":args}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":120,"completion_tokens":9}})))
         .mount(&server)
         .await;
     // The asking task: a question nobody is there to answer, then the answer.
@@ -127,6 +128,11 @@ async fn runs_checks_and_reports() {
     let edit = by("edit-one");
     assert!(edit.passed, "{edit:?}");
     assert_eq!((edit.steps, edit.tool_calls, edit.edit_failures), (2, 1, 0));
+    // How full the context got: the larger of the two requests.
+    assert_eq!(
+        (edit.prompt_tokens, edit.peak_prompt, edit.pruned),
+        (270, 150, 0)
+    );
     assert_eq!(edit.model, "mock/tiny");
     // What the requests carried is recorded with the result.
     assert_eq!(
@@ -149,6 +155,7 @@ async fn runs_checks_and_reports() {
         model: "mock/tiny".into(),
         profile: "empty".into(),
         planner: None,
+        window: None,
         sampling: Report::sampling_of(&edit.sampling),
         results,
     };

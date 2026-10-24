@@ -16,6 +16,12 @@ fn powers() {
 }
 
 #[test]
+fn remainders_and_factorials() {
+    assert_eq!(eval("7 % 4"), Ok(3.0));
+    assert_eq!(eval("4!"), Ok(24.0));
+}
+
+#[test]
 fn errors() {
     assert_eq!(eval("1 / 0"), Err(Error::DivisionByZero));
     assert_eq!(eval("1 +"), Err(Error::UnexpectedEnd));

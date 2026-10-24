@@ -230,6 +230,12 @@ pub struct RunResult {
     pub cached_tokens: u64,
     pub completion_tokens: u64,
     pub compactions: u32,
+    /// Tool results replaced by a placeholder to save room.
+    #[serde(default)]
+    pub pruned: u32,
+    /// The largest single request's prompt tokens: how full the context got.
+    #[serde(default)]
+    pub peak_prompt: u32,
     pub seconds: f64,
     /// US dollars, when the model has a price (configured or listed by the provider).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -256,6 +262,9 @@ pub struct Report {
     /// The model that planned each task (`--planner`), when one did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub planner: Option<String>,
+    /// The `[context] window` the runs were held to, when one was set: a small-window run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<u32>,
     /// The sampling settings sent (`temperature`, ...); empty: the server's defaults.
     #[serde(default)]
     pub sampling: serde_json::Map<String, serde_json::Value>,
@@ -761,6 +770,8 @@ pub async fn run_task(task: &Task, opts: &EvalOptions, run: u32) -> RunResult {
         result.cached_tokens = stats.cached_tokens;
         result.completion_tokens = stats.completion_tokens;
         result.compactions = stats.compactions;
+        result.pruned = stats.pruned;
+        result.peak_prompt = stats.history.iter().map(|r| r.prompt).max().unwrap_or(0);
         result.cost = stats.cost;
         result.sampling = stats.sampling;
     }

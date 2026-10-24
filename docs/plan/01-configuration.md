@@ -78,6 +78,7 @@ startup_panel = "auto"         # auto (only on problems or a slow start) | alway
 budget_ratio = 0.85            # fraction of model context window we plan to use
 cache_strategy = "auto"        # preserve | aggressive | auto   → 05-context
 compaction_threshold = 0.80
+# window = 16384               # use at most this much of the model's window (unset: all of it)
 
 [tools]
 edit_format = "auto"           # auto (from profile/model) | str_replace | apply_patch | whole_file | hashline

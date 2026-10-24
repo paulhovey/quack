@@ -3,6 +3,7 @@ from pathlib import Path
 
 from scheduler.jobs import Job, load_jobs
 from scheduler.plan import CycleError, UnknownJob, plan
+from scheduler.report import describe
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -21,6 +22,12 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(
             order, ["fetch", "unit", "docs", "lint", "typecheck", "package", "publish"]
         )
+
+    def test_the_ci_log(self):
+        self.assertEqual(describe(load_jobs(ROOT / "jobs.json")).splitlines()[-2:], [
+            " 6. package [p2] (after unit, lint, typecheck)",
+            " 7. publish [p0] (after package, docs)",
+        ])
 
     def test_cycles_and_unknown_jobs(self):
         with self.assertRaises(CycleError):

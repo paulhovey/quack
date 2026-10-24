@@ -621,6 +621,9 @@ async fn try_provider(
             format!("model `{mid}` is not in {pid}'s model list; trying it anyway"),
         );
     }
+    if let Some(cap) = config.settings.context.window {
+        model.context_window = Some(model.context_window.map_or(cap, |w| w.min(cap)));
+    }
     Ok((provider, model))
 }
 

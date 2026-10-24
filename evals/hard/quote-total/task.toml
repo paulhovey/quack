@@ -1,6 +1,10 @@
 category = "navigate"
-prompt = "A customer in the UK region orders 2 Enamel mugs and 3 packs of Breakfast tea, with the coupons WELCOME10, FLAT5 and TEA2. Exactly how much does orderly charge them in total, tax included? Reply with the amount."
+prompt = "A customer in New York orders 3 Desk lamps, 5 packs of Breakfast tea and 2 Dot-grid journals on Wednesday 25 November 2026, with the coupons SUMMER40, STATIONERY15, TEA2 and FLAT5. They pay, and the order ships the same day. Exactly how much does orderly charge them in total, how much of that is tax, and which day does the shipped email promise for delivery? Reply with the total, the tax, and the delivery date as YYYY-MM-DD."
 base = "../_projects/orderly"
 
 [[check]]
-answer_contains = "22.91"
+answer_contains = "149.44"
+[[check]]
+answer_contains = "5.00"
+[[check]]
+answer_contains = "2026-11-30"

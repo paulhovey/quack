@@ -121,6 +121,10 @@ pub struct ContextSettings {
     pub budget_ratio: f64,
     pub cache_strategy: CacheStrategy,
     pub compaction_threshold: f64,
+    /// Use at most this many tokens of the model's context window, also when nothing
+    /// reports one: to try a small window, or to keep a local server's memory down (Ollama
+    /// gets it as `num_ctx`). Unset: the model's whole window.
+    pub window: Option<u32>,
 }
 
 impl Default for ContextSettings {
@@ -129,6 +133,7 @@ impl Default for ContextSettings {
             budget_ratio: 0.85,
             cache_strategy: CacheStrategy::Auto,
             compaction_threshold: 0.80,
+            window: None,
         }
     }
 }

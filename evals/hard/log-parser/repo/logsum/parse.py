@@ -10,6 +10,11 @@ fraction, or no fraction. Levels are upper-cased, and `WARN` means `WARNING`, `E
 `ERROR`, `FATAL` means `CRITICAL`. A line that starts with whitespace, or a `Traceback`
 line, continues the entry before it: it goes into that entry's `extra`. Blank lines are
 skipped. Anything else that doesn't parse raises ParseError with its line number.
+
+In a JSON line, `ts` may also be a number: seconds since the Unix epoch, in UTC (the entry's
+`ts` is then the UTC time, without a timezone, like every other `ts`). A JSON line with no
+`level` is `INFO`. Keys other than `ts`, `level`, `msg` and `thread` go into the entry's
+`fields`, as they are.
 """
 
 import json
@@ -42,6 +47,7 @@ class Entry:
     message: str
     thread: Optional[str] = None
     extra: list = field(default_factory=list)
+    fields: dict = field(default_factory=dict)
 
 
 def parse_ts(text):

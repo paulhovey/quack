@@ -253,7 +253,11 @@ Everything below works today. Planned work is listed separately at the end.
   whole-file reads (only their outline is kept), failed attempts that a later call fixed,
   and large old outputs (cut to their start and end).
 - Automatic compaction at a threshold or when the server reports the window is full, and
-  `/compact [focus]` on demand. If the model cannot summarize, a plain list is kept.
+  `/compact [focus]` on demand. The summary keeps your request word for word and lists the
+  files changed so far, through any number of compactions. If the model cannot summarize
+  (or answers with a tool call), a plain list is kept.
+- `[context] window = 16384` (or `-c context.window=16384`) holds any model to a smaller
+  window than it has, for a local server's memory or to see how a session copes.
 - `/context` shows where the tokens go as one band, each part in its own fill, with the
   compaction point marked, and charts the context turn by turn against that point. It
   also says how many turns are left at the recent pace and what would free the most room. Estimates are corrected with the token counts the server

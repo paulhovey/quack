@@ -1,5 +1,5 @@
 category = "fix-test"
-prompt = "`cargo test` fails: the calculator gets some expressions with `^` and unary minus wrong. Fix it so it follows the precedence rules written at the top of src/lib.rs. Don't change the tests."
+prompt = "`cargo test` fails: the calculator gets some expressions with `^` and unary minus wrong, and it doesn't know `%` or `!` yet. Make it do everything the doc comment at the top of src/lib.rs describes. Don't change the tests."
 requires = ["cargo"]
 timeout_secs = 900
 

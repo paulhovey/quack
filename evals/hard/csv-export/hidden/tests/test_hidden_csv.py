@@ -9,7 +9,13 @@ from orderly.cli import main
 
 from .support import FRIDAY, fresh_world
 
-NAMES = ["Lovelace, Ada", 'Bo "the builder" Baggins', "Cy\nOn two lines", "plain@example.com"]
+NAMES = [
+    "Lovelace, Ada",
+    'Bo "the builder" Baggins',
+    "Cy\nOn two lines",
+    "plain@example.com",
+    "Dorothea Bartholomew-Featherstonehaugh, Purchasing",
+]
 
 
 class CsvTest(unittest.TestCase):
@@ -31,7 +37,16 @@ class CsvTest(unittest.TestCase):
             self.assertEqual(main(["export", "--out", str(out)], out=io.StringIO()), 0)
             with open(out, newline="", encoding="utf-8") as f:
                 rows = list(csv.reader(f))
-        self.assertEqual(len(rows), 9)
+        self.assertEqual(len(rows), 10)
         (ada,) = [r for r in rows if r[0] == "1006"]
         self.assertEqual(ada[2], "Lovelace, Ada")
         self.assertEqual(ada[-1], "86.88")
+        (long,) = [r for r in rows if r[0] == "1009"]
+        self.assertEqual(long[2], "accounts.payable@northwind-trading.example")
+
+    def test_the_command_writes_to_stdout_too(self):
+        out = io.StringIO()
+        self.assertEqual(main(["export"], out=out), 0)
+        rows = list(csv.reader(io.StringIO(out.getvalue())))
+        self.assertEqual({r[2] for r in rows if r[0] in ("1006", "1009")},
+                         {"Lovelace, Ada", "accounts.payable@northwind-trading.example"})

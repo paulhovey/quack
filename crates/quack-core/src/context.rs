@@ -187,7 +187,25 @@ pub(crate) async fn compact_now(
     // A looping model (small ones sometimes think forever) fails fast instead.
     let cap = (budget / 4).clamp(1_024, 8_192);
     req.max_tokens = Some(s.model.max_output.map_or(cap, |m| m.min(cap)));
-    let summary = match summarize(ctx, req).await {
+    let mut result = summarize(ctx, req.clone()).await;
+    if let Ok(text) = &result
+        && let Some(why) = compact::unusable_summary(text)
+    {
+        // Once more, saying plainly that there are no tools; then the plain list.
+        if let Some(Message::System { content }) = req.messages.first_mut() {
+            content.push_str(
+                "\n\nYou cannot call tools here. Reply with the summary as plain markdown text.",
+            );
+        }
+        result =
+            summarize(ctx, req)
+                .await
+                .and_then(|text| match compact::unusable_summary(&text) {
+                    Some(again) => Err(format!("{why}, twice ({again})")),
+                    None => Ok(text),
+                });
+    }
+    let summary = match result {
         Ok(text) => text,
         Err(e) if ctx.cancel.is_cancelled() => return Err(e),
         Err(e) => {
@@ -202,7 +220,7 @@ pub(crate) async fn compact_now(
     };
 
     let request = compact::carried_request(history, cut).map(str::to_owned);
-    let message = compact::summary_message(&summary, request.as_deref());
+    let message = compact::summary_message(&summary, request.as_deref(), &turn::changed_files(ctx));
     compact::apply(history, cut, message.clone());
     session::record(
         ctx.log.as_ref(),

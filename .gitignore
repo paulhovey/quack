@@ -40,6 +40,8 @@ perf.data*
 
 # --- Logs and scratch files ---
 *.log
+# An eval task fixture, not a log: the log-parser task's tests read it.
+!evals/hard/log-parser/repo/sample.log
 /tmp/
 /scratch/
 

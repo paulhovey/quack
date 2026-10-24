@@ -1,0 +1,9 @@
+2026-10-16 12:00:01,123 INFO [main] starting up
+2026-10-16 12:00:01,500 WARN [worker-1] slow disk: 120ms
+2026-10-16T12:00:02.250 ERROR [worker-3] could not reach the database
+Traceback (most recent call last):
+  File "db.py", line 12, in connect
+    sock.connect(addr)
+  ConnectionRefusedError: [Errno 111] Connection refused
+{"ts": "2026-10-16T12:00:03", "level": "info", "msg": "retrying", "thread": "worker-3"}
+2026-10-16 12:00:04 err [worker-3] gave up after 3 tries

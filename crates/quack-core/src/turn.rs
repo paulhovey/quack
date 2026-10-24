@@ -538,19 +538,20 @@ pub(crate) fn with_session_context(s: &Setup, messages: &mut [Message]) {
     }
 }
 
-fn working_files_reminder(ctx: &TurnCtx) -> Option<String> {
-    let cp = ctx.checkpoints.as_ref()?;
-    let changes = cp.changes();
-    if changes.is_empty() {
-        return None;
-    }
+/// The files the session changed, as shown to the model, first change first.
+pub(crate) fn changed_files(ctx: &TurnCtx) -> Vec<String> {
     let mut files = Vec::new();
-    for c in changes {
+    for c in ctx.checkpoints.iter().flat_map(|cp| cp.changes()) {
         let shown = quack_tools::paths::display(&ctx.setup.tool_ctx.root, &c.path);
         if !files.contains(&shown) {
             files.push(shown);
         }
     }
+    files
+}
+
+fn working_files_reminder(ctx: &TurnCtx) -> Option<String> {
+    let files = changed_files(ctx);
     if files.is_empty() {
         return None;
     }

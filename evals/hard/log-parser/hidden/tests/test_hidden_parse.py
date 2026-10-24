@@ -37,3 +37,26 @@ class MoreParseTest(unittest.TestCase):
     def test_unknown_levels_are_errors(self):
         with self.assertRaises(ParseError):
             parse_log("2026-01-02 03:04:05 LOUD hello")
+
+    def test_epoch_timestamps_are_utc(self):
+        (a, b) = parse_log(
+            '{"ts": 1792108800, "level": "info", "msg": "a"}\n'
+            '{"ts": 1792108801.25, "level": "info", "msg": "b"}'
+        )
+        self.assertEqual(a.ts, datetime(2026, 10, 16, 0, 0, 0))
+        self.assertEqual(b.ts, datetime(2026, 10, 16, 0, 0, 1, 250000))
+        self.assertIsNone(a.ts.tzinfo)
+
+    def test_json_lines_without_a_level(self):
+        (e,) = parse_log('{"ts": "2026-01-02T03:04:05", "msg": "quiet"}')
+        self.assertEqual(e.level, "INFO")
+
+    def test_other_json_keys_are_fields(self):
+        e, t = parse_log(
+            '{"ts": "2026-01-02T03:04:05", "level": "error", "msg": "m", "thread": "w",'
+            ' "code": 503, "retry": true, "tags": ["db"]}\n'
+            "2026-01-02 03:04:06 INFO plain"
+        )
+        self.assertEqual(e.fields, {"code": 503, "retry": True, "tags": ["db"]})
+        self.assertEqual(e.thread, "w")
+        self.assertEqual(t.fields, {})

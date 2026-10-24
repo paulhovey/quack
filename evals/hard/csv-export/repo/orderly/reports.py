@@ -4,6 +4,10 @@ from collections import defaultdict
 
 from .money import Money
 from .orders import CANCELLED
+from .util.text import shorten
+
+# The warehouse screen that shows exports has 32-character columns.
+CELL_WIDTH = 32
 
 
 def counted(orders, day=None):
@@ -39,7 +43,7 @@ def _cell(value):
         return str(value.amount)
     if value is None:
         return ""
-    return str(value)
+    return shorten(str(value), CELL_WIDTH)
 
 
 def rows(orders, columns):

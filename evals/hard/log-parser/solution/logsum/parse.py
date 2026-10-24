@@ -10,12 +10,17 @@ fraction, or no fraction. Levels are upper-cased, and `WARN` means `WARNING`, `E
 `ERROR`, `FATAL` means `CRITICAL`. A line that starts with whitespace, or a `Traceback`
 line, continues the entry before it: it goes into that entry's `extra`. Blank lines are
 skipped. Anything else that doesn't parse raises ParseError with its line number.
+
+In a JSON line, `ts` may also be a number: seconds since the Unix epoch, in UTC (the entry's
+`ts` is then the UTC time, without a timezone, like every other `ts`). A JSON line with no
+`level` is `INFO`. Keys other than `ts`, `level`, `msg` and `thread` go into the entry's
+`fields`, as they are.
 """
 
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 ALIASES = {"WARN": "WARNING", "ERR": "ERROR", "FATAL": "CRITICAL"}
@@ -42,9 +47,12 @@ class Entry:
     message: str
     thread: Optional[str] = None
     extra: list = field(default_factory=list)
+    fields: dict = field(default_factory=dict)
 
 
 def parse_ts(text):
+    if isinstance(text, (int, float)) and not isinstance(text, bool):
+        return datetime.fromtimestamp(text, timezone.utc).replace(tzinfo=None)
     text = text.replace("T", " ", 1).replace(",", ".")
     fmt = "%Y-%m-%d %H:%M:%S.%f" if "." in text else "%Y-%m-%d %H:%M:%S"
     return datetime.strptime(text, fmt)
@@ -63,9 +71,10 @@ def _parse_line(line):
         data = json.loads(line)
         return Entry(
             ts=parse_ts(data["ts"]),
-            level=level_of(data["level"]),
+            level=level_of(data.get("level", "INFO")),
             message=data["msg"],
             thread=data.get("thread"),
+            fields={k: v for k, v in data.items() if k not in ("ts", "level", "msg", "thread")},
         )
     m = TEXT_LINE.match(line)
     if not m:

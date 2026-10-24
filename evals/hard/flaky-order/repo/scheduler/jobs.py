@@ -14,8 +14,10 @@ class Job:
 
 
 def load_jobs(path):
+    """A job may name a dependency more than once (merged job files do); it counts once, and
+    `after` keeps the order the file gives."""
     rows = json.loads(Path(path).read_text(encoding="utf-8"))
     return [
-        Job(name=r["name"], priority=int(r.get("priority", 0)), after=tuple(r.get("after", ())))
+        Job(name=r["name"], priority=int(r.get("priority", 0)), after=tuple(set(r.get("after", ()))))
         for r in rows
     ]

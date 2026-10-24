@@ -1,0 +1,18 @@
+{
+  "coupons": [],
+  "customer": "accounts.payable@northwind-trading.example",
+  "format": 1,
+  "grand_total": "17.68",
+  "id": "1009",
+  "lines": [
+    {
+      "qty": 2,
+      "sku": "MUG-01",
+      "unit_price": "8.50"
+    }
+  ],
+  "placed_on": "2026-10-17",
+  "region": "US-NY",
+  "shipped_on": null,
+  "state": "paid"
+}

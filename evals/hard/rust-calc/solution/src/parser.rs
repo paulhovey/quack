@@ -7,6 +7,7 @@ use crate::Error;
 pub enum Expr {
     Num(f64),
     Neg(Box<Expr>),
+    Fact(Box<Expr>),
     Bin(char, Box<Expr>, Box<Expr>),
 }
 
@@ -15,6 +16,13 @@ impl Expr {
         Ok(match self {
             Expr::Num(n) => *n,
             Expr::Neg(e) => -e.value()?,
+            Expr::Fact(e) => {
+                let n = e.value()?;
+                if n.fract() != 0.0 || !(0.0..=170.0).contains(&n) {
+                    return Err(Error::Domain);
+                }
+                (1..=n as u32).map(f64::from).product()
+            }
             Expr::Bin(op, a, b) => {
                 let (a, b) = (a.value()?, b.value()?);
                 match op {
@@ -23,6 +31,8 @@ impl Expr {
                     '*' => a * b,
                     '/' if b == 0.0 => return Err(Error::DivisionByZero),
                     '/' => a / b,
+                    '%' if b == 0.0 => return Err(Error::DivisionByZero),
+                    '%' => a % b,
                     '^' => a.powf(b),
                     _ => unreachable!("the lexer only makes these operators"),
                 }
@@ -35,7 +45,7 @@ impl Expr {
 fn infix(op: char) -> (u8, u8) {
     match op {
         '+' | '-' => (1, 2),
-        '*' | '/' => (3, 4),
+        '*' | '/' | '%' => (3, 4),
         '^' => (8, 7),
         _ => unreachable!("the lexer only makes these operators"),
     }
@@ -43,6 +53,9 @@ fn infix(op: char) -> (u8, u8) {
 
 /// How tightly unary minus holds its operand.
 const PREFIX: u8 = 5;
+
+/// How tightly postfix `!` holds its operand.
+const POSTFIX: u8 = 9;
 
 struct Parser {
     tokens: Vec<Token>,
@@ -81,6 +94,14 @@ impl Parser {
                 Some(Token::RParen) | None => break,
                 Some(t) => return Err(Error::UnexpectedToken(format!("{t:?}"))),
             };
+            if op == '!' {
+                if POSTFIX < min {
+                    break;
+                }
+                self.next();
+                lhs = Expr::Fact(Box::new(lhs));
+                continue;
+            }
             let (left, right) = infix(op);
             if left < min {
                 break;

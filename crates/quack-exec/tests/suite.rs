@@ -67,5 +67,5 @@ fn tasks_fail_as_given_and_pass_when_solved() {
 
 #[test]
 fn hard_tasks_fail_as_given_and_pass_when_solved() {
-    fail_as_given_and_pass_when_solved("hard", 12);
+    fail_as_given_and_pass_when_solved("hard", 15);
 }

@@ -8,6 +8,10 @@ use quack_providers::{Message, ToolCall};
 
 /// Starts every summary message.
 pub const SUMMARY_MARKER: &str = "[compaction summary]";
+/// Heads the user's request, carried verbatim through every compaction.
+const REQUEST_HEADING: &str = "## The user's current request (verbatim)";
+/// Heads the files the session changed, listed by the engine rather than the summarizer.
+const FILES_HEADING: &str = "## Files changed in this session";
 
 /// Used when the profile has no `compact.md`.
 pub const DEFAULT_PROMPT: &str = "\
@@ -162,8 +166,9 @@ pub fn fallback_summary(history: &[Message]) -> String {
     let mut lines: Vec<String> = Vec::new();
     for m in history {
         match m {
-            Message::User { .. } if is_summary(m) => {
-                lines.push("- (an earlier summary, not kept)".into());
+            Message::User { content } if is_summary(m) => {
+                // A model wrote it, so it says more than this list can; keep it whole.
+                lines.push(format!("- earlier summary:\n{}", summary_body(content)));
             }
             Message::User { content } => {
                 let first = content.lines().next().unwrap_or_default();
@@ -198,20 +203,35 @@ fn clip_line(s: &str, max: usize) -> String {
 
 /// The message that replaces the summarized span. When the cut falls inside the current
 /// turn, the user's request is carried over verbatim so it is never lost to a summary.
-pub fn summary_message(summary: &str, request: Option<&str>) -> Message {
+/// `changed` lists the files the session changed (from the engine's checkpoints), so the
+/// model knows its work is on disk without reading everything again.
+pub fn summary_message(summary: &str, request: Option<&str>, changed: &[String]) -> Message {
     let mut content = format!(
         "{SUMMARY_MARKER}\nEarlier parts of this conversation were summarized to save \
-         context. Files may have changed since; read them again before editing.\n\n{}",
+         context. The work it describes is on disk. Read a file again only for lines you need \
+         and no longer have: an edit whose text doesn't match the file is refused and says \
+         why.\n\n{}",
         summary.trim()
     );
+    if !changed.is_empty() {
+        content.push_str(&format!("\n\n{FILES_HEADING}\n"));
+        content.push_str(
+            &changed
+                .iter()
+                .map(|f| format!("- {f}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
     if let Some(r) = request {
-        content.push_str("\n\n## The user's current request (verbatim)\n");
+        content.push_str(&format!("\n\n{REQUEST_HEADING}\n"));
         content.push_str(r);
     }
     Message::User { content }
 }
 
 /// The latest user request before `cut`, when the cut leaves no user message after it.
+/// After an earlier compaction that request lives in the summary, so it is taken from there.
 pub fn carried_request(history: &[Message], cut: usize) -> Option<&str> {
     let kept_user = history[cut.min(history.len())..]
         .iter()
@@ -220,9 +240,51 @@ pub fn carried_request(history: &[Message], cut: usize) -> Option<&str> {
         return None;
     }
     history[..cut].iter().rev().find_map(|m| match m {
-        Message::User { content } if !is_summary(m) => Some(content.as_str()),
+        Message::User { content } if is_summary(m) => content
+            .split_once(&format!("\n\n{REQUEST_HEADING}\n"))
+            .map(|(_, request)| request),
+        Message::User { content } => Some(content.as_str()),
         _ => None,
     })
+}
+
+/// What the summarizer wrote, without the header and the sections the engine adds.
+fn summary_body(content: &str) -> &str {
+    let body = content.split_once("\n\n").map_or("", |(_, rest)| rest);
+    let end = [FILES_HEADING, REQUEST_HEADING]
+        .iter()
+        .filter_map(|h| body.find(&format!("\n\n{h}\n")))
+        .min()
+        .unwrap_or(body.len());
+    body[..end].trim()
+}
+
+/// Why a summarizer's reply can't stand in for the history, if it can't. Some models
+/// answer a request without tools with a tool call written out as text (DeepSeek's DSML,
+/// Qwen's `<tool_call>`, Mistral's `[TOOL_CALLS]`, Kimi's sections, ...); taken as the summary, it would leave
+/// nothing about the task.
+pub fn unusable_summary(text: &str) -> Option<&'static str> {
+    const CALL_MARKUP: [&str; 9] = [
+        "｜DSML｜",
+        "<tool_call>",
+        "<|tool_call",
+        "<｜tool▁call",
+        "<function=",
+        "<invoke name=",
+        "[TOOL_CALLS]",
+        "<|python_tag|>",
+        "<|tool_calls_section_begin|>",
+    ];
+    let text = text.trim();
+    if text.chars().filter(|c| c.is_alphanumeric()).count() < 10 {
+        return Some("the summary is empty or too short");
+    }
+    // Prose may mention markup in passing; a reply that opens with it is a call.
+    let head: String = text.chars().take(200).collect();
+    if CALL_MARKUP.iter().any(|m| head.contains(m)) {
+        return Some("the model answered with a tool call instead of a summary");
+    }
+    None
 }
 
 /// Replace `history[..cut]` with `summary`.
@@ -283,7 +345,7 @@ mod tests {
         let cut = cut_point(&h, KEEP_TURNS, 250, chars).expect("cut");
         assert_eq!(cut, 5, "keeps the last two steps");
         assert_eq!(carried_request(&h, cut), Some("fix the bug"));
-        let summary = summary_message("did things", carried_request(&h, cut));
+        let summary = summary_message("did things", carried_request(&h, cut), &[]);
         apply(&mut h, cut, summary);
         assert_eq!(h.len(), 3);
         assert!(is_summary(&h[0]));
@@ -293,6 +355,75 @@ mod tests {
         assert!(content.ends_with("fix the bug"));
         // An over-budget single step is still kept.
         assert_eq!(cut_point(&h, KEEP_TURNS, 10, chars), Some(2));
+    }
+
+    #[test]
+    fn the_request_survives_every_compaction() {
+        let mut h = vec![user("add partial shipments")];
+        for round in 0..3 {
+            for _ in 0..6 {
+                h.push(asst(&"x".repeat(100)));
+            }
+            let cut = cut_point(&h, KEEP_TURNS, 250, chars).expect("cut");
+            let request = carried_request(&h, cut);
+            assert_eq!(request, Some("add partial shipments"), "round {round}");
+            let summary = summary_message(&format!("round {round}"), request, &["a.py".into()]);
+            apply(&mut h, cut, summary);
+        }
+        let Message::User { content } = &h[0] else {
+            panic!("summary is a user message")
+        };
+        assert_eq!(content.matches("add partial shipments").count(), 1);
+        assert!(content.contains("round 2") && !content.contains("round 1"));
+    }
+
+    #[test]
+    fn the_summary_lists_changed_files_and_does_not_ask_for_rereads() {
+        let m = summary_message(
+            "did things",
+            Some("fix it"),
+            &["src/a.rs".into(), "b.py".into()],
+        );
+        let Message::User { content } = &m else {
+            panic!("summary is a user message")
+        };
+        assert!(content.contains("## Files changed in this session\n- src/a.rs\n- b.py"));
+        assert!(!content.contains("read them again"));
+        assert_eq!(summary_body(content), "did things");
+    }
+
+    #[test]
+    fn tool_calls_and_empty_replies_are_not_summaries() {
+        let dsml = "<｜DSML｜ calls>\n<｜DSML｜ invoke name=\"read\">\n<｜DSML｜ parameter \
+                    name=\"path\" string=\"true\">orderly/shop.py</｜DSML｜ parameter>";
+        assert!(unusable_summary(dsml).is_some());
+        assert!(unusable_summary("<tool_call>{\"name\":\"read\"}</tool_call>").is_some());
+        assert!(unusable_summary("[TOOL_CALLS][{\"name\":\"grep\"}]").is_some());
+        assert!(unusable_summary("  ok  ").is_some());
+        let prose = format!(
+            "## Goal\nFix the parser.\n\n## Done so far\n{}Found that the model emitted \
+             `<tool_call>` tags in text.",
+            "Read src/parse.rs and ran the tests. ".repeat(8)
+        );
+        assert_eq!(unusable_summary(&prose), None);
+    }
+
+    #[test]
+    fn fallback_keeps_an_earlier_summary() {
+        let h = vec![
+            summary_message(
+                "## Goal\nship parts of orders",
+                Some("the request"),
+                &["x.py".into()],
+            ),
+            user("go on"),
+        ];
+        let s = fallback_summary(&h);
+        assert!(
+            s.contains("- earlier summary:\n## Goal\nship parts of orders\n"),
+            "{s}"
+        );
+        assert!(!s.contains("the request") && !s.contains("x.py"));
     }
 
     #[test]
@@ -318,7 +449,7 @@ mod tests {
     #[test]
     fn transcript_drops_oldest_but_keeps_the_summary() {
         let h = vec![
-            summary_message("before", None),
+            summary_message("before", None, &[]),
             user(&"a".repeat(500)),
             asst(&"b".repeat(500)),
             user("latest"),
