@@ -25,7 +25,9 @@ printf 'The code is %s.\n' "$word" > "$tmp/ws/notes/code.txt"
 {
     case $kind in
         llama-cpp) printf 'base_url = "%s/v1"\n' "$base_url" ;;
-        ollama) printf 'base_url = "%s"\napi = "ollama"\n' "$base_url" ;;
+        # The qwen3.5 Modelfile sets presence_penalty = 1.5, which pushes a tiny model away
+        # from repeating the number it just read, so it answers "1" or the file name.
+        ollama) printf 'base_url = "%s"\napi = "ollama"\nextra_body = { options = { presence_penalty = 0.0 } }\n' "$base_url" ;;
         *) echo "unknown server kind: $kind" >&2; exit 2 ;;
     esac
     if [ -n "$model" ]; then printf 'models = ["%s"]\n' "$model"; fi

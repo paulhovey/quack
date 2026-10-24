@@ -20,14 +20,23 @@ pub fn uri_to_path(uri: &str) -> Option<PathBuf> {
 
 /// A path as a map key. Servers echo back the URIs they are sent, except that some
 /// lowercase the drive letter (`file:///c%3A/…`), so the drive letter is uppercased.
+/// A URI never carries the `\\?\` prefix that `canonicalize` adds on Windows, so it is
+/// dropped here too.
 pub fn key(path: &Path) -> PathBuf {
+    if !cfg!(windows) {
+        return path.to_path_buf();
+    }
     let s = path.to_string_lossy();
+    let s = match s.strip_prefix(r"\\?\UNC\") {
+        Some(rest) => format!(r"\\{rest}"),
+        None => s.strip_prefix(r"\\?\").unwrap_or(&s).to_owned(),
+    };
     let mut chars = s.chars();
     match (chars.next(), chars.next()) {
-        (Some(d), Some(':')) if cfg!(windows) && d.is_ascii_alphabetic() => {
+        (Some(d), Some(':')) if d.is_ascii_alphabetic() => {
             PathBuf::from(format!("{}{}", d.to_ascii_uppercase(), &s[1..]))
         }
-        _ => path.to_path_buf(),
+        _ => PathBuf::from(s),
     }
 }
 
@@ -108,5 +117,11 @@ mod tests {
         assert_eq!(key(&uri_to_path(&uri).expect("path")), key(p));
         let encoded = uri_to_path("file:///c%3A/Users/me/my%20repo/a.rs").expect("path");
         assert_eq!(key(&encoded), key(p));
+        // `canonicalize` adds `\\?\`; the URIs servers send back never have it.
+        assert_eq!(key(Path::new(r"\\?\C:\Users\me\my repo\a.rs")), key(p));
+        assert_eq!(
+            key(Path::new(r"\\?\UNC\host\share\a.rs")),
+            PathBuf::from(r"\\host\share\a.rs")
+        );
     }
 }

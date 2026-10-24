@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use quack_config::LspServerFile;
 use quack_lsp::ops::{self, Operation, Query};
+use quack_lsp::pos;
 use quack_lsp::{LspManager, ServerSpec};
 
 fn manager(root: &Path) -> Arc<LspManager> {
@@ -20,10 +21,14 @@ fn manager(root: &Path) -> Arc<LspManager> {
     LspManager::new(vec![spec], root.to_path_buf(), None)
 }
 
-fn display(root: &Path) -> impl Fn(&Path) -> String + '_ {
+/// Paths from server URIs lack the `\\?\` that `canonicalize` gives `root` on Windows, so
+/// both sides are compared as keys.
+fn display(root: &Path) -> impl Fn(&Path) -> String {
+    let root = pos::key(root);
     move |p: &Path| {
-        p.strip_prefix(root)
-            .unwrap_or(p)
+        let p = pos::key(p);
+        p.strip_prefix(&root)
+            .unwrap_or(&p)
             .to_string_lossy()
             .replace('\\', "/")
     }
