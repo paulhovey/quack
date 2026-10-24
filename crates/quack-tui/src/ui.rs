@@ -1454,7 +1454,7 @@ fn welcome(app: &App, area: Rect) -> Vec<Line<'static>> {
 }
 
 /// Truncate to `max` columns with an ellipsis.
-fn truncate(s: &str, max: usize) -> String {
+pub(crate) fn truncate(s: &str, max: usize) -> String {
     if s.width() <= max {
         return s.to_owned();
     }

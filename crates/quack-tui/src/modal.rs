@@ -17,6 +17,7 @@ use crate::charts::{BarRow, Visual};
 use crate::commands::{COMMANDS, KEYS};
 use crate::fuzzy;
 use crate::theme::{Glyphs, Theme};
+use crate::ui::truncate;
 
 /// Below this size the modal goes full-screen with a single column.
 const MIN_SPLIT: (u16, u16) = (80, 24);
@@ -363,25 +364,6 @@ impl Modal {
             None => f.render_widget(Paragraph::new(Line::styled("no matches", theme.dim)), inner),
         }
     }
-}
-
-/// Truncate to `max` columns with an ellipsis.
-fn truncate(s: &str, max: usize) -> String {
-    if s.width() <= max {
-        return s.to_owned();
-    }
-    let mut out = String::new();
-    let mut used = 0;
-    for c in s.chars() {
-        let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
-        if used + w + 1 > max {
-            break;
-        }
-        out.push(c);
-        used += w;
-    }
-    out.push('…');
-    out
 }
 
 pub(crate) fn centered(area: Rect, pct_w: u16, pct_h: u16) -> Rect {
@@ -1051,7 +1033,7 @@ pub(crate) fn stats(
         tokens.chart(spark(
             "sent",
             format!("peak {}", k(peak(&sent))),
-            sent.clone(),
+            sent,
             theme.accent,
             3,
         ));

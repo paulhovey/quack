@@ -544,7 +544,7 @@ impl Engine {
         }
         self.session.id = SessionId(entry.id.clone());
         self.turns = turns;
-        self.title = Some(entry.title.clone()).filter(|t| !t.is_empty());
+        self.title = Some(entry.title).filter(|t| !t.is_empty());
         self.emit(Event::SessionResumed {
             session: self.session.clone(),
             items,

@@ -381,11 +381,7 @@ pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: Prompt)
                         "\n\nNote: this exact call has now been made {repeats} times in a row. \
                          Try a different approach."
                     ));
-                } else if same_count >= 2
-                    && (call.name.starts_with("edit")
-                        || call.name == "write"
-                        || call.name == "apply_patch")
-                {
+                } else if same_count >= 2 && edits(&ctx.setup, call) {
                     out.model.push_str(&format!(
                         "\n\nNote: this exact edit has already been attempted in this turn ({same_count} times total). \
                          Repeating identical changes without modifying arguments will not fix the problem. \
@@ -873,13 +869,24 @@ async fn ask(ctx: &TurnCtx, call_id: &CallId, questions: Vec<Question>) -> Optio
     answer
 }
 
+/// The internal tool and arguments behind a call, through the profile's names.
+pub(crate) fn internal_call(s: &Setup, call: &ToolCall) -> Option<(String, Value)> {
+    parse_args(&call.arguments)
+        .ok()
+        .and_then(|a| s.surface.map_call(&call.name, a))
+}
+
+/// Whether a call changes files, whatever the profile calls the tool.
+fn edits(s: &Setup, call: &ToolCall) -> bool {
+    internal_call(s, call)
+        .and_then(|(name, args)| s.registry.get(&name)?.subject(&args, &s.tool_ctx).ok())
+        .is_some_and(|sub| matches!(sub, Subject::Edit(_) | Subject::Edits(_)))
+}
+
 /// Whether `call` starts a read-only sub-agent, which may run beside others.
 fn parallel(ctx: &TurnCtx, call: &ToolCall) -> bool {
     let s = &ctx.setup;
-    let Some((internal, args)) = parse_args(&call.arguments)
-        .ok()
-        .and_then(|a| s.surface.map_call(&call.name, a))
-    else {
+    let Some((internal, args)) = internal_call(s, call) else {
         return false;
     };
     internal == "task"

@@ -83,10 +83,7 @@ pub(crate) fn prune_now(ctx: &TurnCtx, history: &mut [Message]) {
 
 /// What a call did to files, through the same mapping and tools that ran it.
 fn classify(s: &Setup, call: &ToolCall) -> Access {
-    let Some((internal, args)) = turn::parse_args(&call.arguments)
-        .ok()
-        .and_then(|a| s.surface.map_call(&call.name, a))
-    else {
+    let Some((internal, args)) = turn::internal_call(s, call) else {
         return Access::Other;
     };
     let Some(tool) = s.registry.get(&internal) else {

@@ -90,7 +90,7 @@ impl Dirs {
             user_data,
             project: workspace_root.join(PROJECT_DIR_NAME),
             cwd: cwd.to_path_buf(),
-            home: Some(home.clone()).filter(|h| h.is_absolute()),
+            home: Some(home).filter(|h| h.is_absolute()),
             workspace_root,
         }
     }

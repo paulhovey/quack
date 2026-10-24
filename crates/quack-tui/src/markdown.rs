@@ -211,7 +211,7 @@ impl Builder<'_> {
                 let cell_spans = cells.get(c).map_or(&[][..], |v| v.as_slice());
                 col_lines.push(wrap_cell_spans(cell_spans, w));
             }
-            let row_height = col_lines.iter().map(|l| l.len()).max().unwrap_or(1).max(1);
+            let row_height = col_lines.iter().map(Vec::len).max().unwrap_or(1).max(1);
             for line_idx in 0..row_height {
                 let mut row_spans = vec![(v_div.to_owned(), self.theme.dim)];
                 for (c, &w) in col_widths.iter().enumerate() {

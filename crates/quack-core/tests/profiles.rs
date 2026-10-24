@@ -238,6 +238,56 @@ async fn codex_shell_takes_an_argument_list() {
 }
 
 #[tokio::test]
+async fn a_repeated_edit_is_noted_under_the_profiles_own_name() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(body_string_contains("\"role\":\"tool\""))
+        .respond_with(sse(
+            json!({"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}]}),
+        ))
+        .mount(&server)
+        .await;
+    // cc-style's `Edit` is the internal `edit`; the same failing edit twice in one reply.
+    let args =
+        json!({"file_path": "missing.txt", "old_string": "a", "new_string": "b"}).to_string();
+    let call = |id: &str, index: u32| json!({"index": index, "id": id, "function": {"name": "Edit", "arguments": args}});
+    Mock::given(method("POST"))
+        .respond_with(sse(json!({"choices":[{"delta":{"tool_calls":[call("c1", 0), call("c2", 1)]},"finish_reason":"tool_calls"}]})))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut engine = Engine::spawn(Arc::new(configure(tmp.path(), &server.uri(), "cc-style")));
+    turn(&mut engine, "edit it").await;
+    engine.shutdown().await;
+    let last: Value = server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .last()
+        .and_then(|r| serde_json::from_slice(&r.body).ok())
+        .expect("second request");
+    let results: Vec<&str> = last["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .filter(|m| m["role"] == "tool")
+        .filter_map(|m| m["content"].as_str())
+        .collect();
+    assert_eq!(results.len(), 2, "{results:?}");
+    assert!(
+        !results[0].contains("already been attempted"),
+        "{}",
+        results[0]
+    );
+    assert!(
+        results[1].contains("already been attempted"),
+        "{}",
+        results[1]
+    );
+}
+
+#[tokio::test]
 async fn profiles_are_listed_previewed_and_switched() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

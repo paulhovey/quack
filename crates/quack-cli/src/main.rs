@@ -106,7 +106,7 @@ fn main() -> ExitCode {
         } => block_on(commands::login(&loaded, provider, new, no_browser)),
         #[cfg(feature = "auth-chatgpt")]
         Cmd::Logout { provider } => block_on(commands::logout(&loaded, provider)),
-        Cmd::Eval(args) => block_on(commands::eval(&loaded, opts.clone(), args)),
+        Cmd::Eval(args) => block_on(commands::eval(&loaded, opts, args)),
         #[cfg(feature = "acp")]
         Cmd::Acp => {
             eprintln!("ACP support lands in M6 (docs/plan/12-headless-and-acp.md)");

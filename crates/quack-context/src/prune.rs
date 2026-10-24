@@ -482,7 +482,7 @@ mod tests {
             shell("1", "cargo  test"),
             result("1", err.clone()),
             shell("2", "cargo build"),
-            result("2", err.clone()),
+            result("2", err),
             shell("3", "cargo test"),
             result("3", "exit code 0\nok".into()),
         ];
@@ -520,7 +520,7 @@ mod tests {
             call("3", "edit", "a.rs"),
             result("3", "ok".into()),
             call("4", "read", "b.rs"),
-            result("4", body.clone()),
+            result("4", body),
         ];
         let ops = plan(&h, h.len(), &hooks());
         assert_eq!(
@@ -539,7 +539,7 @@ mod tests {
     #[test]
     fn large_old_outputs_keep_head_and_tail() {
         let body: String = (1..=500).map(|n| format!("line {n}\n")).collect();
-        let h = vec![call("1", "shell", "-"), result("1", body.clone())];
+        let h = vec![call("1", "shell", "-"), result("1", body)];
         let ops = plan(&h, 2, &hooks());
         assert_eq!(ops.len(), 1);
         let c = &ops[0].content;
