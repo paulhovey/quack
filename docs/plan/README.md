@@ -1,7 +1,5 @@
 # quack — Implementation Plan
 
-> Working name: **quack**. It was picked to be unique, so the final name can be swapped in with one search-and-replace across docs, crates, paths and env vars (`quack` → `<name>`, `QUACK_` → `<NAME>_`).
-
 A fast, context-efficient coding agent for **self-hosted and open-weight models**: Ollama, llama.cpp, vLLM/SGLang clusters, rented GPUs, and hosted open-model services such as Novita and Fireworks. Written in Rust with a ratatui TUI. Licensed Apache-2.0.
 
 ## Guiding principles

@@ -63,7 +63,7 @@ Everything below works today. Planned work is listed separately at the end.
   install.
 - **Works with your existing agent files.** CLAUDE.md, GEMINI.md, `.cursorrules` and
   Copilot instructions are read, and `/init` merges them into one AGENTS.md.
-- **Fast startup.** The first frame draws in about 3–9 ms on Linux.
+- **Fast startup.** The first frame draws in about <10ms on Linux.
 
 ### Getting started
 

@@ -68,7 +68,7 @@
 			color: 'var(--color-duck)',
 			items: [
 				['Three systems', 'Linux, macOS and Windows on x64 and ARM64; PowerShell and Job Objects on Windows.'],
-				['Starts at once', 'The first frame draws in about 3–9 ms on Linux.'],
+				['Starts at once', 'The first frame draws in about <10 ms on Linux.'],
 				['Headless', '`quack exec "…"` runs one turn for scripts and CI.'],
 				['Sees itself', '`/context` and `/stats` chart tokens, cache hits, cost and time.'],
 				['Over SSH', 'Mouse selection and `/copy` go through the terminal (OSC 52).']
