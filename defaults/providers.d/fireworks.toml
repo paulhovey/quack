@@ -5,3 +5,9 @@ name = "Fireworks AI"
 group = "Open-model services"
 base_url = "https://api.fireworks.ai/inference/v1"
 api_key = { env = "FIREWORKS_API_KEY" }
+
+# Fireworks sometimes accepts a request and never answers (kimi-k3, 2026-10-25: about
+# one request in 30). Retry after 30s instead of the 300s idle timeout; each retry
+# doubles the wait, so a long prefill (headers came at 4s for a 60k-token prompt) still fits.
+[http]
+timeout_first_byte_secs = 30

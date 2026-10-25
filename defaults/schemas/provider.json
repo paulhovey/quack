@@ -105,6 +105,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "timeout_first_byte_secs": {
+          "default": 0,
+          "description": "How long to wait for response headers before retrying the request; each retry waits\ntwice as long, up to `timeout_idle_secs`. Unset or 0 means `timeout_idle_secs`. A short\nvalue retries a request the server dropped instead of waiting out the idle timeout.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "timeout_idle_secs": {
           "default": 300,
           "description": "Long prefill on big contexts can be slow.",
@@ -580,6 +587,7 @@
         "max_retries": 3,
         "proxy": "",
         "timeout_connect_secs": 10,
+        "timeout_first_byte_secs": 0,
         "timeout_idle_secs": 300
       }
     },

@@ -154,6 +154,7 @@ client_key  = "~/.certs/me.key"
 [http]
 timeout_connect_secs = 10
 timeout_idle_secs = 300                # long prefill on big contexts can be slow
+timeout_first_byte_secs = 0            # wait for headers, then retry (doubling each time); 0 = idle
 max_retries = 3                        # 429/5xx/connection reset, exponential backoff + jitter
 proxy = ""                             # override [network].proxy
 
@@ -288,6 +289,11 @@ Errors are normalized into `ProviderError { kind, status, retryable, message, ra
 `Auth`, `RateLimited { retry_after }`, `ContextLengthExceeded`, `ServerOverloaded`, `BadRequest`, `Network`, `Timeout`, `Protocol`.
 
 `ContextLengthExceeded` triggers an automatic compaction and a single retry ([05](05-context-management.md)). These messages are recognised by pattern for servers that return them as 400s with different texts.
+
+Stalls (2026-10-25). A hosted service can accept a request and never answer; Fireworks did about once in 30 requests on kimi-k3, and a plain `curl` reproduced it. Two layers recover:
+
+- **No headers:** `[http] timeout_first_byte_secs` bounds the wait for response headers, and the provider retries (up to `max_retries`), doubling the wait each time up to `timeout_idle_secs`, because servers send headers after prefill. Unset means `timeout_idle_secs`; `fireworks.toml` sets 30.
+- **Reply stops partway:** once bytes flow the provider never retries, so a `Timeout` or `Network` error mid-stream reaches the engine, which sends the same step again (at most twice, with a warning each time). The partial reply never entered the history, so the request is byte-identical and the cache stays warm.
 
 ## Vision (2026-10-24)
 

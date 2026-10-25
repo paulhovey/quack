@@ -172,6 +172,10 @@ pub struct Http {
     pub timeout_connect_secs: u64,
     /// Long prefill on big contexts can be slow.
     pub timeout_idle_secs: u64,
+    /// How long to wait for response headers before retrying the request; each retry waits
+    /// twice as long, up to `timeout_idle_secs`. Unset or 0 means `timeout_idle_secs`. A short
+    /// value retries a request the server dropped instead of waiting out the idle timeout.
+    pub timeout_first_byte_secs: u64,
     pub max_retries: u32,
     /// Overrides `[network].proxy`.
     pub proxy: String,
@@ -182,6 +186,7 @@ impl Default for Http {
         Self {
             timeout_connect_secs: 10,
             timeout_idle_secs: 300,
+            timeout_first_byte_secs: 0,
             max_retries: 3,
             proxy: String::new(),
         }

@@ -195,7 +195,14 @@ enum StepEnd {
     Aborted(String),
     /// The server said the request is too long for the model.
     Overflow(String),
+    /// The reply stalled or the connection dropped before it finished; nothing went into the
+    /// history, so the step can be sent again.
+    Dropped(String),
 }
+
+/// Step-level retries after a dropped reply, on top of the provider's own retries (which stop
+/// once a reply has started).
+const MAX_DROPPED_RETRIES: u32 = 2;
 
 /// Run the turn; returns the updated history.
 pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: Prompt) -> Vec<Message> {
@@ -250,15 +257,30 @@ pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: Prompt)
     let mut recent: Vec<(String, String)> = Vec::new();
     let mut nudged = false;
     let mut overflowed = false;
+    let mut dropped = 0;
 
     let end = 'steps: {
         for _ in 0..ctx.max_steps {
             crate::context::fit(&ctx, &mut history).await;
             let estimated = raw_estimate(&ctx.setup, &history);
             let (msg, usage) = match stream_step(&ctx, &history).await {
-                Ok(r) => r,
+                Ok(r) => {
+                    dropped = 0;
+                    r
+                }
                 Err(StepEnd::Aborted(reason)) => break 'steps StepEnd::Aborted(reason),
                 Err(StepEnd::Done) => break 'steps StepEnd::Done,
+                Err(StepEnd::Dropped(message)) => {
+                    if dropped < MAX_DROPPED_RETRIES {
+                        dropped += 1;
+                        ctx.emit(Event::Warning {
+                            message: format!("{message} · sending the step again"),
+                        });
+                        continue;
+                    }
+                    ctx.error(EngineErrorKind::Provider, message);
+                    break 'steps StepEnd::Aborted("provider error".into());
+                }
                 Err(StepEnd::Overflow(message)) => {
                     // Compact once and retry; a second overflow ends the turn.
                     let compacted = !overflowed
@@ -433,7 +455,7 @@ pub(crate) async fn run(ctx: TurnCtx, mut history: Vec<Message>, prompt: Prompt)
             });
             ctx.turn_end(json!({ "turn": ctx.turn.0, "outcome": "complete", "usage": total }));
         }
-        StepEnd::Aborted(reason) | StepEnd::Overflow(reason) => {
+        StepEnd::Aborted(reason) | StepEnd::Overflow(reason) | StepEnd::Dropped(reason) => {
             ctx.turn_end(json!({ "turn": ctx.turn.0, "outcome": "aborted", "reason": reason }));
             ctx.emit(Event::TurnAborted {
                 turn: ctx.turn,
@@ -708,6 +730,9 @@ async fn stream_step(
             Err(e) => {
                 if e.kind == ErrorKind::ContextLengthExceeded {
                     return Err(StepEnd::Overflow(format!("{}: {e}", s.provider.id)));
+                }
+                if matches!(e.kind, ErrorKind::Timeout | ErrorKind::Network) {
+                    return Err(StepEnd::Dropped(format!("{}: {e}", s.provider.id)));
                 }
                 let hint = match e.kind {
                     ErrorKind::Auth => " · check the provider's api_key",

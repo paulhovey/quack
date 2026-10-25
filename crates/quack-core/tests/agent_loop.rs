@@ -433,3 +433,49 @@ async fn an_empty_reply_is_nudged_once() {
     assert_eq!(roles, ["user", "user"]);
     engine.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_stalled_reply_is_sent_again() {
+    let server = MockServer::start().await;
+    let reply = || sse(&[r#"{"choices":[{"delta":{"content":"Done."},"finish_reason":"stop"}]}"#]);
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(reply().set_delay(Duration::from_secs(5)))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(reply())
+        .mount(&server)
+        .await;
+    // No provider retries: the stall reaches the engine, which sends the step again.
+    let models = "[\"tiny\"]\n[http]\ntimeout_idle_secs = 1\nmax_retries = 0";
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut engine = Engine::spawn(Arc::new(workspace_with(tmp.path(), &server.uri(), models)));
+    engine
+        .submit(Op::UserTurn {
+            items: vec![InputItem::text("hello")],
+            overrides: TurnOverrides::default(),
+        })
+        .await;
+    let (mut text, mut warnings) = (String::new(), Vec::new());
+    loop {
+        match next(&mut engine.events).await {
+            Event::AssistantDelta { text: t } => text.push_str(&t),
+            Event::Warning { message } if message.contains("sending the step again") => {
+                warnings.push(message);
+            }
+            Event::Error { error } => panic!("error: {}", error.message),
+            Event::TurnComplete { .. } => break,
+            Event::TurnAborted { reason, .. } => panic!("aborted: {reason}"),
+            _ => {}
+        }
+    }
+    assert_eq!(text, "Done.");
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].contains("sending the step again"),
+        "{warnings:?}"
+    );
+}

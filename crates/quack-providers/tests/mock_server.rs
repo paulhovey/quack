@@ -71,6 +71,65 @@ async fn streams_after_retrying_a_503() {
 }
 
 #[tokio::test]
+async fn retries_a_request_that_sends_no_headers() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(30)))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(SSE),
+        )
+        .mount(&server)
+        .await;
+
+    // The idle timeout alone would wait 30s; the first-byte timeout retries after 1s.
+    let p = provider(
+        &server,
+        "[http]\ntimeout_idle_secs = 60\ntimeout_first_byte_secs = 1\nmax_retries = 1\n",
+    );
+    let started = std::time::Instant::now();
+    let mut rx = p.stream(request(), ReasoningFormat::Auto, CancellationToken::new());
+    let mut b = ResponseBuilder::default();
+    while let Some(ev) = rx.recv().await {
+        b.push(&ev.expect("no error"));
+    }
+    assert!(matches!(b.into_message(), Message::Assistant { content, .. } if content == "Hello"));
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+}
+
+#[tokio::test]
+async fn first_byte_timeout_doubles_so_a_slow_prefill_still_answers() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(SSE)
+                .set_delay(std::time::Duration::from_millis(1500)),
+        )
+        .mount(&server)
+        .await;
+
+    // Headers come after 1.5s: the 1s first try times out, the 2s retry gets the reply.
+    let p = provider(
+        &server,
+        "[http]\ntimeout_idle_secs = 60\ntimeout_first_byte_secs = 1\nmax_retries = 1\n",
+    );
+    let mut rx = p.stream(request(), ReasoningFormat::Auto, CancellationToken::new());
+    let mut b = ResponseBuilder::default();
+    while let Some(ev) = rx.recv().await {
+        b.push(&ev.expect("no error"));
+    }
+    assert!(matches!(b.into_message(), Message::Assistant { content, .. } if content == "Hello"));
+    assert_eq!(server.received_requests().await.map(|r| r.len()), Some(2));
+}
+
+#[tokio::test]
 async fn auth_errors_are_not_retried() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

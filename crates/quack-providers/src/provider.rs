@@ -277,6 +277,19 @@ impl Provider {
         format!("{}/{path}", self.base_url)
     }
 
+    /// Headers are a request's first byte; a dropped request never sends them. Servers send
+    /// them after prefill, so each retry waits twice as long: a stall is retried quickly and a
+    /// long prompt still gets time, up to the idle timeout.
+    fn first_byte_timeout(&self, attempt: u32) -> Duration {
+        let http = &self.file.http;
+        let idle = http.timeout_idle_secs.max(1);
+        let secs = match http.timeout_first_byte_secs {
+            0 => idle,
+            s => s.saturating_mul(1 << attempt.min(16)).min(idle),
+        };
+        Duration::from_secs(secs.max(1))
+    }
+
     fn discovery_timeout(&self) -> Duration {
         Duration::from_secs(self.file.http.timeout_connect_secs.max(1) * 3)
     }
@@ -435,17 +448,21 @@ impl Provider {
                     return;
                 }
             };
-            let sent = self
+            let send = self
                 .client
                 .post(self.url(&path))
                 .headers(headers)
                 .header(reqwest::header::ACCEPT, accept)
                 .json(&body)
-                .send()
-                .await;
-            let result = match sent {
-                Ok(r) => check_status(r).await,
-                Err(e) => Err(ProviderError::from_reqwest(&e)),
+                .send();
+            let first_byte = self.first_byte_timeout(attempt);
+            let result = match tokio::time::timeout(first_byte, send).await {
+                Ok(Ok(r)) => check_status(r).await,
+                Ok(Err(e)) => Err(ProviderError::from_reqwest(&e)),
+                Err(_) => Err(ProviderError::new(
+                    ErrorKind::Timeout,
+                    format!("no response in {}s", first_byte.as_secs()),
+                )),
             };
             match result {
                 Ok(r) => break r,
