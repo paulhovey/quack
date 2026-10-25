@@ -759,6 +759,7 @@ async fn build_setup(
     }
     let (mut permissions, perm_warnings) = Permissions::new(&settings, &root);
     permissions.memory_writes_ask = config.settings.memory.writes == MemoryWrites::Ask;
+    permissions.powershell = matches!(shell, ShellKind::Pwsh(_) | ShellKind::PowerShell(_));
     for w in perm_warnings {
         warn(tx, format!("[permissions]: {w}"));
     }

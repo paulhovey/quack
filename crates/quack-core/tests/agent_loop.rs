@@ -100,7 +100,9 @@ async fn tool_call_with_approval_then_answer() {
     let mut ended = None;
     loop {
         match next(&mut engine.events).await {
-            Event::ApprovalRequest { call_id, request } => {
+            Event::ApprovalRequest {
+                call_id, request, ..
+            } => {
                 assert!(
                     matches!(&request, ApprovalRequest::Edit { path, diff } if path == "notes.txt" && diff.contains("+hi")),
                     "{request:?}"

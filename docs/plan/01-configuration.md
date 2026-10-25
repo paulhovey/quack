@@ -183,9 +183,11 @@ A provider can use a sign-in instead of a key: `auth = { type = "chatgpt", issue
 
 ## Hot reload
 
-As implemented (2026-10-18): `/reload` (`Op::ReloadConfig`) re-reads every layer with the same command-line options. It waits for a running turn and holds new turns until it finishes. It then stops and restarts the MCP servers, runs startup again (the startup panel shows its progress), and keeps the conversation and the model in use, falling back to the normal model choice if that model has gone. The permission mode carries over, capped by policy. Approvals given for the session are dropped, because the rules they were given under may have changed. The TUI rebuilds its `/config` view from the new settings, and `ui.*` changes apply at once. Still to do: watching the folders with `notify`, and restarting only the MCP servers whose files changed.
+As implemented (2026-10-18): `/reload` (`Op::ReloadConfig`) re-reads every layer with the same command-line options. It waits for a running turn and holds new turns until it finishes. It then stops and restarts the MCP servers, runs startup again (the startup panel shows its progress), and keeps the conversation and the model in use, falling back to the normal model choice if that model has gone. The permission mode carries over, capped by policy. Approvals given for the session are dropped, because the rules they were given under may have changed. The TUI rebuilds its `/config` view from the new settings, and `ui.*` changes apply at once. Still to do: reloading by itself when the folders change (they are watched since 2026-10-25, see below), and restarting only the MCP servers whose files changed.
 
-`notify` watches all layer directories. On change, a debounced `Op::ReloadConfig`:
+Folder watching, first step (2026-10-25): `quack-core/src/watch.rs` stamps the files in the system, user and project config folders (path, size and modification time; not `memory/`, `worktrees/`, `schemas/`, hidden or `.tmp` files) every 2 s, on a blocking thread. A change that is still there at the next check gives one notice, "config files changed · /reload to apply them". A reload makes the current files the new baseline. This uses polling, so no new crates. It doesn't reload by itself yet, because a reload restarts every MCP server and drops session approvals. Automatic reload waits for the selective restart below.
+
+The plan: `notify` (or the poller above) watches all layer directories. On change, a debounced `Op::ReloadConfig`:
 - reloads settings and item files,
 - adds, removes or restarts only the MCP/LSP servers whose files changed,
 - never changes the model mid-turn; changes apply from the next turn.

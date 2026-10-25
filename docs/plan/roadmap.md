@@ -165,13 +165,16 @@ Optional support for Claude and GPT, as data like every other provider ([02](02-
   - Landed early (2026-10-18): stdio + streamable HTTP, `mcp.d`, deferred tools + `tool_search`, `mcp:` permission rules, restarts, `/mcp`, doctor row ([09](09-mcp.md#as-implemented-2026-10-18)). Prompts as `/<server>:<prompt>` commands and resources through `list_mcp_resources`/`read_mcp_resource` landed 2026-10-21 ([09](09-mcp.md#prompts-and-resources-2026-10-21)), then elicitation (forms as `ask_user` questions) and gated sampling (`mcp:<server>/sampling`), both also over 2026-07-28 `input_required` ([09](09-mcp.md#elicitation-and-sampling-2026-10-21)). Still open: OAuth
 - Skills (all discovery paths, progressive disclosure, `/skill` invocation); custom commands
 - Permission engine v2: tree-sitter-bash / PowerShell analysis, "always allow" writes to config
-  - Landed early (2026-10-21): tree-sitter-bash analysis ([11](11-security.md#tree-sitter-bash-2026-10-21)). Still open: PowerShell, "always allow" writes
+  - Landed early (2026-10-21): tree-sitter-bash analysis ([11](11-security.md#tree-sitter-bash-2026-10-21)). PowerShell analysis and "always allow" writes landed 2026-10-25 ([11](11-security.md#powershell-2026-10-25), [always allow](11-security.md#always-allow-2026-10-25)). The tree-sitter-powershell spike (M0) is a go: one crate, MIT, about half the bash grammar's size
 - Project trust flow
 - Hooks (`hooks.d`)
 - Checkpoints: edit pre-images, `/undo`, `/rewind` with file restore; optional gix shadow snapshots
 - Hot reload of config directories
+  - 2026-10-25: the config folders are watched (polling, no new crates) and a change gives a notice to `/reload` ([01](01-configuration.md#hot-reload)). Still open: reloading by itself, with only the changed MCP/LSP servers restarted
 - `/fork`, `/export`, auto titles; `/fork --worktree` parallel sessions
+  - Landed 2026-10-25: `/fork` (a copy of the log and undo points under a new id; `parent` and `at` in its `session_start`) and `/export [md|json] [path]` ([07](07-sessions-memory-checkpoints.md#commands)). Still open: titles from the `small` model, `/fork --worktree`
 - Bundles (`bundles/`, `/bundles`)
+  - Landed 2026-10-25: `<layer>/bundles/<name>/` with `bundle.toml`, loaded as extra item folders below their layer, `[bundles] disabled`, `/bundles` ([08](08-instructions-skills-commands.md#bundles))
 - Sub-agents (`task` tool) with `/tasks` views (moved from M5)
   - Landed early (2026-10-19): `agents.d` (`explore` read-only on `[model] small`, `general`), `task` with a fresh context and its own todo list, read-only agents in parallel and allowed in plan mode, workers' approvals through the client, `todo` hand-off that ticks plan items, `Event::Plan`, `/tasks`, a `doctor` row ([04](04-agent-loop-and-tools.md#sub-agents)). Mock-server tests only; not yet measured with `quack eval`
 
@@ -191,7 +194,7 @@ Landed early (2026-10-18): the project trust flow (Trust modal, `/trust`, `quack
 - `shell.background` processes
 - Startup/perf budgets enforced in CI
 
-Landed early (2026-10-18): `quack-lsp` (lazy start, document sync, push and pull diagnostics, progress, the diagnostics delta after edits, the `lsp` tool, `/lsp`) and the default `lsp.d` files ([10](10-lsp.md#as-implemented-2026-10-18-ahead-of-m4)). Still to do: `lsp.rename`, `didChangeWatchedFiles`, a status-bar count.
+Landed early (2026-10-18): `quack-lsp` (lazy start, document sync, push and pull diagnostics, progress, the diagnostics delta after edits, the `lsp` tool, `/lsp`) and the default `lsp.d` files ([10](10-lsp.md#as-implemented-2026-10-18-ahead-of-m4)). `lsp` `rename` (one approved multi-file edit through the new `Tool::prepare` hook) and the status-bar count landed 2026-10-25 ([10](10-lsp.md#as-implemented-2026-10-18-ahead-of-m4)). Still to do: `didChangeWatchedFiles`; files changed by shell commands are re-sent the next time they are used, and those changed by a rename or patch right away.
 
 **Exit criteria**
 - [ ] Edits that introduce type errors get diagnostics in the same tool result (rust-analyzer, pyright, tsserver, gopls) — verified with TypeScript 7 and the fixture server; rust-analyzer, pyright and gopls not yet run here
@@ -204,7 +207,7 @@ Landed early (2026-10-18): `quack-lsp` (lazy start, document sync, push and pull
 - Offline policy end-to-end, egress allowlist, `web_fetch` (opt-in, SSRF-protected)
 - `[policy]` locks, audit log, `quack doctor` enterprise checks
 - mTLS, custom CA, proxy validation; multi-`base_urls` failover
-- Packaging: release archives and install scripts in two flavours, `quack` (with defaults) and `quack-plucked` (landed early); still to do: MSI (+ signing), deb/rpm, Homebrew, SBOM, `docs/enterprise.md`, air-gapped build recipe
+- Packaging: release archives and install scripts in two flavours, `quack` (with defaults) and `quack-plucked` (landed early); deb/rpm, Homebrew formulas, a CycloneDX SBOM, `docs/enterprise.md` and the air-gapped build recipe (run offline from vendored sources) landed 2026-10-25 ([14](14-packaging-and-distribution.md#packages-formulas-and-sbom-2026-10-25)); still to do: MSI (+ signing), notarization
 - Dynamic tree-sitter grammars (`libloading`)
   - Landed early (2026-10-21): `grammars/<lang>/*.scm` query overrides for the compiled-in grammars, layered and trust-gated, with `; extends` ([05](05-context-management.md#as-implemented-2026-10-18-index-and-pruning-rules)). Loading grammar libraries is still open and needs `unsafe`
 - MCP OAuth for remote servers

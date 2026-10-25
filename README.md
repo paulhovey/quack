@@ -199,6 +199,9 @@ Everything below works today. Planned work is listed separately at the end.
   docs), workspace symbol search, a file's outline, and current diagnostics. Positions
   are given as a line and a symbol name, which small models get right far more often
   than columns.
+- Rename through the language server: the change to every file is one edit, approved
+  with its diff like any other, with an undo point for each file.
+- The status bar counts the errors and warnings the servers report (`✗1 ⚠3`).
 - Works with servers that push diagnostics and with servers that are asked for them.
 - `/lsp` shows each server's state, indexing progress, error and warning counts and
   recent output; `quack doctor` lists which servers are installed.
@@ -216,6 +219,14 @@ Everything below works today. Planned work is listed separately at the end.
   inside subshells, `if`/`for`/`while` bodies, `$(…)`, backticks, heredocs and literal
   `bash -c '…'` scripts are checked one by one; a line that doesn't parse, or runs a
   computed command name (`$cmd -rf x`), never matches an allow rule.
+- PowerShell lines are read with tree-sitter-powershell: commands in script blocks,
+  `( )`/`$( )`, `iex '…'` and `pwsh -c '…'` are checked one by one, and .NET calls such as
+  `[IO.File]::Delete('x')` never pass as read-only. Rules ignore case there, and deny rules
+  see aliases, so `shell:rm *` also stops `Remove-Item` and `del`.
+- Approvals: `y` allow once, `a` allow for this session, `A` always allow, `n` deny.
+  "Always" saves the exact rule shown in the box (`shell:cargo test`, `edit:src/a.rs`) to
+  `[permissions] allow`: in the project's `.quack/config.toml` when that is trusted,
+  otherwise in your user config.
 - Every change shows a diff in the approval box.
 - Project trust: a cloned repo's `.quack/` folder runs nothing until you trust it. The prompt
   shows what it would add, and you are asked again when those files change. Also
@@ -277,6 +288,8 @@ Everything below works today. Planned work is listed separately at the end.
 - Every session is saved as it happens and survives a crash. `--continue`, `--resume` and
   `/resume` bring one back with exactly the same context.
 - `/new`, `/title`, and `quack sessions`.
+- `/fork` goes on in a copy of the session (undo points included) and leaves the original
+  as it was, to `/resume` later. `/export [md|json] [path]` writes the transcript to a file.
 - `/undo` reverts the last edit.
 - `/rewind` (or Esc Esc) goes back to an earlier message: the conversation, the files, or
   both. Files are restored byte for byte, and nothing is rewound if you changed them since
@@ -299,6 +312,11 @@ Everything below works today. Planned work is listed separately at the end.
   `/review`, `commands/git/pr.md` is `/git:pr`. `{{ args }}` (or `$ARGUMENTS`) is replaced
   with what you type after the name, and front matter can set a `description` and `args`
   hint. They appear in the `/` popup; `/commands` lists them.
+- Bundles: a folder with a `bundle.toml` that groups skills, commands and `mcp.d`,
+  `hooks.d`, `profiles.d`, `agents.d` or `lsp.d` files. Copy it into `bundles/` in your
+  config folder (or a trusted project's `.quack/`) to install it, and delete it to remove it.
+  It loads as if its files were in that folder, and your own files win over it. `/bundles`
+  lists them and turns each on or off (`[bundles] disabled`).
 - Memory: markdown notes for each project and globally, with optional approval before a note
   is saved. `/memory` shows them.
 
@@ -354,7 +372,8 @@ env = { JIRA_URL = "https://jira.example.com", JIRA_TOKEN = { keyring = "jira" }
 - Settings are checked against JSON schemas, with clear error messages (`quack config check`).
 - `/config` lists every setting and changes them. Comments in your files are kept, and
   settings an administrator locked cannot be changed.
-- `/reload` applies config changes without losing the conversation.
+- `/reload` applies config changes without losing the conversation. quack notices when
+  files in your config folders change and tells you to reload.
 
 ### Interface
 
@@ -424,9 +443,9 @@ agent panel. In Zed, add it to `settings.json`:
 
 Not available yet:
 - Sandboxing on Windows.
-- Renaming symbols through the language server.
-- `/fork` and `/export`.
-- Automatic reload when config files change.
+- Applying config changes on its own (quack says when files changed; `/reload` applies
+  them).
+- `/fork --worktree`.
 - MCP OAuth.
 
 See the [roadmap](docs/plan/roadmap.md).
@@ -456,7 +475,10 @@ It never touches an existing defaults folder, so it is also how to update just t
 Other options: `--prefix` (default `~/.local`, or `%LOCALAPPDATA%\Programs\quack`),
 `--version v0.2.0`, `--archive FILE` for offline installs, `--from-source` to build this
 checkout, and `--uninstall`. Prebuilt archives for each platform are on the
-[releases page](https://github.com/paulhovey/quack/releases).
+[releases page](https://github.com/paulhovey/quack/releases), with `.deb` and `.rpm`
+packages, Homebrew formulas for a tap, and an SBOM (`quack.cdx.json`). Rolling quack out in
+a company (system policy, your own defaults, building without network access) is covered in
+[docs/enterprise.md](docs/enterprise.md).
 
 To try a checkout without installing a release:
 

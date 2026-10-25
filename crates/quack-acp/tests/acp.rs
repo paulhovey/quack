@@ -276,6 +276,21 @@ async fn approvals_go_to_the_editor_and_load_replays_the_session() {
             .is_some_and(|t| t.contains("+hi")),
         "the diff is shown: {ask}"
     );
+    let ids: Vec<_> = ask["options"]
+        .as_array()
+        .map(|o| o.iter().map(|o| o["optionId"].clone()).collect())
+        .unwrap_or_default();
+    assert_eq!(
+        ids,
+        ["allow", "allow-session", "allow-always", "deny"],
+        "{ask}"
+    );
+    assert!(
+        ask["options"][2]["name"]
+            .as_str()
+            .is_some_and(|n| n.contains("`edit:notes.txt`")),
+        "always names its rule: {ask}"
+    );
     let calls = updates(&seen, "tool_call");
     assert_eq!(calls.len(), 1, "the call is announced once");
     assert_eq!(calls[0]["kind"], "edit");

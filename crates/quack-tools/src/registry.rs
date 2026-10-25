@@ -279,6 +279,16 @@ pub trait Tool: Send + Sync {
     /// What the user approves: the diff or the command. `Err` means the call will fail anyway.
     fn preview(&self, args: &Value, ctx: &ToolCtx) -> Result<ApprovalRequest, String>;
     fn run<'a>(&'a self, args: Value, ctx: &'a ToolCtx) -> BoxFuture<'a, ToolOutput>;
+    /// Work a call needs done before its permission check, when what it changes is not in
+    /// its arguments (an LSP rename asks the server). Returns the arguments to check and
+    /// run with; `Err` fails the call. Most tools have nothing to do.
+    fn prepare<'a>(
+        &'a self,
+        args: Value,
+        _ctx: &'a ToolCtx,
+    ) -> BoxFuture<'a, Result<Value, String>> {
+        Box::pin(std::future::ready(Ok(args)))
+    }
     /// Whether to offer the tool in this session.
     fn available(&self, _ctx: &ToolCtx) -> bool {
         true

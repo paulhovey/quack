@@ -8,9 +8,9 @@ use crossterm::event::{
 use quack_config::settings::{ShowReasoning, StartupPanel, UiSettings};
 use quack_config::{LayerStatus, Loaded, SettingRow};
 use quack_protocol::{
-    Answer, ApprovalDecision, ApprovalRequest, CallId, Event, InputItem, KeySource, LoadState,
-    ModelId, Op, ProviderId, Question, ReplayItem, SecretText, SessionId, Subsystem, TurnOverrides,
-    WriteScope,
+    Answer, ApprovalDecision, ApprovalRequest, CallId, Event, ExportFormat, InputItem, KeySource,
+    LoadState, ModelId, Op, ProviderId, Question, ReplayItem, SecretText, SessionId, Subsystem,
+    TurnOverrides, WriteScope,
 };
 use ratatui::layout::Rect;
 
@@ -55,6 +55,10 @@ pub struct AppInfo {
     pub rules: Vec<(String, String)>,
     /// `grammars/` folders of the active layers, lowest first, for highlighting.
     pub grammar_dirs: Vec<std::path::PathBuf>,
+    /// Installed bundles, for `/bundles`.
+    pub bundles: Vec<quack_config::Bundle>,
+    /// `[bundles] disabled` as configured, including names not installed.
+    pub bundles_disabled: Vec<String>,
 }
 
 impl AppInfo {
@@ -81,6 +85,8 @@ impl AppInfo {
                 .into_iter()
                 .map(|(_, d)| d.join("grammars"))
                 .collect(),
+            bundles: config.bundles.clone(),
+            bundles_disabled: config.settings.bundles.disabled.clone(),
             rules: {
                 let p = &config.settings.permissions;
                 [("deny", &p.deny), ("ask", &p.ask), ("allow", &p.allow)]
@@ -483,6 +489,8 @@ impl Prompt {
 pub(crate) struct Approval {
     pub call_id: CallId,
     pub request: ApprovalRequest,
+    /// The rules `A` (always allow) saves; empty when it isn't offered.
+    pub always: Vec<String>,
 }
 
 /// An image attached to the next message: the path the engine loads, and the size its
@@ -540,6 +548,8 @@ pub struct App {
     pub(crate) growth: Vec<u32>,
     /// Generation speed of the last response, tokens per second.
     pub(crate) speed: Option<f32>,
+    /// Errors and warnings the language servers report.
+    pub(crate) diagnostics: (u32, u32),
     /// When the running turn started, and how many tools it has called.
     pub(crate) turn_started: Option<Instant>,
     turn_tools: u32,
@@ -626,6 +636,7 @@ impl App {
             compact_at: None,
             growth: Vec::new(),
             speed: None,
+            diagnostics: (0, 0),
             turn_started: None,
             turn_tools: 0,
             plan: Vec::new(),
@@ -1189,8 +1200,16 @@ impl App {
                     self.plan = plan;
                 }
             }
-            Event::ApprovalRequest { call_id, request } => {
-                self.approval = Some(Approval { call_id, request });
+            Event::ApprovalRequest {
+                call_id,
+                request,
+                always,
+            } => {
+                self.approval = Some(Approval {
+                    call_id,
+                    request,
+                    always,
+                });
             }
             Event::Plan { checklist } => self.plan = parse_plan(&checklist),
             Event::AgentStarted {
@@ -1345,6 +1364,7 @@ impl App {
                 let said = message.map(|m| format!(": {m}")).unwrap_or_default();
                 self.note(format!("hook {id} ({on}) {did}{said} · {ms} ms"));
             }
+            Event::Diagnostics { errors, warnings } => self.diagnostics = (errors, warnings),
             Event::Notice { message } => self.transcript.push(Entry::System(message)),
             Event::Warning { message } => self.transcript.push(Entry::Warning(message)),
             Event::Error { error } => {
@@ -1699,6 +1719,11 @@ impl App {
     fn on_approval_key(&mut self, key: KeyEvent) {
         let decision = match key.code {
             KeyCode::Char('y' | 'Y') | KeyCode::Enter => ApprovalDecision::AllowOnce,
+            KeyCode::Char('A') if self.approval.as_ref().is_some_and(|a| !a.always.is_empty()) => {
+                ApprovalDecision::AlwaysAllow {
+                    scope: WriteScope::Project,
+                }
+            }
             KeyCode::Char('a' | 'A') => ApprovalDecision::AllowSession,
             KeyCode::Char('n' | 'N') | KeyCode::Esc => ApprovalDecision::Deny,
             _ if self.scroll_key(key) => return,
@@ -2235,6 +2260,26 @@ impl App {
                 self.ops.push(Op::NewSession);
                 self.note("new session; the previous one is saved (/resume)".into());
             }
+            "fork" if args.starts_with("--worktree") => {
+                self.note("/fork --worktree is not built yet; /fork branches in this folder".into())
+            }
+            "fork" => self.ops.push(Op::ForkSession),
+            "export" => {
+                let (first, rest) = args.split_once(char::is_whitespace).unwrap_or((args, ""));
+                let (format, path) = match first {
+                    "md" | "markdown" => (ExportFormat::Markdown, rest.trim()),
+                    "json" => (ExportFormat::Json, rest.trim()),
+                    // A path alone: its extension picks the format.
+                    path if path.to_ascii_lowercase().ends_with(".json") => {
+                        (ExportFormat::Json, args)
+                    }
+                    _ => (ExportFormat::Markdown, args),
+                };
+                self.ops.push(Op::Export {
+                    format,
+                    path: (!path.is_empty()).then(|| path.to_owned()),
+                });
+            }
             "title" if args.is_empty() => self.note("usage: /title <text>".into()),
             "title" => {
                 self.ops.push(Op::SetTitle {
@@ -2356,6 +2401,37 @@ impl App {
                 force: args == "--force",
             }),
             "skills" => self.modal = Some(modal::skills(&self.skills, &self.theme)),
+            "bundles" if args.is_empty() => {
+                self.modal = Some(modal::bundles(&self.info.bundles, &self.theme));
+            }
+            "bundles" => match args.strip_prefix("toggle ").map(str::trim) {
+                Some(id) if self.info.bundles.iter().any(|b| b.id == id) => {
+                    let mut disabled = self.info.bundles_disabled.clone();
+                    let off = !disabled.iter().any(|d| d == id);
+                    if off {
+                        disabled.push(id.to_owned());
+                    } else {
+                        disabled.retain(|d| d != id);
+                    }
+                    let list = disabled
+                        .iter()
+                        .map(|d| toml_string(d))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    self.modal = None;
+                    self.ops.push(Op::SaveSetting {
+                        key: "bundles.disabled".into(),
+                        value: format!("[{list}]"),
+                        scope: WriteScope::User,
+                    });
+                    self.ops.push(Op::ReloadConfig);
+                    self.note(format!(
+                        "bundle `{id}` turned {}; reloading",
+                        if off { "off" } else { "on" }
+                    ));
+                }
+                _ => self.note("usage: /bundles, or /bundles toggle <name>".into()),
+            },
             "tasks" => self.modal = Some(modal::tasks(&self.agents, &self.theme)),
             "todo" => {
                 self.plan_expanded = !self.plan_expanded;
@@ -2718,6 +2794,8 @@ mod tests {
             layers: Vec::new(),
             rules: Vec::new(),
             grammar_dirs: Vec::new(),
+            bundles: Vec::new(),
+            bundles_disabled: Vec::new(),
         }
     }
 

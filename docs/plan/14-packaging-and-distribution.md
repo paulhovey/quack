@@ -111,20 +111,26 @@ the binary and the defaults:
   layer (`enabled = false`), or by updating with `--plucked`.
 - Windows adds the install folder to the user `PATH`; Unix prints a hint if `bin` is not on it.
 
+### Packages, formulas and SBOM (2026-10-25)
+
+- `scripts/package-linux.sh <target> <version>` builds `quack_<v>_<arch>.deb` and `quack-plucked_<v>_<arch>.deb`. They conflict with and replace each other, install `/usr/bin/quack` (and `/usr/share/quack/defaults` for `quack`), and depend on nothing, since the binaries are static. It uses `dpkg-deb` alone, with no cargo plugin. Where `rpmbuild` is installed, the same layout also becomes `.rpm`s. The release's musl jobs install `rpm` and run it on tags. The `.deb` was checked locally (`dpkg-deb --info/--contents`, and an unpacked binary found its bundle). The `.rpm` path runs first in CI.
+- `scripts/homebrew.sh <version> SHA256SUMS` writes `quack.rb` and `quack-plucked.rb` (macOS and Linux, ARM and Intel, `conflicts_with` each other) into the release for a tap repository. Publishing the tap is left to the maintainer.
+- The publish job runs `cargo cyclonedx` (0.5.9, pinned) on `quack-cli` for all targets and attaches `quack.cdx.json` (CycloneDX 1.5; 430 components on 2026-10-25).
+- `docs/enterprise.md` is written: packages, the system policy with a checked example, a company defaults bundle, the air-gapped build (run with vendored sources, an empty `CARGO_HOME` and `--offline`), and checking egress.
+
 ### Still to do
 
 | Platform | Artifacts |
 |---|---|
-| Linux | `.deb`, `.rpm`: `quack` (binary + `/usr/share/quack/defaults`) and `quack-plucked`, which conflict with each other |
-| macOS | Homebrew tap (`quack`, `quack-plucked`), notarization |
-| Windows | **MSI** (per-machine and per-user), signed (Authenticode) |
-| All | signatures, **SBOM** (CycloneDX via `cargo-cyclonedx`) |
+| macOS | notarization |
+| Windows | **MSI** (per-machine and per-user), signed (Authenticode); needs WiX on a Windows runner |
+| All | signatures |
 
 **No self-updater** is built in. `quack version --check` exists but is **opt-in** and blocked by `offline`. Updates come through package managers or the enterprise's own distribution.
 
 ## Enterprise builds
 
-Documented recipe (`docs/enterprise.md`, to be written in M5):
+Documented in [`docs/enterprise.md`](../enterprise.md) (2026-10-25). The original sketch:
 
 ```bash
 git clone https://github.com/<org>/quack && cd quack

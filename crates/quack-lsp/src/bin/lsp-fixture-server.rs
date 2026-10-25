@@ -2,7 +2,8 @@
 //!
 //! - each line containing `ERROR` gets an error diagnostic, and `WARN` a warning;
 //! - `BREAK_OTHER` in a file gives `other.fx` next to it an error (a cross-file break);
-//! - `fn <name>` lines are definitions and symbols; hover shows `hover: <word>`.
+//! - `fn <name>` lines are definitions and symbols; hover shows `hover: <word>`;
+//! - rename replaces the word everywhere in the open documents.
 #![allow(clippy::print_stdout, clippy::print_stderr, clippy::unwrap_used)]
 
 use std::collections::HashMap;
@@ -27,6 +28,7 @@ fn main() {
                 "hoverProvider": true,
                 "documentSymbolProvider": true,
                 "workspaceSymbolProvider": true,
+                "renameProvider": true,
             }})),
             "textDocument/didOpen" => {
                 let uri = params["textDocument"]["uri"].as_str().unwrap().to_owned();
@@ -89,6 +91,29 @@ fn main() {
                 }
                 Some(Value::Array(out))
             }
+            "textDocument/rename" => Some(word_at(params, &docs).map_or(Value::Null, |w| {
+                let new_name = params["newName"].as_str().unwrap_or_default();
+                let mut changes = serde_json::Map::new();
+                for (uri, text) in &docs {
+                    let mut edits = Vec::new();
+                    for (i, l) in text.lines().enumerate() {
+                        let mut from = 0;
+                        while let Some(c) = l[from..].find(&w) {
+                            let start = from + c;
+                            edits.push(json!({
+                                "range": { "start": { "line": i, "character": start },
+                                           "end": { "line": i, "character": start + w.len() } },
+                                "newText": new_name,
+                            }));
+                            from = start + w.len();
+                        }
+                    }
+                    if !edits.is_empty() {
+                        changes.insert(uri.clone(), Value::Array(edits));
+                    }
+                }
+                json!({ "changes": changes })
+            })),
             "shutdown" => Some(Value::Null),
             "exit" => std::process::exit(0),
             _ => None,

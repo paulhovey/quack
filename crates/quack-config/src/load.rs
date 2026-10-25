@@ -112,6 +112,8 @@ pub struct Loaded {
     pub warnings: Vec<String>,
     /// Files that failed to parse. Each one disables only itself.
     pub diagnostics: Vec<FileDiagnostic>,
+    /// Bundles in the active layers, enabled or not.
+    pub bundles: Vec<crate::bundle::Bundle>,
 }
 
 impl Loaded {
@@ -147,18 +149,20 @@ impl Loaded {
         )
     }
 
-    /// Layers whose item directories (`providers.d`, `mcp.d`, …) are active.
+    /// Item directories (`providers.d`, `mcp.d`, …) in effect, lowest first: each active
+    /// layer's enabled bundles, then the layer itself.
     pub fn item_layers(&self) -> Vec<(LayerKind, PathBuf)> {
-        [
-            LayerKind::Defaults,
-            LayerKind::System,
-            LayerKind::User,
-            LayerKind::Project,
-        ]
-        .into_iter()
-        .filter(|k| *k != LayerKind::Project || self.project == ProjectStatus::Trusted)
-        .filter_map(|k| self.dirs.layer_dir(k).map(|d| (k, d.to_path_buf())))
-        .collect()
+        let mut out = Vec::new();
+        for (kind, dir) in base_layers(&self.dirs, self.project) {
+            out.extend(
+                self.bundles
+                    .iter()
+                    .filter(|b| b.enabled && b.layer == kind)
+                    .map(|b| (kind, b.dir.clone())),
+            );
+            out.push((kind, dir));
+        }
+        out
     }
 
     pub fn origin_of(&self, key: &str) -> &Origin {
@@ -321,6 +325,9 @@ fn load_in(found: Dirs, env: Env<'_>, opts: &LoadOptions) -> Result<Loaded, Conf
         };
     }
 
+    let (bundles, bundle_warnings) =
+        crate::bundle::discover(&base_layers(&dirs, project), &settings.bundles.disabled);
+    warnings.extend(bundle_warnings);
     Ok(Loaded {
         dirs,
         found,
@@ -331,7 +338,22 @@ fn load_in(found: Dirs, env: Env<'_>, opts: &LoadOptions) -> Result<Loaded, Conf
         project,
         warnings,
         diagnostics,
+        bundles,
     })
+}
+
+/// Layers whose item directories are active: a project's only when it is trusted.
+fn base_layers(dirs: &Dirs, project: ProjectStatus) -> Vec<(LayerKind, PathBuf)> {
+    [
+        LayerKind::Defaults,
+        LayerKind::System,
+        LayerKind::User,
+        LayerKind::Project,
+    ]
+    .into_iter()
+    .filter(|k| *k != LayerKind::Project || project == ProjectStatus::Trusted)
+    .filter_map(|k| dirs.layer_dir(k).map(|d| (k, d.to_path_buf())))
+    .collect()
 }
 
 fn read_layer(kind: LayerKind, dir: Option<&Path>, diags: &mut Vec<FileDiagnostic>) -> LayerFile {

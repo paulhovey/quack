@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use quack_config::hooks::HookEvent;
 use quack_protocol::{
     ApprovalDecision, CallId, EngineError, EngineErrorKind, Event, Question, ToolCallInfo,
-    ToolResultSummary, TurnId, Usage,
+    ToolResultSummary, TurnId, Usage, WriteScope,
 };
 use quack_providers::{
     ChatRequest, ErrorKind, Message, ResponseBuilder, StreamEvent, ToolCall, ToolSpec, tokens,
@@ -1001,6 +1001,10 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
     begin(ctx, call, &summary);
     let done = |out: ToolOutput| finish(ctx, call, &summary, out);
 
+    args = match prepare(tool.as_ref(), args, &tctx).await {
+        Ok(a) => a,
+        Err(e) => return done(ToolOutput::error(e)),
+    };
     let mut subject = match tool.subject(&args, &tctx) {
         Ok(sub) => sub,
         Err(e) => return done(ToolOutput::error(e)),
@@ -1030,7 +1034,10 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
             )));
         }
         if let Some(updated) = h.updated_args.clone() {
-            args = updated;
+            args = match prepare(tool.as_ref(), updated, &tctx).await {
+                Ok(a) => a,
+                Err(e) => return done(ToolOutput::error(e)),
+            };
             subject = match tool.subject(&args, &tctx) {
                 Ok(sub) => sub,
                 Err(e) => return done(ToolOutput::error(e)),
@@ -1065,6 +1072,11 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
                 Ok(r) => r,
                 Err(e) => return done(ToolOutput::error(e)),
             };
+            let always = ctx
+                .perms
+                .lock()
+                .map(|p| p.rules_for(&subject))
+                .unwrap_or_default();
             let _one_at_a_time = ctx.prompt_lock.lock().await;
             let (otx, orx) = oneshot::channel();
             if let Ok(mut pending) = ctx.approvals.lock() {
@@ -1073,6 +1085,7 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
             ctx.emit(Event::ApprovalRequest {
                 call_id: call_id.clone(),
                 request,
+                always: always.clone(),
             });
             let asked = std::time::Instant::now();
             let answer = tokio::select! {
@@ -1093,10 +1106,16 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
             match answer {
                 None => return done(ToolOutput::error("interrupted by the user")),
                 Some(ApprovalDecision::AllowOnce) => {}
-                Some(ApprovalDecision::AllowSession | ApprovalDecision::AlwaysAllow { .. }) => {
+                Some(ApprovalDecision::AllowSession) => {
                     if let Ok(mut p) = ctx.perms.lock() {
                         p.allow_session(subject.clone());
                     }
+                }
+                Some(ApprovalDecision::AlwaysAllow { scope }) => {
+                    if let Ok(mut p) = ctx.perms.lock() {
+                        p.allow_session(subject.clone());
+                    }
+                    save_always(ctx, &scope, &always);
                 }
                 Some(ApprovalDecision::Deny) => {
                     return done(ToolOutput::error(
@@ -1209,6 +1228,12 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
                     });
                 }
             }
+            // Several files at once (a rename, a patch): the servers get the new text now.
+            (Subject::Edits(ps), _) => {
+                for p in ps {
+                    m.touch(p);
+                }
+            }
             _ => {}
         }
     }
@@ -1246,6 +1271,37 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
         }
     }
     done(out)
+}
+
+/// A tool's work before the permission check, stopped by an interrupt.
+async fn prepare(
+    tool: &dyn quack_tools::Tool,
+    args: Value,
+    tctx: &quack_tools::ToolCtx,
+) -> Result<Value, String> {
+    tokio::select! {
+        r = tool.prepare(args, tctx) => r,
+        () = tctx.cancel.cancelled() => Err("interrupted by the user".into()),
+    }
+}
+
+/// "Always allow": save the call's rules to config, so later sessions allow it too.
+pub(crate) fn save_always(ctx: &TurnCtx, scope: &WriteScope, rules: &[String]) {
+    if rules.is_empty() || *scope == WriteScope::Session {
+        return;
+    }
+    let project = *scope == WriteScope::Project;
+    match ctx.pool.config.save_allow_rules(project, rules) {
+        Ok(path) => ctx.emit(Event::SettingSaved {
+            key: "permissions.allow".into(),
+            value: rules.join(", "),
+            path: path.display().to_string(),
+            note: None,
+        }),
+        Err(e) => ctx.emit(Event::Warning {
+            message: format!("allowed for this session only; cannot save the rule: {e}"),
+        }),
+    }
 }
 
 #[cfg(test)]

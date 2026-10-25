@@ -115,6 +115,156 @@ pub async fn run(
     }
 }
 
+/// A text edit from a language server, in its own position units.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextEdit {
+    /// 0-based `(line, column)`.
+    pub start: (u32, u32),
+    pub end: (u32, u32),
+    pub new_text: String,
+}
+
+/// What a rename changes: each file's edits, in the server's position encoding.
+#[derive(Debug, Clone)]
+pub struct Rename {
+    pub encoding: pos::Encoding,
+    pub files: Vec<(PathBuf, Vec<TextEdit>)>,
+}
+
+/// Ask the server to rename the symbol at `q` to `new_name`. Nothing is written: the
+/// caller applies the edits ([`apply_edits`]) after approval.
+pub async fn rename(mgr: &Arc<LspManager>, q: &Query, new_name: &str) -> Result<Rename, String> {
+    let new_name = new_name.trim();
+    if new_name.is_empty() {
+        return Err("`new_name` is required for rename".into());
+    }
+    let path = q.path.clone().ok_or("`path` is required")?;
+    let client = client(mgr, &path).await?;
+    need(&client, "renameProvider", "rename")?;
+    let text = client.sync(&path).await?;
+    let (line, character) = position(&text, q)?;
+    let line_text = text.lines().nth(line).unwrap_or_default();
+    let params = json!({
+        "textDocument": { "uri": pos::path_to_uri(&path) },
+        "position": {
+            "line": line,
+            "character": client.encoding().to_lsp(line_text, character),
+        },
+        "newName": new_name,
+    });
+    let r = client
+        .request("textDocument/rename", params, REQUEST_TIMEOUT)
+        .await?;
+    let files = workspace_edit(&r)?;
+    if files.is_empty() {
+        return Err("the language server found nothing to rename there".into());
+    }
+    Ok(Rename {
+        encoding: client.encoding(),
+        files,
+    })
+}
+
+/// The text edits of a `WorkspaceEdit`, by file. Creating, renaming or deleting files is
+/// refused rather than half done.
+fn workspace_edit(r: &Value) -> Result<Vec<(PathBuf, Vec<TextEdit>)>, String> {
+    let mut by_file: Vec<(PathBuf, Vec<TextEdit>)> = Vec::new();
+    let mut add = |uri: &str, edits: &Value| -> Result<(), String> {
+        let path = pos::uri_to_path(uri).ok_or_else(|| format!("not a file: {uri}"))?;
+        let list = edits
+            .as_array()
+            .ok_or("the language server sent edits in an unknown form")?;
+        let mut parsed = Vec::new();
+        for e in list {
+            parsed.push(text_edit(e).ok_or("the language server sent an edit without a range")?);
+        }
+        match by_file.iter_mut().find(|(p, _)| *p == path) {
+            Some((_, v)) => v.extend(parsed),
+            None => by_file.push((path, parsed)),
+        }
+        Ok(())
+    };
+    if let Some(changes) = r["documentChanges"].as_array() {
+        for c in changes {
+            if c.get("kind").is_some() {
+                return Err(
+                    "this rename also creates, renames or deletes files, which quack does not do yet"
+                        .into(),
+                );
+            }
+            add(
+                c["textDocument"]["uri"].as_str().unwrap_or_default(),
+                &c["edits"],
+            )?;
+        }
+    } else if let Some(changes) = r["changes"].as_object() {
+        for (uri, edits) in changes {
+            add(uri, edits)?;
+        }
+    }
+    by_file.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(by_file)
+}
+
+fn text_edit(e: &Value) -> Option<TextEdit> {
+    let at = |p: &Value| -> Option<(u32, u32)> {
+        Some((
+            u32::try_from(p["line"].as_u64()?).ok()?,
+            u32::try_from(p["character"].as_u64()?).ok()?,
+        ))
+    };
+    Some(TextEdit {
+        start: at(&e["range"]["start"])?,
+        end: at(&e["range"]["end"])?,
+        new_text: e["newText"].as_str()?.to_owned(),
+    })
+}
+
+/// Apply a server's edits to `text` (LF line endings). Overlapping edits are refused.
+pub fn apply_edits(text: &str, edits: &[TextEdit], enc: pos::Encoding) -> Result<String, String> {
+    // Byte offset where each line starts, and one past the end.
+    let mut starts = vec![0usize];
+    starts.extend(text.match_indices('\n').map(|(i, _)| i + 1));
+    let offset = |(line, col): (u32, u32)| -> Result<usize, String> {
+        let line = line as usize;
+        let Some(&start) = starts.get(line) else {
+            return if line == starts.len() {
+                Ok(text.len())
+            } else {
+                Err(format!(
+                    "an edit points past the end of the file (line {})",
+                    line + 1
+                ))
+            };
+        };
+        let end = starts.get(line + 1).map_or(text.len(), |e| e - 1);
+        let content = &text[start..end];
+        let chars = enc.from_lsp(content, col);
+        Ok(start
+            + content
+                .char_indices()
+                .nth(chars)
+                .map_or(content.len(), |(i, _)| i))
+    };
+    let mut spans = Vec::new();
+    for e in edits {
+        let (a, b) = (offset(e.start)?, offset(e.end)?);
+        if b < a {
+            return Err("an edit ends before it starts".into());
+        }
+        spans.push((a, b, e.new_text.as_str()));
+    }
+    spans.sort_by_key(|s| (s.0, s.1));
+    if spans.windows(2).any(|w| w[1].0 < w[0].1) {
+        return Err("the language server sent overlapping edits".into());
+    }
+    let mut out = text.to_owned();
+    for (a, b, new) in spans.into_iter().rev() {
+        out.replace_range(a..b, &new.replace("\r\n", "\n"));
+    }
+    Ok(out)
+}
+
 async fn client(mgr: &Arc<LspManager>, path: &Path) -> Result<Arc<Client>, String> {
     let ext = path
         .extension()
@@ -526,6 +676,63 @@ fn clip(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn edit(start: (u32, u32), end: (u32, u32), new: &str) -> TextEdit {
+        TextEdit {
+            start,
+            end,
+            new_text: new.into(),
+        }
+    }
+
+    #[test]
+    fn edits_apply_in_server_units() {
+        let text = "let é = old;\nold(é)\n";
+        let enc = pos::Encoding::Utf16;
+        let out = apply_edits(
+            text,
+            &[edit((1, 0), (1, 3), "new"), edit((0, 8), (0, 11), "new")],
+            enc,
+        );
+        assert_eq!(out.as_deref(), Ok("let é = new;\nnew(é)\n"));
+        // UTF-8 columns count bytes: `é` is two.
+        let out = apply_edits(text, &[edit((0, 9), (0, 12), "new")], pos::Encoding::Utf8);
+        assert_eq!(out.as_deref(), Ok("let é = new;\nold(é)\n"));
+        // An insert at the very end, and overlaps refused.
+        assert_eq!(
+            apply_edits("a\n", &[edit((1, 0), (1, 0), "b\n")], enc).as_deref(),
+            Ok("a\nb\n")
+        );
+        assert!(
+            apply_edits(
+                text,
+                &[edit((0, 4), (0, 9), "x"), edit((0, 8), (0, 10), "y")],
+                enc
+            )
+            .is_err()
+        );
+        assert!(apply_edits(text, &[edit((7, 0), (7, 1), "x")], enc).is_err());
+    }
+
+    #[test]
+    fn workspace_edits_in_both_forms() {
+        let uri = pos::path_to_uri(&std::env::temp_dir().join("a.rs"));
+        let e = json!({ "range": { "start": { "line": 0, "character": 1 },
+                                   "end": { "line": 0, "character": 2 } }, "newText": "x" });
+        let changes =
+            workspace_edit(&json!({ "changes": { uri.clone(): [e.clone()] } })).expect("changes");
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].1, [edit((0, 1), (0, 2), "x")]);
+        let doc = workspace_edit(&json!({ "documentChanges": [
+            { "textDocument": { "uri": uri, "version": 1 }, "edits": [e] }
+        ] }))
+        .expect("documentChanges");
+        assert_eq!(doc, changes);
+        let renames = workspace_edit(&json!({ "documentChanges": [
+            { "kind": "rename", "oldUri": "file:///a", "newUri": "file:///b" }
+        ] }));
+        assert!(renames.is_err_and(|e| e.contains("renames")));
+    }
 
     #[test]
     fn positions_from_symbols() {

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`bundle.toml`: marks a folder as a bundle. Every field is optional.",
+  "properties": {
+    "description": {
+      "default": "",
+      "type": "string"
+    },
+    "name": {
+      "default": "",
+      "description": "Shown in `/bundles`; the folder name when empty.",
+      "type": "string"
+    },
+    "version": {
+      "default": "",
+      "type": "string"
+    }
+  },
+  "title": "BundleFile",
+  "type": "object"
+}

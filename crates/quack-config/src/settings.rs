@@ -29,6 +29,8 @@ pub struct Settings {
     pub lsp: ItemToggles,
     /// Turn off hooks from lower layers; the system layer's hooks cannot be turned off.
     pub hooks: ItemToggles,
+    /// Turn off installed bundles (`<layer>/bundles/<name>/`) by folder name.
+    pub bundles: ItemToggles,
     pub defaults: DefaultsSettings,
     /// Keybinding overrides: action name → key chord.
     pub keys: BTreeMap<String, String>,

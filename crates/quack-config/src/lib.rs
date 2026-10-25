@@ -6,6 +6,7 @@
 //! then keys locked by the system layer's `[policy]` are reset to the system value.
 
 pub mod agent;
+pub mod bundle;
 mod diagnostic;
 mod edit;
 pub mod hooks;
@@ -28,6 +29,7 @@ mod state;
 mod trust;
 
 pub use agent::AgentFile;
+pub use bundle::{Bundle, BundleFile};
 pub use diagnostic::FileDiagnostic;
 pub use edit::{SettingRow, set_in_file};
 pub use hooks::HookFile;

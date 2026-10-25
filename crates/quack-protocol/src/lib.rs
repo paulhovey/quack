@@ -154,8 +154,15 @@ pub enum Op {
         value: String,
         scope: WriteScope,
     },
-    ForkSession {
-        at: EventIndex,
+    /// Continue in a new session that starts as a copy of this one (`/fork`); the original
+    /// stays as it is, to resume later.
+    ForkSession,
+    /// Write the transcript to a file (`/export`): `path` relative to the session's folder,
+    /// or a name made from the title. Answered with a `Notice` naming the file.
+    Export {
+        format: ExportFormat,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
     },
     /// Ask for the messages the conversation can go back to; answered with
     /// `Event::RewindPoints`.
@@ -281,6 +288,10 @@ pub enum Event {
     ApprovalRequest {
         call_id: CallId,
         request: ApprovalRequest,
+        /// The allow rules "always allow" would save (`shell:cargo test`); empty when no
+        /// rule can allow this call, so only "allow for this session" is offered.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        always: Vec<String>,
     },
     /// The model asks the user (`ask_user`); answered with `Op::AnswerQuestions`.
     Questions {
@@ -429,6 +440,12 @@ pub enum Event {
     Plan {
         checklist: String,
     },
+    /// Errors and warnings the language servers report, sent when the totals change
+    /// (the status bar's `✗1 ⚠3`).
+    Diagnostics {
+        errors: u32,
+        warnings: u32,
+    },
     // diagnostics
     /// Something worth knowing that is not a problem, e.g. an offer.
     Notice {
@@ -471,6 +488,14 @@ pub struct TurnOverrides {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportFormat {
+    #[default]
+    Markdown,
+    Json,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

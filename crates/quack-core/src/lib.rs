@@ -8,6 +8,7 @@ mod context;
 pub mod doctor;
 mod engine;
 mod env;
+mod export;
 mod handoff;
 mod hooks;
 mod lsp;
@@ -20,6 +21,7 @@ pub mod setup;
 mod startup;
 mod stats;
 mod turn;
+mod watch;
 
 pub use engine::{Engine, EngineHandle};
 pub use session::{Resume, list_sessions};

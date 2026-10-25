@@ -36,7 +36,7 @@ const EDIT_TOOLS: &[&str] = &[
 /// its system prompt and tools stay in the server's prompt cache from run to run.
 #[derive(Debug)]
 pub(crate) struct Pool {
-    config: Arc<Loaded>,
+    pub(crate) config: Arc<Loaded>,
     mcp: Arc<crate::mcp::Mcp>,
     lsp: Arc<quack_lsp::LspManager>,
     /// By `(agent, parent model, parent profile)`.

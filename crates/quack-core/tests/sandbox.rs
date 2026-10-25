@@ -98,7 +98,9 @@ async fn full_auto_stays_in_the_sandbox() {
             .expect("event")
             .expect("open");
         match e {
-            Event::ApprovalRequest { call_id, request } => {
+            Event::ApprovalRequest {
+                call_id, request, ..
+            } => {
                 assert!(
                     matches!(
                         request,

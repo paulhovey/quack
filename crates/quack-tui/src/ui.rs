@@ -793,6 +793,24 @@ fn draw_status(f: &mut Frame<'_>, app: &App, area: Rect) {
         let s = if n == 1 { "" } else { "s" };
         right.push(Span::styled(format!("  copied {n} char{s}"), t.ok));
     }
+    let (errors, warnings) = app.diagnostics;
+    if errors > 0 || warnings > 0 {
+        let (e, w) = if app.info.ui.ascii {
+            ("E", "W")
+        } else {
+            ("✗", "⚠")
+        };
+        right.push(Span::raw("  "));
+        if errors > 0 {
+            right.push(Span::styled(format!("{e}{errors}"), t.error));
+        }
+        if errors > 0 && warnings > 0 {
+            right.push(Span::raw(" "));
+        }
+        if warnings > 0 {
+            right.push(Span::styled(format!("{w}{warnings}"), t.warn));
+        }
+    }
     let issues = app.startup_issues();
     if issues > 0 && !app.panel_visible() {
         right.push(Span::styled(
@@ -1052,10 +1070,13 @@ fn draw_approval(f: &mut Frame<'_>, app: &App, above: Rect) {
             vec![Line::styled(arguments.clone(), t.dim)],
         ),
     };
-    // Borders, a blank row under the title and one above the keys, and the keys.
-    let max_body = usize::from(above.height.saturating_sub(6)).max(1);
+    // Borders, a blank row under the title and one above the keys, the rules `A` saves,
+    // and the keys.
+    let always = !approval.always.is_empty();
+    let extra = u16::from(always);
+    let max_body = usize::from(above.height.saturating_sub(6 + extra)).max(1);
     let shown = body.len().min(max_body);
-    let height = u16::try_from(shown).unwrap_or(0) + 5;
+    let height = u16::try_from(shown).unwrap_or(0) + 5 + extra;
     let area = Rect {
         x: above.x,
         y: above.bottom().saturating_sub(height),
@@ -1065,15 +1086,30 @@ fn draw_approval(f: &mut Frame<'_>, app: &App, above: Rect) {
     let mut lines: Vec<Line<'_>> = vec![Line::raw("")];
     lines.extend(body.into_iter().take(shown));
     lines.push(Line::raw(""));
-    lines.push(Line::from(vec![
+    if always {
+        lines.push(Line::styled(
+            format!("always allow saves {}", approval.always.join(", ")),
+            t.dim,
+        ));
+    }
+    let mut keys = vec![
         Span::styled(" y ", t.pill(t.ok)),
         Span::raw(" allow  "),
         Span::styled(" a ", t.pill(t.accent)),
-        Span::raw(" allow for this session  "),
+        Span::raw(" this session  "),
+    ];
+    if always {
+        keys.extend([
+            Span::styled(" A ", t.pill(t.accent)),
+            Span::raw(" always  "),
+        ]);
+    }
+    keys.extend([
         Span::styled(" n ", t.pill(t.error)),
         Span::raw(" deny  "),
         Span::styled("ctrl-c interrupts", t.dim),
-    ]));
+    ]);
+    lines.push(Line::from(keys));
     f.render_widget(Clear, area);
     let block = Block::bordered()
         .title(Span::styled(title, t.pill(t.warn)))
@@ -1587,6 +1623,30 @@ mod tests {
     }
 
     #[test]
+    fn status_bar_counts_language_server_problems() {
+        let mut app = App::new(test_info());
+        assert!(!render(&app, 100, 30).contains('⚠'));
+        app.on_engine(Event::Diagnostics {
+            errors: 1,
+            warnings: 3,
+        });
+        assert!(render(&app, 100, 30).contains("✗1 ⚠3"));
+        app.on_engine(Event::Diagnostics {
+            errors: 0,
+            warnings: 2,
+        });
+        let s = render(&app, 100, 30);
+        assert!(s.contains("⚠2") && !s.contains('✗'), "{s}");
+        app.info.ui.ascii = true;
+        assert!(render(&app, 100, 30).contains("W2"));
+        app.on_engine(Event::Diagnostics {
+            errors: 0,
+            warnings: 0,
+        });
+        assert!(!render(&app, 100, 30).contains("W2"));
+    }
+
+    #[test]
     fn startup_panel_waits_for_a_problem_or_a_slow_start() {
         let ready = |subsystem| Event::StartupProgress {
             subsystem,
@@ -1995,6 +2055,7 @@ mod tests {
                 cwd: ".".into(),
                 outside_sandbox: false,
             },
+            always: vec!["shell:cargo test".into()],
         });
         app.context = Some((12_345, 104_000));
         insta::assert_snapshot!(render(&app, 80, 24));

@@ -425,8 +425,9 @@ async fn servers_ask_the_user_and_the_model() {
         })
         .await;
     let (call_id, request) = loop {
-        if let Event::ApprovalRequest { call_id, request } =
-            engine.events.recv().await.expect("open")
+        if let Event::ApprovalRequest {
+            call_id, request, ..
+        } = engine.events.recv().await.expect("open")
         {
             break (call_id, request);
         }

@@ -24,6 +24,10 @@ pub fn all() -> Vec<(&'static str, Value)> {
         ("hook.json", gen_(schemars::schema_for!(HookFile))),
         ("agent.json", gen_(schemars::schema_for!(AgentFile))),
         (
+            "bundle.json",
+            gen_(schemars::schema_for!(crate::BundleFile)),
+        ),
+        (
             "compat.json",
             stub("Other-harness detection list (compat.toml)", "M2"),
         ),

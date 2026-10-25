@@ -99,9 +99,9 @@ pub(crate) const COMMANDS: &[Command] = &[
     c(
         "fork",
         &[],
-        "[--worktree]",
-        "Branch the session from here",
-        Some("M3"),
+        "",
+        "Go on in a copy of this session; the original stays as it was (/resume)",
+        None,
     ),
     c(
         "plan",
@@ -114,9 +114,9 @@ pub(crate) const COMMANDS: &[Command] = &[
     c(
         "export",
         &[],
-        "[md|json]",
-        "Write the transcript to a file",
-        Some("M3"),
+        "[md|json] [path]",
+        "Write the transcript to a file in the session's folder",
+        None,
     ),
     c(
         "compact",
@@ -143,8 +143,8 @@ pub(crate) const COMMANDS: &[Command] = &[
         "bundles",
         &[],
         "",
-        "Installed bundles of skills, commands and servers",
-        Some("M3"),
+        "Installed bundles of skills, commands and servers; turn each on or off",
+        None,
     ),
     c(
         "permissions",

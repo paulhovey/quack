@@ -37,7 +37,7 @@ deny  = ["shell:rm -rf *", "shell:curl *", "edit:.env*", "read:~/.ssh/**"]
 - Subjects are `shell:<pattern>`, `edit:<glob>`, `read:<glob>`, `mcp:<server>:<tool>`, `lsp:rename`, and `tool:<name>`.
 - A compiled-in **deny floor** (`rm -rf /`, `rm -rf ~`, `mkfs*`, `format <drive>:`, `dd of=/dev/*`, fork bombs) always applies and can only be extended, never removed (decided 2026-10-17).
 - Evaluation order: **deny > ask > allow > mode default**. Rules from all layers are combined, and policy-locked denies can't be removed.
-- Approval dialog choices: *Allow once*, *Allow for session*, *Always allow (writes rule to project or user config via toml_edit)*, *Deny*, *Deny with feedback* (the text goes to the model).
+- Approval dialog choices: *Allow once*, *Allow for session*, *Always allow (writes rule to project or user config via toml_edit; [as implemented](#always-allow-2026-10-25))*, *Deny*, *Deny with feedback* (the text goes to the model).
 
 ### Shell command analysis (tree-sitter)
 
@@ -68,8 +68,37 @@ With `lang-common` (the default build), `shell_split.rs` parses the line with tr
 - **Opaque (`None`)**: a tree with an `ERROR` or `MISSING` node, a computed command name (`$cmd`, `$(which rm)`, `"$X"`), and nesting deeper than 8 scripts.
 - **Writes** are found on every `file_redirect` in the tree: a `>`-family operator to anything but `/dev/null`/`NUL`/`$null`, a stream (`2>&1`) or a close (`>&-`).
 - A heredoc shows in its part as `<<EOF`. Its body is data, but `cat <<EOF | sh` still has `sh` as a part, which asks.
-- The bash grammar reads every shell, PowerShell included, as before. A PowerShell form that bash can't parse is opaque, which asks more, never less.
+- The bash grammar read every shell, PowerShell included, until PowerShell got its own reader ([2026-10-25](#powershell-2026-10-25)).
 - Tests: `shell_split.rs` runs the hand-written cases against both splitters, plus compound forms, heredocs, literal scripts and opaque forms against the AST one.
+
+#### PowerShell (2026-10-25)
+
+When the shell is `pwsh` or `powershell` (`[tools] shell`, or what `auto` finds), `Permissions.powershell` is set and lines are read by `quack-tools/src/ps_split.rs` with **tree-sitter-powershell** (behind `lang-common`; one crate, MIT). The output is the same `Split`, so the rules above apply unchanged.
+
+- Every `command` node is a part, inner ones first: script blocks (`ForEach-Object { … }`, `Where-Object { … }`), `( … )`, `$( … )` (also inside strings), and the bodies of `if`, `foreach`, `while`, `switch`, `try` and functions.
+- `& 'C:\…\git.exe' status` reads as `C:\…\git.exe status`; `. ./x.ps1` keeps its dot. Literal `iex '…'` / `Invoke-Expression [-Command] '…'` and `pwsh`/`powershell … -Command '…'` (any abbreviation) are read like the line itself.
+- A .NET method call (`[IO.File]::Delete('x')`, `(Get-Item x).Delete()`, `$f.Delete()`) is a part of its own. Without this a line with no `command` node would pass as read-only.
+- **Opaque (`None`)**: a parse error, `& $cmd` or another computed name, a provider path used as a variable (`${C:\x.txt} = 1`, which writes the file; `${env:X}` is fine), nesting deeper than 8.
+- **Writes**: `>`-style file redirections, except to `$null` or `NUL`.
+- **Matching**: shell rules and the deny floor ignore case. Deny and ask rules (and the floor) also match the command under each of its aliases (`Remove-Item`/`rm`/`del`/`rd`/…, `Invoke-WebRequest`/`iwr`/`curl`/`wget`, `Invoke-Expression`/`iex`, …; `PS_ALIASES`), so `shell:rm *` stops `Remove-Item x`. Allow rules never match through an alias.
+- **Read-only cmdlets** joined the list (`Get-Item`, `Test-Path`, `Select-Object`, `Where-Object`, `Measure-Object`, `Format-*`, `gci`, `gc`, `sls`, …). `ForEach-Object` is left out: `gci | % Delete` calls a method on every file.
+- cmd.exe lines are still read as bash, and without `lang-common` PowerShell lines go through the hand-written splitter as before. Both only ever ask more.
+
+#### Always allow (2026-10-25)
+
+`Permissions::rules_for(subject)` gives the exact rules that allow one call and nothing broader:
+
+- A shell line gives one `shell:<command>` per command that doesn't only read (or the first command, when all of them only read).
+- An edit or read gives `edit:`/`read:` with the path relative to the workspace, using `/`. An MCP tool gives `mcp:<server>/<tool>`.
+- No rule is offered for a line that can't be split, a redirection to a file, a command outside the sandbox (allow rules never cover those), or text holding glob characters.
+
+The rules ride on `Event::ApprovalRequest.always`. The TUI shows them above the keys and saves them on `A`; ACP offers an "Always allow (`rule`)" option. `ApprovalDecision::AlwaysAllow { scope: Project }` allows the call for the session and calls `Loaded::save_allow_rules`, which works as follows:
+
+- If the project's `.quack/` is loaded (trusted or settings-only) and still matches its trust record, the rules go in its `config.toml`, and the trust record is written again so the edit doesn't make the project untrusted. Otherwise they go in the user's `config.toml`.
+- A key that isn't set yet is written as `allow = { append = [...] }`, so the lower layers' rules still apply. An existing list grows in place, keeping comments, and duplicates are skipped.
+- A policy lock on `permissions.allow` refuses the write. The call is then allowed for the session only, with a warning.
+
+MCP sampling approvals don't offer "always".
 
 ## OS sandboxing (`quack-sandbox`)
 

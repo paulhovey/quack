@@ -549,6 +549,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "bundles": {
+      "$ref": "#/$defs/ItemToggles",
+      "default": {
+        "disabled": []
+      },
+      "description": "Turn off installed bundles (`<layer>/bundles/<name>/`) by folder name."
+    },
     "context": {
       "$ref": "#/$defs/ContextSettings",
       "default": {

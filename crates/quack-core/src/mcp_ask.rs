@@ -186,6 +186,7 @@ impl Sampler {
                     self.setup.model_ref, request.max_tokens
                 ),
             },
+            always: Vec::new(),
         });
         let asked = Instant::now();
         let answer = tokio::select! {

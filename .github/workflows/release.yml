@@ -3,6 +3,9 @@ name: Release
 # Push a tag such as v0.2.0 to build every target and publish a GitHub release with:
 #   quack-<target>.{tar.gz,zip}          binary + defaults bundle (the normal install)
 #   quack-plucked-<target>.{tar.gz,zip}  binary only
+#   quack[-plucked]_<version>_<arch>.deb and .rpm (Linux)
+#   quack.cdx.json                       CycloneDX SBOM of the binary's dependencies
+#   quack.rb, quack-plucked.rb           Homebrew formulas for a tap
 #   install.sh, install.ps1, SHA256SUMS
 on:
   push:
@@ -38,6 +41,10 @@ jobs:
       - run: cargo build --release --locked -p quack-cli --target ${{ matrix.target }}
       - run: scripts/package.sh ${{ matrix.target }}
         shell: bash
+      - run: sudo apt-get install -y --no-install-recommends rpm
+        if: matrix.musl
+      - run: scripts/package-linux.sh ${{ matrix.target }} "${GITHUB_REF_NAME#v}"
+        if: matrix.musl && startsWith(github.ref, 'refs/tags/')
       - uses: actions/upload-artifact@v4
         with:
           name: dist-${{ matrix.target }}
@@ -57,7 +64,14 @@ jobs:
           path: dist
           merge-multiple: true
       - run: cp scripts/install.sh scripts/install.ps1 dist/
+      - run: cargo install cargo-cyclonedx --locked --version 0.5.9
+      - run: |
+          cargo cyclonedx -q --manifest-path crates/quack-cli/Cargo.toml -f json \
+            --spec-version 1.5 --target all --override-filename quack.cdx
+          cp crates/quack-cli/quack.cdx.json dist/
       - run: cd dist && sha256sum * > SHA256SUMS
+      # Formulas for the tap; they name the archives' sums, so they are not in SHA256SUMS.
+      - run: scripts/homebrew.sh "$GITHUB_REF_NAME" dist/SHA256SUMS dist
       - run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes dist/*
         env:
           GH_TOKEN: ${{ github.token }}

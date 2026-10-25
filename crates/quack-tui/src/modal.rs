@@ -2039,6 +2039,70 @@ pub(crate) fn providers(
 }
 
 /// The `/skills` modal: installed skills; ⏎ puts `/<name> ` in the input.
+pub(crate) fn bundles(bundles: &[quack_config::Bundle], theme: &Theme) -> Modal {
+    let items = if bundles.is_empty() {
+        vec![placeholder(
+            "no bundles",
+            "A bundle is a folder with a bundle.toml that groups skills, commands and \
+             mcp.d, hooks.d or profiles.d files. Copy one into bundles/ in your config folder \
+             (`quack config paths` shows where) or a trusted project's .quack/.",
+            theme,
+        )]
+    } else {
+        bundles
+            .iter()
+            .map(|b| {
+                let name = if b.file.name.is_empty() {
+                    b.id.clone()
+                } else {
+                    b.file.name.clone()
+                };
+                let (state, style) = if b.enabled {
+                    ("on", theme.ok)
+                } else {
+                    ("off", theme.dim)
+                };
+                let mut detail = vec![Line::styled(name.clone(), style), Line::raw("")];
+                if !b.file.description.is_empty() {
+                    detail.push(Line::raw(b.file.description.clone()));
+                    detail.push(Line::raw(""));
+                }
+                detail.push(field(theme, "state", state.to_owned()));
+                if !b.file.version.is_empty() {
+                    detail.push(field(theme, "version", b.file.version.clone()));
+                }
+                detail.push(field(theme, "holds", b.contents.clone()));
+                detail.push(field(theme, "layer", b.layer.to_string()));
+                detail.push(field(theme, "folder", b.dir.display().to_string()));
+                detail.push(Line::raw(""));
+                detail.push(Line::styled(
+                    format!(
+                        "⏎ turn it {} (saved to [bundles] disabled in your config.toml)",
+                        if b.enabled { "off" } else { "on" }
+                    ),
+                    theme.dim,
+                ));
+                ModalItem {
+                    label: name,
+                    hint: format!("{state} · {}", b.layer),
+                    detail,
+                    action: Some(format!("/bundles toggle {}", b.id)),
+                    run: true,
+                    alt: None,
+                    charts: Vec::new(),
+                }
+            })
+            .collect()
+    };
+    Modal::new(
+        "Bundles",
+        vec![ModalTab {
+            title: "Bundles".into(),
+            items,
+        }],
+    )
+}
+
 pub(crate) fn skills(skills: &[quack_protocol::SkillInfo], theme: &Theme) -> Modal {
     let items = if skills.is_empty() {
         vec![placeholder(

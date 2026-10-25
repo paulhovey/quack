@@ -14,6 +14,8 @@ pub mod outline;
 mod patch;
 pub mod paths;
 pub mod permissions;
+#[cfg(feature = "lang-common")]
+mod ps_split;
 mod read;
 mod registry;
 mod search;

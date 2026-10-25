@@ -151,7 +151,13 @@ corp-tools/
 - Installed by copying the folder into `<layer>/bundles/`; removed by deleting it. `/bundles` lists them and turns them on or off. There is no marketplace and no download command, which keeps the no-egress promise; companies distribute bundles the way they distribute other files.
 - Bundle contents load as if they were in the layer that holds the bundle, so trust rules apply unchanged: a bundle in an untrusted project does nothing until the project is trusted.
 - Name clashes: a file outside any bundle wins over a bundle's, and two bundles with the same item is a warning that names both.
-- Planned for M3, with skills and hooks.
+
+As implemented (2026-10-25), in `quack-config/src/bundle.rs`:
+
+- A folder in `<layer>/bundles/` with a `bundle.toml` (`name`, `version`, `description`, all optional; schema `bundle.json`) is a bundle. A folder without the file is skipped with a warning.
+- `Loaded::item_layers()` puts each enabled bundle's folder just before its layer's own folder. So every kind of item folder (`mcp.d`, `hooks.d`, `lsp.d`, `agents.d`, `providers.d`, `profiles.d`, `commands`, `grammars`) loads from bundles with no change to its loader. Skills get the same order in `env::skills`. A layer's own file wins over a bundle's with the same name.
+- Bundles are found only in active layers, so a project's bundles need the project to be trusted. Clashes between two bundles in one layer are a startup warning naming both; the later folder by name wins.
+- `[bundles] disabled = ["name"]` turns one off by folder name (`ItemToggles`, like `[mcp]`). `/bundles` lists the bundles with their state, version, contents (`2 skills, 1 MCP server`), layer and folder. Enter on one writes the new list to the user `config.toml` and reloads.
 
 ## Open questions
 

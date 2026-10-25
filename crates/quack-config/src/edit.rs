@@ -8,10 +8,11 @@ use std::path::{Path, PathBuf};
 use serde_json::Value as Json;
 use toml::Value;
 
-use crate::load::{Loaded, Origin, parse_override};
+use crate::load::{Loaded, Origin, ProjectStatus, parse_override};
 use crate::merge;
 use crate::paths::LayerKind;
 use crate::settings::Settings;
+use crate::trust::{self, TrustDecision};
 
 /// One effective setting, for the `/config` editor.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,37 +88,107 @@ impl Loaded {
     }
 }
 
-/// Set one dotted key in a `config.toml`, creating the file and tables as needed.
-pub fn set_in_file(file: &Path, key: &str, value: &Value) -> Result<(), String> {
+impl Loaded {
+    /// Add "always allow" rules to `[permissions] allow`: in the project's
+    /// `.quack/config.toml` when `project` is asked for and that file is loaded (its trust
+    /// is recorded again, so the edit doesn't make the project untrusted), else in the
+    /// user's. Returns the file written.
+    pub fn save_allow_rules(&self, project: bool, rules: &[String]) -> Result<PathBuf, String> {
+        if self.settings.policy.locks("permissions.allow") {
+            return Err("`permissions.allow` is locked by the system policy".into());
+        }
+        let trusted = match self.project {
+            ProjectStatus::Trusted => Some(TrustDecision::Trusted),
+            ProjectStatus::SettingsOnly => Some(TrustDecision::SettingsOnly),
+            _ => None,
+        };
+        // Only while the files still match the trust given to them.
+        let in_project = trusted.filter(|_| {
+            project
+                && trust::lookup(
+                    &self.dirs.user_data,
+                    &self.dirs.workspace_root,
+                    &self.dirs.project,
+                )
+                .is_some_and(|f| f.current)
+        });
+        let layer = if in_project.is_some() {
+            LayerKind::Project
+        } else {
+            LayerKind::User
+        };
+        let file = self
+            .layer_file(layer)
+            .ok_or_else(|| format!("the {layer} layer has no directory"))?;
+        add_to_list(&file, "permissions.allow", rules)?;
+        if let Some(decision) = in_project {
+            self.trust_project(decision)?;
+        }
+        Ok(file)
+    }
+}
+
+/// Add items to a list setting in a `config.toml`, skipping ones already there. A key
+/// that isn't set yet is written as `{ append = [...] }`, so the lists of lower layers
+/// still apply.
+pub fn add_to_list(file: &Path, key: &str, items: &[String]) -> Result<(), String> {
     let text = match std::fs::read_to_string(file) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(format!("cannot read {}: {e}", file.display())),
     };
-    let updated = set_in_text(&text, key, value).map_err(|e| format!("{}: {e}", file.display()))?;
-    if let Some(dir) = file.parent() {
-        std::fs::create_dir_all(dir)
-            .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-    }
-    let tmp = file.with_extension("toml.tmp");
-    std::fs::write(&tmp, updated)
-        .and_then(|()| std::fs::rename(&tmp, file))
-        .map_err(|e| {
-            let _ = std::fs::remove_file(&tmp);
-            format!("cannot write {}: {e}", file.display())
-        })
+    let updated =
+        add_to_list_text(&text, key, items).map_err(|e| format!("{}: {e}", file.display()))?;
+    write_atomic(file, &updated)
 }
 
-/// The edit itself, on text: keeps everything else in the document untouched.
-pub(crate) fn set_in_text(text: &str, key: &str, value: &Value) -> Result<String, String> {
+pub(crate) fn add_to_list_text(text: &str, key: &str, items: &[String]) -> Result<String, String> {
     let mut doc: toml_edit::DocumentMut = text
         .parse()
         .map_err(|e: toml_edit::TomlError| format!("not valid TOML: {}", e.message()))?;
+    let (table, leaf) = table_for(&mut doc, key)?;
+    let array = match table.get_mut(leaf) {
+        None => {
+            let mut append = toml_edit::InlineTable::new();
+            append.insert("append", toml_edit::Value::Array(toml_edit::Array::new()));
+            table.insert(leaf, toml_edit::value(append));
+            table
+                .get_mut(leaf)
+                .and_then(|i| i.as_inline_table_mut())
+                .and_then(|t| t.get_mut("append"))
+                .and_then(toml_edit::Value::as_array_mut)
+        }
+        Some(item) => match item.as_value_mut() {
+            Some(toml_edit::Value::Array(a)) => Some(a),
+            Some(toml_edit::Value::InlineTable(t)) => {
+                t.get_mut("append").and_then(toml_edit::Value::as_array_mut)
+            }
+            _ => item
+                .as_table_mut()
+                .and_then(|t| t.get_mut("append"))
+                .and_then(|i| i.as_array_mut()),
+        },
+    }
+    .ok_or_else(|| format!("`{key}` is not a list"))?;
+    for item in items {
+        if !array.iter().any(|v| v.as_str() == Some(item.as_str())) {
+            array.push(item.as_str());
+        }
+    }
+    let out = doc.to_string();
+    toml::from_str::<Settings>(&out).map_err(|e| e.message().to_owned())?;
+    Ok(out)
+}
+
+/// The table holding a dotted key's leaf, created as needed, and the leaf's name.
+fn table_for<'a, 'k>(
+    doc: &'a mut toml_edit::DocumentMut,
+    key: &'k str,
+) -> Result<(&'a mut toml_edit::Table, &'k str), String> {
     let parts: Vec<&str> = key.split('.').collect();
     let Some((leaf, parents)) = parts.split_last() else {
         return Err("empty key".into());
     };
-    let new_value = to_edit_value(value)?;
     let mut table = doc.as_table_mut();
     for p in parents {
         let entry = table
@@ -128,6 +199,41 @@ pub(crate) fn set_in_text(text: &str, key: &str, value: &Value) -> Result<String
             _ => return Err(format!("`{p}` in `{key}` is not a table")),
         };
     }
+    Ok((table, leaf))
+}
+
+fn write_atomic(file: &Path, text: &str) -> Result<(), String> {
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    }
+    let tmp = file.with_extension("toml.tmp");
+    std::fs::write(&tmp, text)
+        .and_then(|()| std::fs::rename(&tmp, file))
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            format!("cannot write {}: {e}", file.display())
+        })
+}
+
+/// Set one dotted key in a `config.toml`, creating the file and tables as needed.
+pub fn set_in_file(file: &Path, key: &str, value: &Value) -> Result<(), String> {
+    let text = match std::fs::read_to_string(file) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(format!("cannot read {}: {e}", file.display())),
+    };
+    let updated = set_in_text(&text, key, value).map_err(|e| format!("{}: {e}", file.display()))?;
+    write_atomic(file, &updated)
+}
+
+/// The edit itself, on text: keeps everything else in the document untouched.
+pub(crate) fn set_in_text(text: &str, key: &str, value: &Value) -> Result<String, String> {
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .map_err(|e: toml_edit::TomlError| format!("not valid TOML: {}", e.message()))?;
+    let new_value = to_edit_value(value)?;
+    let (table, leaf) = table_for(&mut doc, key)?;
     match table.get_mut(leaf) {
         // Replace the value but keep the comment after it.
         Some(toml_edit::Item::Value(old)) => {
@@ -229,6 +335,48 @@ mod tests {
         assert!(typo.is_err_and(|e| e.contains("asci")));
         let wrong = set_in_text("", "ui.ascii", &Value::String("yes".into()));
         assert!(wrong.is_err());
+    }
+
+    #[test]
+    fn list_additions_append_and_keep_the_rest() {
+        let rules = ["shell:cargo test".to_owned(), "edit:src/a.rs".to_owned()];
+        // Unset: appended to the lower layers' rules, not replacing them.
+        let out = add_to_list_text("# mine\n[ui]\nascii = true\n", "permissions.allow", &rules)
+            .expect("edit");
+        assert!(out.starts_with("# mine\n[ui]\nascii = true\n"), "{out}");
+        assert!(
+            out.contains("allow = { append = [\"shell:cargo test\", \"edit:src/a.rs\"] }"),
+            "{out}"
+        );
+        // Again: nothing doubled.
+        assert_eq!(
+            add_to_list_text(&out, "permissions.allow", &rules).expect("edit"),
+            out
+        );
+        // A list stays a list, with its comment.
+        let out = add_to_list_text(
+            "[permissions]\nallow = [\"shell:ls\"] # mine\n",
+            "permissions.allow",
+            &rules[..1],
+        )
+        .expect("edit");
+        assert!(
+            out.contains("allow = [\"shell:ls\", \"shell:cargo test\"] # mine"),
+            "{out}"
+        );
+        let out = add_to_list_text(
+            "[permissions.allow]\nappend = [\"shell:ls\"]\n",
+            "permissions.allow",
+            &rules[..1],
+        )
+        .expect("edit");
+        assert!(
+            out.contains("append = [\"shell:ls\", \"shell:cargo test\"]"),
+            "{out}"
+        );
+        assert!(
+            add_to_list_text("[permissions]\nallow = 3\n", "permissions.allow", &rules).is_err()
+        );
     }
 
     #[test]

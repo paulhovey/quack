@@ -30,6 +30,18 @@ const KEYWORDS: &[&str] = &[
     "function", "select", "{", "}", "[[", "]]", "!",
 ];
 
+/// Split a line for the shell that runs it: PowerShell lines are read with the PowerShell
+/// grammar when it is compiled in (`ps_split`), everything else as bash.
+pub(crate) fn split_for(cmd: &str, powershell: bool) -> Option<Split> {
+    #[cfg(feature = "lang-common")]
+    if powershell {
+        return crate::ps_split::split(cmd);
+    }
+    #[cfg(not(feature = "lang-common"))]
+    let _ = powershell;
+    split(cmd)
+}
+
 pub(crate) fn split(cmd: &str) -> Option<Split> {
     #[cfg(feature = "lang-common")]
     {

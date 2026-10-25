@@ -7,7 +7,7 @@ use std::time::Duration;
 use quack_core::EngineHandle;
 use quack_protocol::{
     ApprovalDecision, ApprovalRequest, CallId, Event, InputItem, LoadState, ModelId, Op,
-    ProviderId, ProviderModels, Subsystem, TurnOverrides,
+    ProviderId, ProviderModels, Subsystem, TurnOverrides, WriteScope,
 };
 use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
@@ -304,7 +304,11 @@ impl Run {
                     "content": [content],
                 }));
             }
-            Event::ApprovalRequest { call_id, request } => self.ask(call_id, request),
+            Event::ApprovalRequest {
+                call_id,
+                request,
+                always,
+            } => self.ask(call_id, request, &always),
             Event::Questions { call_id, .. } => {
                 // ACP has no questions yet: the model decides and says what it assumed.
                 let _ = self
@@ -394,7 +398,7 @@ impl Run {
     }
 
     /// Ask the editor, without blocking the session: the user may cancel meanwhile.
-    fn ask(&mut self, call_id: CallId, request: ApprovalRequest) {
+    fn ask(&mut self, call_id: CallId, request: ApprovalRequest, always: &[String]) {
         let (name, title, detail) = match &request {
             ApprovalRequest::Shell {
                 command,
@@ -431,11 +435,7 @@ impl Run {
                 "title": title,
                 "content": [text_content(&detail)],
             },
-            "options": [
-                {"optionId": "allow", "name": "Allow", "kind": "allow_once"},
-                {"optionId": "allow-session", "name": "Allow for this session", "kind": "allow_always"},
-                {"optionId": "deny", "name": "Deny", "kind": "reject_once"},
-            ],
+            "options": options(always),
         });
         let peer = self.peer.clone();
         let ops = self.ops.clone();
@@ -449,6 +449,9 @@ impl Run {
                 Some(PermissionOutcome::Selected { option_id }) => match option_id.as_str() {
                     "allow" => ApprovalDecision::AllowOnce,
                     "allow-session" => ApprovalDecision::AllowSession,
+                    "allow-always" => ApprovalDecision::AlwaysAllow {
+                        scope: WriteScope::Project,
+                    },
                     _ => ApprovalDecision::Deny,
                 },
                 _ => ApprovalDecision::Deny,
@@ -495,4 +498,27 @@ fn choices(providers: &[ProviderModels]) -> Vec<(String, String)> {
             })
         })
         .collect()
+}
+
+/// The choices for an approval. "Always allow" is offered when a rule can allow the call,
+/// and names the rule it saves to `[permissions] allow`.
+fn options(always: &[String]) -> Value {
+    let mut out = vec![
+        json!({"optionId": "allow", "name": "Allow", "kind": "allow_once"}),
+        json!({"optionId": "allow-session", "name": "Allow for this session", "kind": "allow_always"}),
+    ];
+    if !always.is_empty() {
+        let rules = always
+            .iter()
+            .map(|r| format!("`{r}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push(json!({
+            "optionId": "allow-always",
+            "name": format!("Always allow ({rules})"),
+            "kind": "allow_always",
+        }));
+    }
+    out.push(json!({"optionId": "deny", "name": "Deny", "kind": "reject_once"}));
+    Value::Array(out)
 }

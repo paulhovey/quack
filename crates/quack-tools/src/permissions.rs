@@ -11,7 +11,7 @@
 //! rule match) and nothing is redirected to a file. A line the splitter can't read
 //! (backticks, subshells, heredocs, `if`/`for`) gets no allow rule at all.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use quack_config::glob_match;
 use quack_config::settings::{PermissionMode, PermissionSettings};
@@ -65,6 +65,31 @@ const READ_ONLY_COMMANDS: &[&str] = &[
     "Get-ChildItem",
     "Get-Content",
     "Select-String",
+    // PowerShell's own, matched ignoring case. Not `ForEach-Object`, which can call a
+    // method on every input (`gci | % Delete`), nor `sort`, which writes with `-o`.
+    "gci",
+    "gc",
+    "gi",
+    "gl",
+    "gcm",
+    "sls",
+    "Get-Item",
+    "Get-ItemProperty",
+    "Get-Location",
+    "Get-Command",
+    "Get-FileHash",
+    "Get-Date",
+    "Test-Path",
+    "Resolve-Path",
+    "Split-Path",
+    "Join-Path",
+    "Select-Object",
+    "Sort-Object",
+    "Where-Object",
+    "Measure-Object",
+    "Format-Table",
+    "Format-List",
+    "Out-String",
 ];
 const READ_ONLY_GIT: &[&str] = &[
     "status",
@@ -150,17 +175,62 @@ fn normalize(cmd: &str) -> String {
     cmd.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// PowerShell names for the same command, for deny and ask rules: `shell:rm *` also
+/// stops `Remove-Item x` and `del x`, and `shell:curl *` stops `iwr`.
+const PS_ALIASES: &[&[&str]] = &[
+    &["remove-item", "rm", "del", "erase", "rd", "ri", "rmdir"],
+    &["get-childitem", "ls", "dir", "gci"],
+    &["get-content", "cat", "type", "gc"],
+    &["set-content", "sc"],
+    &["add-content", "ac"],
+    &["copy-item", "cp", "copy", "cpi"],
+    &["move-item", "mv", "move", "mi"],
+    &["rename-item", "ren", "rni"],
+    &["new-item", "ni"],
+    &["invoke-webrequest", "iwr", "curl", "wget"],
+    &["invoke-restmethod", "irm"],
+    &["invoke-expression", "iex"],
+    &["invoke-command", "icm"],
+    &["invoke-item", "ii"],
+    &["start-process", "start", "saps"],
+    &["stop-process", "kill", "spps"],
+    &["set-location", "cd", "chdir", "sl"],
+    &["write-output", "echo", "write"],
+];
+
+/// A lowercased PowerShell command and the same command under each of its aliases.
+fn ps_variants(cmd: &str) -> Vec<String> {
+    let lower = cmd.to_lowercase();
+    let (first, rest) = lower.split_once(' ').unwrap_or((lower.as_str(), ""));
+    let program = first.rsplit(['/', '\\']).next().unwrap_or(first);
+    let program = program.strip_suffix(".exe").unwrap_or(program);
+    let mut out = vec![lower.clone()];
+    if let Some(group) = PS_ALIASES.iter().find(|g| g.contains(&program)) {
+        for name in group.iter().filter(|n| **n != first) {
+            out.push(if rest.is_empty() {
+                (*name).to_owned()
+            } else {
+                format!("{name} {rest}")
+            });
+        }
+    }
+    out
+}
+
 /// A shell command line as the rules see it.
 struct ShellLine {
     whole: String,
     split: Option<Split>,
+    /// Run by PowerShell: names match ignoring case, and deny and ask rules see aliases.
+    powershell: bool,
 }
 
 impl ShellLine {
-    fn new(cmd: &str) -> Self {
+    fn new(cmd: &str, powershell: bool) -> Self {
         Self {
             whole: normalize(cmd),
-            split: shell_split::split(cmd),
+            split: shell_split::split_for(cmd, powershell),
+            powershell,
         }
     }
 
@@ -173,24 +243,48 @@ impl ShellLine {
         )
     }
 
-    /// Some rule matches the whole line or one of its commands.
-    fn hit(&self, rules: &[Rule], root: &Path) -> bool {
-        self.pieces().any(|p| {
-            let one = Subject::Shell(p.to_owned());
-            rules.iter().any(|r| r.matches(&one, root))
-        })
+    /// A shell pattern matches one command; for PowerShell, ignoring case and, with
+    /// `aliases`, under any of the command's names.
+    fn matches(&self, pattern: &str, piece: &str, aliases: bool) -> bool {
+        if !self.powershell {
+            return glob_match(pattern, piece);
+        }
+        let pattern = pattern.to_lowercase();
+        if aliases {
+            ps_variants(piece).iter().any(|v| glob_match(&pattern, v))
+        } else {
+            glob_match(&pattern, &piece.to_lowercase())
+        }
+    }
+
+    fn rule_matches(&self, rule: &Rule, piece: &str, aliases: bool) -> bool {
+        match rule {
+            Rule::Shell(pattern) => self.matches(pattern, piece, aliases),
+            _ => false,
+        }
+    }
+
+    /// The whole line or one of its commands is on the built-in deny list.
+    fn on_floor(&self) -> bool {
+        self.pieces()
+            .any(|p| DENY_FLOOR.iter().any(|f| self.matches(f, p, true)))
+    }
+
+    /// Some rule matches the whole line or one of its commands (deny and ask rules).
+    fn hit(&self, rules: &[Rule]) -> bool {
+        self.pieces()
+            .any(|p| rules.iter().any(|r| self.rule_matches(r, p, true)))
     }
 
     /// Every command is allowed by a rule or only reads, at least one by a rule, and
     /// nothing is written through a redirection.
-    fn allowed(&self, rules: &[Rule], root: &Path) -> bool {
+    fn allowed(&self, rules: &[Rule]) -> bool {
         let Some(split) = self.split.as_ref().filter(|s| !s.writes) else {
             return false;
         };
         let mut matched = false;
         for p in &split.parts {
-            let one = Subject::Shell(p.clone());
-            if rules.iter().any(|r| r.matches(&one, root)) {
+            if rules.iter().any(|r| self.rule_matches(r, p, false)) {
                 matched = true;
             } else if !read_only_command(p) {
                 return false;
@@ -221,6 +315,8 @@ pub struct Permissions {
     pub plan: bool,
     /// `/sandbox off`: shell commands run without the OS sandbox this session.
     pub sandbox_off: bool,
+    /// Commands run in PowerShell (`pwsh`, `powershell`), so they are read as PowerShell.
+    pub powershell: bool,
 }
 
 impl Permissions {
@@ -242,6 +338,7 @@ impl Permissions {
             memory_writes_ask: false,
             plan: false,
             sandbox_off: false,
+            powershell: false,
         };
         (perms, warnings)
     }
@@ -251,6 +348,80 @@ impl Permissions {
         match subject {
             Subject::Edits(paths) => self.session.extend(paths.into_iter().map(Subject::Edit)),
             other => self.session.push(other),
+        }
+    }
+
+    /// The allow rules that "always allow" saves for `subject`: exact, so they allow this
+    /// call and nothing broader. Empty when no rule can allow it (a line the splitter
+    /// can't read, a redirection, a command outside the sandbox, a name with a wildcard).
+    pub fn rules_for(&self, subject: &Subject) -> Vec<String> {
+        let path = |kind: &str, p: &Path| {
+            // Relative to the workspace when inside it, always with `/`.
+            let rel = p.strip_prefix(&self.root).unwrap_or(p);
+            let mut text = String::new();
+            for c in rel.components() {
+                match c {
+                    Component::Prefix(pre) => text.push_str(&pre.as_os_str().to_string_lossy()),
+                    Component::RootDir => text.push('/'),
+                    other => {
+                        if !text.is_empty() && !text.ends_with('/') {
+                            text.push('/');
+                        }
+                        text.push_str(&other.as_os_str().to_string_lossy());
+                    }
+                }
+            }
+            let plain = !text.is_empty() && !text.contains(['*', '?', '[', ']', '{', '}', '\\']);
+            plain.then(|| format!("{kind}:{text}"))
+        };
+        match subject {
+            Subject::Shell(cmd) => {
+                let Some(split) =
+                    shell_split::split_for(cmd, self.powershell).filter(|s| !s.writes)
+                else {
+                    return Vec::new();
+                };
+                let parts: Vec<String> = split
+                    .parts
+                    .iter()
+                    .map(|p| normalize(p))
+                    .filter(|p| !read_only_command(p))
+                    .collect();
+                if parts.is_empty() {
+                    // Only reading commands: one rule for the first lets the line through.
+                    return split
+                        .parts
+                        .first()
+                        .map(|p| normalize(p))
+                        .filter(|p| !p.contains('*'))
+                        .map(|p| vec![format!("shell:{p}")])
+                        .unwrap_or_default();
+                }
+                if parts.iter().any(|p| p.contains('*')) {
+                    return Vec::new();
+                }
+                let mut out: Vec<String> = Vec::new();
+                for p in parts {
+                    let rule = format!("shell:{p}");
+                    if !out.contains(&rule) {
+                        out.push(rule);
+                    }
+                }
+                out
+            }
+            Subject::Edit(p) => path("edit", p).into_iter().collect(),
+            Subject::Edits(ps) => {
+                let rules: Vec<_> = ps.iter().map(|p| path("edit", p)).collect();
+                if rules.iter().any(Option::is_none) {
+                    return Vec::new();
+                }
+                rules.into_iter().flatten().collect()
+            }
+            Subject::Read(p) => path("read", p).into_iter().collect(),
+            Subject::Mcp { server, tool, .. } if !format!("{server}{tool}").contains('*') => {
+                vec![format!("mcp:{server}/{tool}")]
+            }
+            _ => Vec::new(),
         }
     }
 
@@ -293,22 +464,22 @@ impl Permissions {
             return if ask { Decision::Ask } else { Decision::Allow };
         }
         let shell = match subject {
-            Subject::Shell(cmd) | Subject::ShellOutsideSandbox(cmd) => Some(ShellLine::new(cmd)),
+            Subject::Shell(cmd) | Subject::ShellOutsideSandbox(cmd) => {
+                Some(ShellLine::new(cmd, self.powershell))
+            }
             _ => None,
         };
         if let Some(line) = &shell
-            && line
-                .pieces()
-                .any(|p| DENY_FLOOR.iter().any(|f| glob_match(f, p)))
+            && line.on_floor()
         {
             return Decision::Deny("blocked by the built-in safety list".into());
         }
         let hit = |rules: &[Rule]| match &shell {
-            Some(line) => line.hit(rules, &self.root),
+            Some(line) => line.hit(rules),
             None => rules.iter().any(|r| r.matches(subject, &self.root)),
         };
         let allowed = || match &shell {
-            Some(line) => line.allowed(&self.allow, &self.root),
+            Some(line) => line.allowed(&self.allow),
             None => self.allow.iter().any(|r| r.matches(subject, &self.root)),
         };
         if hit(&self.deny) {
@@ -570,6 +741,124 @@ mod tests {
         p.allow_session(shell("make"));
         assert_eq!(p.check(&shell("make")), Decision::Allow);
         assert_eq!(p.check(&shell("make install")), Decision::Ask);
+    }
+
+    #[test]
+    fn always_rules_allow_exactly_the_call() {
+        let p = perms(PermissionMode::Ask, &[], &[]);
+        let rules = |s: &Subject| p.rules_for(s);
+        assert_eq!(rules(&shell("cargo  test -q")), ["shell:cargo test -q"]);
+        assert_eq!(
+            rules(&shell("cargo fmt && cargo test | tail -5")),
+            ["shell:cargo fmt", "shell:cargo test"]
+        );
+        assert_eq!(rules(&shell("cat a | head")), ["shell:cat a"]);
+        assert!(rules(&shell("echo hi > notes.txt")).is_empty());
+        assert!(rules(&shell("rm *.o")).is_empty());
+        assert!(rules(&Subject::ShellOutsideSandbox("make".into())).is_empty());
+        assert_eq!(
+            rules(&Subject::Edit("/repo/src/a.rs".into())),
+            ["edit:src/a.rs"]
+        );
+        assert!(rules(&Subject::Edit("/repo/src/[id].tsx".into())).is_empty());
+        assert_eq!(
+            rules(&mcp("create_issue", false, false)),
+            ["mcp:gh/create_issue"]
+        );
+
+        // Saved as allow rules, they let the same call through and nothing more.
+        for (subject, other) in [
+            (
+                shell("cargo fmt && cargo test"),
+                shell("cargo fmt && cargo publish"),
+            ),
+            (shell("cat a | head"), shell("cat b | head")),
+            (
+                Subject::Edit("/repo/src/a.rs".into()),
+                Subject::Edit("/repo/src/b.rs".into()),
+            ),
+            (
+                mcp("create_issue", false, false),
+                mcp("delete_issue", false, false),
+            ),
+        ] {
+            let saved = rules(&subject);
+            let allow: Vec<&str> = saved.iter().map(String::as_str).collect();
+            let after = perms(PermissionMode::Ask, &allow, &[]);
+            assert_eq!(after.check(&subject), Decision::Allow, "{saved:?}");
+            assert_eq!(after.check(&other), Decision::Ask, "{saved:?}");
+        }
+    }
+
+    #[test]
+    fn powershell_rules_ignore_case_and_see_aliases() {
+        let mut p = perms(
+            PermissionMode::FullAuto,
+            &["shell:cargo test*"],
+            &["shell:rm *", "shell:curl *"],
+        );
+        p.powershell = true;
+        for bad in [
+            "Remove-Item x",
+            "remove-item -Recurse build",
+            "del x",
+            "git status; rm x",
+            "iwr https://example.com",
+            "Invoke-WebRequest https://example.com",
+            "REMOVE-ITEM -Recurse -Force C:\\*",
+        ] {
+            assert!(matches!(p.check(&shell(bad)), Decision::Deny(_)), "{bad}");
+        }
+        p.mode = PermissionMode::Ask;
+        assert_eq!(p.check(&shell("Cargo Test --all")), Decision::Allow);
+        assert_eq!(
+            p.check(&shell("cargo test | Select-Object -Last 5")),
+            Decision::Allow
+        );
+        assert_eq!(p.check(&shell("cargo test; New-Item x")), Decision::Ask);
+        // Aliases broaden deny and ask rules only, never allow rules.
+        let mut q = perms(PermissionMode::Ask, &["shell:cat a.txt"], &[]);
+        q.powershell = true;
+        assert_eq!(q.check(&shell("cat a.txt")), Decision::Allow);
+        assert_eq!(q.check(&shell("CAT a.txt")), Decision::Allow);
+        assert_eq!(q.check(&shell("Get-Content a.txt")), Decision::Ask);
+    }
+
+    #[cfg(feature = "lang-common")]
+    #[test]
+    fn powershell_lines_are_read_as_powershell() {
+        let mut p = perms(PermissionMode::FullAuto, &[], &["shell:Remove-Item *"]);
+        p.powershell = true;
+        // Inside a script block, a sub-expression and a literal script.
+        for bad in [
+            "gci | ForEach-Object { Remove-Item $_ }",
+            "Write-Output \"$(rm x)\"",
+            "iex 'Remove-Item x'",
+            "pwsh -c 'Get-ChildItem; rm x'",
+        ] {
+            assert!(matches!(p.check(&shell(bad)), Decision::Deny(_)), "{bad}");
+        }
+        // Planning: reading cmdlets run, .NET calls and writes don't.
+        p.plan = true;
+        for ok in [
+            "Get-ChildItem -Recurse src | Select-String foo",
+            "Get-Content a.txt | Select-Object -First 10",
+            "if (Test-Path x) { Get-Content x }",
+            "git log -3 2>&1",
+        ] {
+            assert_eq!(p.check(&shell(ok)), Decision::Allow, "{ok}");
+        }
+        for bad in [
+            "[IO.File]::Delete('x')",
+            "(Get-Item x).Delete()",
+            "gci | % Delete",
+            "Get-Content a > b",
+            "Set-Content a hi",
+            "& $cmd",
+            "${C:\\x.txt} = 1",
+        ] {
+            assert!(matches!(p.check(&shell(bad)), Decision::Deny(_)), "{bad}");
+        }
     }
 
     #[test]

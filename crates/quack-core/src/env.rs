@@ -176,10 +176,19 @@ pub(crate) fn commands(
 
 pub(crate) fn skills(config: &Loaded) -> skills::Found {
     let d = &config.dirs;
-    let mut roots: Vec<(String, std::path::PathBuf)> = vec![
-        ("system".into(), d.system.join("skills")),
-        ("user".into(), d.user_config.join("skills")),
-    ];
+    // A layer's enabled bundles come just before the layer, which wins over them.
+    let bundles = |layer: quack_config::LayerKind| {
+        config
+            .bundles
+            .iter()
+            .filter(move |b| b.enabled && b.layer == layer)
+            .map(move |b| (format!("{layer} bundle {}", b.id), b.dir.join("skills")))
+    };
+    let mut roots: Vec<(String, std::path::PathBuf)> = Vec::new();
+    roots.extend(bundles(quack_config::LayerKind::System));
+    roots.push(("system".into(), d.system.join("skills")));
+    roots.extend(bundles(quack_config::LayerKind::User));
+    roots.push(("user".into(), d.user_config.join("skills")));
     if let Some(h) = &d.home {
         roots.push((
             "user (~/.agents/skills)".into(),
@@ -191,6 +200,7 @@ pub(crate) fn skills(config: &Loaded) -> skills::Found {
         .iter()
         .any(|(k, _)| *k == quack_config::LayerKind::Project);
     if project_trusted {
+        roots.extend(bundles(quack_config::LayerKind::Project));
         roots.push(("project".into(), d.project.join("skills")));
     }
     roots.push((

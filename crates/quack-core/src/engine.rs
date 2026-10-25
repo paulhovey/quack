@@ -9,8 +9,8 @@ use quack_config::{LayerKind, Loaded};
 use quack_lsp::LspManager;
 use quack_mcp::{McpManager, ServerAsk};
 use quack_protocol::{
-    CallId, EngineError, EngineErrorKind, Event, InputItem, InstructionFile, Op, SessionId,
-    SessionInfo, SessionSummary, TurnId, WriteScope,
+    CallId, EngineError, EngineErrorKind, Event, ExportFormat, InputItem, InstructionFile, Op,
+    SessionId, SessionInfo, SessionSummary, TurnId, WriteScope,
 };
 use quack_providers::{Message, Provider};
 use quack_tools::Permissions;
@@ -84,6 +84,8 @@ enum Queued {
     Reload,
     /// `/plan accept`, into this mode.
     Accept(String),
+    /// `/fork`.
+    Fork,
 }
 
 /// The conversation once a model is ready.
@@ -251,6 +253,7 @@ impl Engine {
         self.start_mcp().await;
         self.start_lsp().await;
         self.load_hooks().await;
+        crate::watch::spawn(self.config_tx.subscribe(), self.tx.clone());
         let mut startup = tokio::spawn(startup::run(
             self.config.clone(),
             self.tx.clone(),
@@ -550,6 +553,100 @@ impl Engine {
             items,
         });
         Some(history)
+    }
+
+    /// `/export`: the transcript so far, from the session log.
+    fn export(&mut self, format: ExportFormat, path: Option<&str>) {
+        self.sync_log();
+        let Some(entry) = self
+            .log
+            .as_ref()
+            .and_then(|l| l.lock().ok().map(|l| l.entry.clone()))
+        else {
+            return self
+                .warn("nothing to export yet: the session starts with its first message".into());
+        };
+        let records = match session::project_sessions(&self.config).read(&entry) {
+            Ok(r) => r,
+            Err(e) => return self.warn(format!("cannot read the session log: {e}")),
+        };
+        let (_, items, _) = session::replay(&records);
+        let started = quack_store::time::date(entry.started);
+        let header = crate::export::Header {
+            id: &self.session.id.0,
+            title: self.title.as_deref(),
+            model: &entry.model,
+            started: &started,
+        };
+        let text = crate::export::render(format, &header, &items);
+        let name = path
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map_or_else(|| crate::export::file_name(&header, format), str::to_owned);
+        let file = std::path::Path::new(&self.session.cwd)
+            .join(quack_config::expand_home(&name, &|k| std::env::var_os(k)));
+        match std::fs::write(&file, text) {
+            Ok(()) => self.emit(Event::Notice {
+                message: format!("exported the transcript to {}", file.display()),
+            }),
+            Err(e) => self.warn(format!("cannot write {}: {e}", file.display())),
+        }
+    }
+
+    /// `/fork`: go on in a new session that starts as a copy of this one, with its undo
+    /// points. The original is left as it is; `session_start` names it as `parent`.
+    fn fork_session(&mut self) {
+        self.sync_log();
+        let Some((entry, dir)) = self
+            .log
+            .as_ref()
+            .and_then(|l| l.lock().ok().map(|l| (l.entry.clone(), l.dir())))
+        else {
+            return self
+                .warn("nothing to fork yet: the session starts with its first message".into());
+        };
+        let ps = session::project_sessions(&self.config);
+        let id = new_session_id();
+        let forked = ps.read(&entry).and_then(|records| {
+            let mut log = ps.create(&id.0, &entry.model)?;
+            log.append(
+                "session_start",
+                serde_json::json!({
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "os": std::env::consts::OS,
+                    "cwd": self.session.cwd,
+                    "model": entry.model,
+                    "profile": self.session.profile,
+                    "parent": entry.id,
+                    "at": records.len(),
+                }),
+            )?;
+            for r in records
+                .iter()
+                .filter(|r| !matches!(r.kind.as_str(), "session_start" | "resume"))
+            {
+                log.copy(r)?;
+            }
+            copy_dir(&dir.join("checkpoints"), &log.dir().join("checkpoints"))?;
+            Ok(log)
+        });
+        let log = match forked {
+            Ok(log) => log,
+            Err(e) => return self.warn(format!("cannot fork this session: {e}")),
+        };
+        let parent = std::mem::replace(&mut self.session.id, id);
+        self.log = Some(Arc::new(Mutex::new(log)));
+        self.title = self.title.take().map(|t| format!("{t} (fork)"));
+        self.sync_log();
+        self.emit(Event::SessionConfigured {
+            session: self.session.clone(),
+        });
+        let short: String = parent.0.chars().take(8).collect();
+        self.emit(Event::Notice {
+            message: format!(
+                "forked: this is a new session, and the original is unchanged (/resume {short})"
+            ),
+        });
     }
 
     /// Replace the conversation with a saved session or an empty one, keeping the model.
@@ -1347,6 +1444,7 @@ impl Engine {
         done: &mpsc::Sender<(TurnId, Vec<Message>)>,
         reload: &mpsc::Sender<Reload>,
     ) -> bool {
+        tracing::debug!(op = op_name(&op), "op");
         match op {
             Op::UserTurn { items, .. } => {
                 if self.reloading {
@@ -1453,6 +1551,11 @@ impl Engine {
             // task has handed the history back, so they wait in the queue like turns do.
             Op::ResumeSession { id } => self.queue_switch(Some(id), done, reload),
             Op::NewSession => self.queue_switch(None, done, reload),
+            Op::ForkSession => {
+                self.queued.push_back(Queued::Fork);
+                self.next_queued(done, reload);
+            }
+            Op::Export { format, path } => self.export(format, path.as_deref()),
             Op::Compact { focus } => {
                 if !self.started || self.running.is_some() {
                     self.emit(Event::TurnQueued {
@@ -1651,9 +1754,6 @@ impl Engine {
                 }
             }
             Op::Shutdown => return false,
-            other => self.emit(Event::Warning {
-                message: format!("{} is not implemented yet", op_name(&other)),
-            }),
         }
         true
     }
@@ -1680,6 +1780,7 @@ impl Engine {
                 Some(Queued::Compact(focus)) => self.start_compact(focus, done.clone()),
                 Some(Queued::Reload) => self.begin_reload(reload.clone()),
                 Some(Queued::Accept(mode)) => self.accept_plan(&mode, done.clone()),
+                Some(Queued::Fork) => self.fork_session(),
                 None => break,
             }
         }
@@ -2218,13 +2319,34 @@ fn op_name(op: &Op) -> &'static str {
         Op::DeleteMemory { .. } => "delete_memory",
         Op::SetTitle { .. } => "set_title",
         Op::SaveSetting { .. } => "save_setting",
-        Op::ForkSession { .. } => "fork_session",
+        Op::ForkSession => "fork_session",
+        Op::Export { .. } => "export",
         Op::ListRewindPoints => "list_rewind_points",
         Op::Rewind { .. } => "rewind",
         Op::ReloadConfig => "reload_config",
         Op::TrustProject { .. } => "trust_project",
         Op::Shutdown => "shutdown",
     }
+}
+
+/// Copy a folder's files, recursively; a missing folder copies nothing.
+fn copy_dir(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    let entries = match std::fs::read_dir(from) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    std::fs::create_dir_all(to)?;
+    for e in entries {
+        let e = e?;
+        let target = to.join(e.file_name());
+        if e.file_type()?.is_dir() {
+            copy_dir(&e.path(), &target)?;
+        } else {
+            std::fs::copy(e.path(), target)?;
+        }
+    }
+    Ok(())
 }
 
 /// Time-ordered id. Replaced by UUID v7 when `quack-store` lands.

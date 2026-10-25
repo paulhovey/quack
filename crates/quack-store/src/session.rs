@@ -223,6 +223,19 @@ impl SessionLog {
         self.file.flush()
     }
 
+    /// Append a record read from another log, keeping its time (`/fork`).
+    pub fn copy(&mut self, r: &Record) -> std::io::Result<()> {
+        let mut m = Map::new();
+        m.insert("v".into(), Value::from(FORMAT_VERSION));
+        m.insert("t".into(), Value::from(r.kind.as_str()));
+        m.insert("ts".into(), Value::from(r.ts.as_str()));
+        m.extend(r.data.clone());
+        let mut line = serde_json::to_string(&Value::Object(m)).unwrap_or_default();
+        line.push('\n');
+        self.file.write_all(line.as_bytes())?;
+        self.file.flush()
+    }
+
     /// Durably store everything so far and update the index (end of each turn).
     pub fn sync(&mut self, title: Option<&str>, turns: u32) -> std::io::Result<()> {
         self.file.sync_data()?;
