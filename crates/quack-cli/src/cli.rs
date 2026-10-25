@@ -121,7 +121,7 @@ pub(crate) enum Cmd {
     Logout { provider: Option<String> },
     /// Run the eval task suite with the selected model and profile.
     Eval(EvalArgs),
-    /// Run as a Zed Agent Client Protocol agent on stdio.
+    /// Run as an Agent Client Protocol agent on stdio, for editors such as Zed.
     #[cfg(feature = "acp")]
     Acp,
 }

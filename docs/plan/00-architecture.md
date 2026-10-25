@@ -175,7 +175,7 @@ Path handling rules, enforced by a lint/test helper:
 | HTTP | `reqwest` 0.13 (rustls with aws-lc-rs, no native-tls) | SSE is decoded by a small in-house parser. aws-lc-sys needs a C toolchain (clang on Windows ARM64); watch the CI matrix |
 | TLS | `rustls`, `rustls-platform-verifier` (via reqwest) | OS trust store |
 | MCP | `rmcp` | Official Rust SDK |
-| ACP | `agent-client-protocol` | Feature-gated |
+| ACP | none: wire types and JSON-RPC in `quack-acp` (the official crates change serde_json features) | Feature-gated |
 | LSP | `lsp-types`, `async-lsp` (evaluate) or hand-rolled JSON-RPC | |
 | Tree-sitter | `tree-sitter`, `tree-sitter-<lang>` behind features | |
 | Tokenizers | `tokenizers` (HF), `tiktoken-rs` | Feature-gated; heavy |

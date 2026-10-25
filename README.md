@@ -384,6 +384,35 @@ env = { JIRA_URL = "https://jira.example.com", JIRA_TOKEN = { keyring = "jira" }
 - `/copy` copies through the terminal (OSC 52), so it works over SSH.
 - `quack exec "..."` runs one turn without the UI, for scripts and CI.
 
+### Editors (ACP)
+
+`quack acp` speaks the [Agent Client Protocol](https://agentclientprotocol.com) on stdio,
+so editors that host ACP agents (Zed, JetBrains, Neovim through CodeCompanion or avante,
+Emacs through agent-shell, VS Code through an ACP extension) can run quack in their own
+agent panel. In Zed, add it to `settings.json`:
+
+```json
+{
+  "agent_servers": {
+    "quack": { "type": "custom", "command": "quack", "args": ["acp"] }
+  }
+}
+```
+
+- Each editor thread is one quack session in the editor's project folder, with that
+  folder's config, profiles and `.quack/` (once trusted), and is saved like any other, so
+  the editor can reopen it and `quack --resume` can too.
+- The editor shows the reply, the reasoning, tool calls with their output or diff, the plan
+  and the context used, and asks for approvals: allow once, allow for the session, or deny.
+- The permission modes (`ask`, `auto-edit`, `full-auto`, `read-only`, `plan`) and the model
+  are pickers in the editor.
+- MCP servers set up in the editor are added to `mcp.d` for that session (stdio and
+  streamable HTTP).
+- Files you mention are passed as their path; file contents the editor attaches are quoted.
+- Command-line settings still apply: `quack -m ollama/qwen3-coder --profile qwen-code acp`.
+- Not yet: images from the editor, questions from `ask_user` (they are skipped, as in
+  `quack exec`), and file reads and terminals through the editor.
+
 ### Project
 
 - Apache-2.0.
@@ -394,7 +423,6 @@ env = { JIRA_URL = "https://jira.example.com", JIRA_TOKEN = { keyring = "jira" }
 ### Planned
 
 Not available yet:
-- Editor integration (ACP).
 - Sandboxing on Windows.
 - Renaming symbols through the language server.
 - `/fork` and `/export`.

@@ -28,7 +28,7 @@ A fast, context-efficient coding agent for **self-hosted and open-weight models*
 | 09 | [MCP](09-mcp.md) | `mcp.d/` TOML, rmcp client, deferred tools, lifecycle |
 | 10 | [LSP](10-lsp.md) | `lsp.d/` TOML, client manager, diagnostics feedback, LSP tools |
 | 11 | [Security](11-security.md) | Permissions, sandboxing per OS, offline/egress policy, hooks, audit log |
-| 12 | [Headless & ACP](12-headless-and-acp.md) | `exec` mode, stream-json output, Zed Agent Client Protocol |
+| 12 | [Headless & ACP](12-headless-and-acp.md) | `exec` mode, stream-json output, Agent Client Protocol |
 | 13 | [Testing & evals](13-testing-and-evals.md) | Unit/snapshot/fixture tests, invariants, model compatibility matrix, perf budgets |
 | 14 | [Packaging & distribution](14-packaging-and-distribution.md) | Defaults bundle, release artifacts, enterprise and air-gapped builds |
 | — | [Roadmap](roadmap.md) | Milestones M0–M6 with exit criteria |

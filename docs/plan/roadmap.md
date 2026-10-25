@@ -243,6 +243,7 @@ Landings (2026-10-21):
 ## M6 — Editor integration & extras
 
 - ACP agent (`quack acp`), tested with Zed
+  - Landed 2026-10-24: `quack acp` on stdio with its own wire types and JSON-RPC loop (no new crates); one engine per session in the session's folder, the editor's MCP servers added to `mcp.d`, `session/load` replaying saved sessions, approvals through `session/request_permission`, modes and the model as pickers, cancel ([12](12-headless-and-acp.md#as-implemented-2026-10-24)). Mock-server tests and a hand check over stdio; not yet run inside Zed or another editor. Still open: images, `fs`/`terminal` through the editor, slash commands, registry listing
 - Optional: code-execution sandbox tool (maki-style), repo map, OpenTelemetry export (opt-in), daemon/socket mode, quack-as-MCP-server
 
 ## Cross-cutting, every milestone

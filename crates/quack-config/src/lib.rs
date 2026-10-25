@@ -52,10 +52,19 @@ pub const ENV_PREFIX: &str = "QUACK_";
 /// Name of the project-layer directory inside a repository.
 pub const PROJECT_DIR_NAME: &str = ".quack";
 
-/// Load `mcp.d/*.toml` from every active layer, merged by id. A project's files load
-/// only when the project is trusted.
+/// Load `mcp.d/*.toml` from every active layer, merged by id, then the servers the client
+/// supplied (`LoadOptions::mcp`). A project's files load only when the project is trusted.
 pub fn load_mcp(loaded: &Loaded) -> Vec<Item<McpServerFile>> {
     let mut items = load_items::<McpServerFile>(&loaded.item_layers(), "mcp.d");
+    for (id, file) in &loaded.opts.mcp {
+        items.retain(|i| i.id != *id);
+        items.push(Item {
+            id: id.clone(),
+            path: std::path::PathBuf::from("(from the editor)"),
+            layer: LayerKind::User,
+            state: ItemState::Loaded(file.clone()),
+        });
+    }
     items::apply_toggles(
         &mut items,
         &loaded.settings.mcp.disabled,

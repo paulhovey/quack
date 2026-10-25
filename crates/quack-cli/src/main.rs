@@ -46,6 +46,7 @@ fn main() -> ExitCode {
         cwd,
         model: cli.global.model.clone(),
         overrides,
+        mcp: Vec::new(),
     };
     let loaded = match quack_config::load(&opts) {
         Ok(l) => l,
@@ -108,10 +109,30 @@ fn main() -> ExitCode {
         Cmd::Logout { provider } => block_on(commands::logout(&loaded, provider)),
         Cmd::Eval(args) => block_on(commands::eval(&loaded, opts, args)),
         #[cfg(feature = "acp")]
-        Cmd::Acp => {
-            eprintln!("ACP support lands in M6 (docs/plan/12-headless-and-acp.md)");
-            code(exit::AGENT_ERROR)
-        }
+        Cmd::Acp => block_on(async move {
+            // Each ACP session loads the config of its own folder, with this command
+            // line's model and settings.
+            let spawn = move |start: quack_acp::SessionStart| {
+                let mut o = opts.clone();
+                o.cwd = start.cwd;
+                o.mcp = start.mcp;
+                let loaded = quack_config::load(&o).map_err(|e| e.to_string())?;
+                let engine = Engine::spawn_with(Arc::new(loaded), start.resume);
+                if plan {
+                    let _ = engine.ops.try_send(plan_op());
+                }
+                Ok(engine)
+            };
+            let stdin = tokio::io::stdin();
+            let stdout = tokio::io::stdout();
+            match quack_acp::serve(stdin, stdout, Arc::new(spawn)).await {
+                Ok(()) => exit::OK,
+                Err(e) => {
+                    tracing::error!(%e, "acp connection failed");
+                    exit::AGENT_ERROR
+                }
+            }
+        }),
         Cmd::Tui => block_on(async move {
             let config = Arc::new(loaded);
             let engine = Engine::spawn_with(config.clone(), resume);

@@ -20,6 +20,9 @@ pub struct LoadOptions {
     pub model: Option<String>,
     /// `-c key=value`, applied in order. Values parse as TOML, falling back to a string.
     pub overrides: Vec<String>,
+    /// MCP servers a client supplied (an ACP editor's `session/new`), keyed by id. They
+    /// load after every layer's `mcp.d`, so one replaces a file with the same id.
+    pub mcp: Vec<(String, crate::McpServerFile)>,
 }
 
 impl LoadOptions {
