@@ -191,7 +191,9 @@ impl Default for Http {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Discovery {
-    /// Query the models endpoint at startup (async) and merge with `[[models]]`.
+    /// Always query the models endpoint at startup (async) and merge with `[[models]]`.
+    /// Without it, startup queries only when no models are listed, or the model to use is
+    /// not listed or lacks a context window or a price.
     pub enabled: bool,
     /// Model id globs to keep.
     pub include: Vec<String>,

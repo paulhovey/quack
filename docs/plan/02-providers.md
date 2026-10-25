@@ -209,7 +209,7 @@ Unknown keys are an error (`deny_unknown_fields`), except inside `extra_body` an
 
 ### Discovered vs. declared models
 
-When discovery is enabled, `/models` results are merged with `[[models]]`. Declared entries win per field. Discovered-only models get `context_window` from the response when the server reports it (vLLM reports `max_model_len`, llama.cpp reports `n_ctx` via `/props`). Otherwise they are marked *unknown context*, and the UI asks for a value the first time the model is used, then writes it back into the TOML with `toml_edit`.
+Startup lists models when `enabled` is set, when no models are listed, or when the model to use is not listed or lacks `context_window` or `cost` (2026-10-24: before, an unlisted model in a provider with any `[[models]]` got neither, so evals on it went unpriced). A failed listing warns unless only the price was missing. The `/models` picker always lists. When discovery is enabled, `/models` results are merged with `[[models]]`. Declared entries win per field. Discovered-only models get `context_window` from the response when the server reports it (vLLM reports `max_model_len`, llama.cpp reports `n_ctx` via `/props`). Otherwise they are marked *unknown context*, and the UI asks for a value the first time the model is used, then writes it back into the TOML with `toml_edit`.
 
 ## Tool-call normalization
 
@@ -299,12 +299,13 @@ One model flag, `vision = true`, turns image support on; without it the tool is 
 
 | Adapter | User message | Tool result |
 |---|---|---|
-| `openai-chat` | `image_url` content parts before the text | the caption stays the tool message's string; the pixels follow the whole run of tool results as one `user` message of image parts (chat-completions servers take image parts only on user content, so the run of tool results stays contiguous) |
+| `openai-chat` | `image_url` content parts before the text | the caption stays the tool message's string; the pixels follow the whole run of tool results as one `user` message of image parts (chat-completions servers take image parts only on user content, so the run of tool results stays contiguous). Mistral's API takes `image_url` chunks in the tool message, so there they go inline, and since it rejects a `user` message right after a `tool` one (an interrupted turn leaves one), an empty assistant reply goes between |
 | `anthropic-messages` | `image` blocks (base64 `source`) before the text | `image` blocks inside the `tool_result` content |
 | `openai-responses` | `input_image` parts before `input_text` | `input_image` parts inside `function_call_output.output` |
-| `ollama` | `images: [<base64>...]` on the message | the same `images` field |
+| `ollama` | `images: [<base64>...]` on the message | the same `images` field (the API takes it on every role) |
 
 - **Tokens are estimated by pixels, not base64 length** — `(w*h)/750`, floor 256, 1000 when the header gave no size — so a 1 MB PNG does not read as hundreds of thousands of tokens and trigger compaction for nothing. Pruning that collapses a tool result to its caption drops the pixels (the model can call `view_image` again).
+- **A model without vision never gets pixels**: `turn::request` swaps each message's images for a note (`[1 image not sent: this model takes no images]`), so a `/models` switch, a resume on another model or a planner without vision still works. The history keeps the images.
 - **History keeps them inline**: images ride inside the messages, so the session log replays them exactly on resume with no sidecar files.
 
 ## Servers, not engines (2026-10-18)

@@ -60,7 +60,7 @@ fn image_part(img: &quack_protocol::Image) -> Value {
 
 /// Images from tool results ride in a user message after the run of tool messages:
 /// many chat-completions servers take image parts only on user content, and a tool
-/// message's `content` must stay a string.
+/// message's `content` must stay a string. Mistral is the exception (`message_json`).
 fn flush_images(messages: &mut Vec<Value>, pending: &mut Vec<Value>) {
     if !pending.is_empty() {
         messages.push(json!({
@@ -98,7 +98,8 @@ pub(crate) fn build_body(req: &ChatRequest, dialect: Dialect) -> Value {
     let mut pending: Vec<Value> = Vec::new();
     for m in &req.messages {
         match m {
-            Message::Tool { images, .. } if !images.is_empty() => {
+            // Mistral takes image chunks in the tool message itself (`message_json`).
+            Message::Tool { images, .. } if !images.is_empty() && !shape.mistral => {
                 // The text goes back as the tool result; the pixels follow as user parts.
                 messages.push(message_json(m, &shape));
                 pending.extend(images.iter().map(image_part));
@@ -109,6 +110,14 @@ pub(crate) fn build_body(req: &ChatRequest, dialect: Dialect) -> Value {
             }
             m => {
                 flush_images(&mut messages, &mut pending);
+                // Mistral rejects a user or system message right after a tool result
+                // (an interrupted turn leaves one), so an empty reply goes between.
+                if shape.mistral
+                    && !matches!(m, Message::Assistant { .. })
+                    && messages.last().is_some_and(|v| v["role"] == "tool")
+                {
+                    messages.push(json!({ "role": "assistant", "content": "" }));
+                }
                 messages.push(message_json(m, &shape));
             }
         }
@@ -283,9 +292,17 @@ fn message_json(m: &Message, shape: &Shape<'_>) -> Value {
             v
         }
         Message::Tool {
-            call_id, content, ..
+            call_id,
+            content,
+            images,
         } => {
             let mut v = json!({ "role": "tool", "tool_call_id": id(call_id), "content": content });
+            // Elsewhere the pixels follow the run of tool results (`build_body`).
+            if shape.mistral && !images.is_empty() {
+                let mut parts = vec![json!({ "type": "text", "text": content })];
+                parts.extend(images.iter().map(image_part));
+                v["content"] = Value::Array(parts);
+            }
             if shape.mistral
                 && let Some(name) = shape.names.get(call_id.as_str())
             {
@@ -735,6 +752,47 @@ mod tests {
             json!([{"type": "image_url", "image_url": {"url": "data:image/png;base64,eHk="}}])
         );
         assert_eq!(m[5]["content"], "and?");
+    }
+
+    #[test]
+    fn mistral_takes_tool_images_inline_and_no_user_after_a_tool() {
+        let mut req = mistral_history();
+        let Some(Message::Tool { images, .. }) = req.messages.last_mut() else {
+            panic!("history ends with a tool result")
+        };
+        images.push(img());
+        // An interrupted turn: the next request follows the tool result directly.
+        req.messages.push(Message::User {
+            content: "stop, try this".into(),
+            images: Vec::new(),
+        });
+        let b = build_body(&req, Dialect::Mistral);
+        let m = b["messages"].as_array().expect("messages");
+        let roles: Vec<&str> = m.iter().filter_map(|v| v["role"].as_str()).collect();
+        assert_eq!(
+            roles,
+            ["system", "user", "assistant", "tool", "assistant", "user"]
+        );
+        assert_eq!(
+            m[3]["content"],
+            json!([
+                {"type": "text", "text": "fn main() {}"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,eHk="}},
+            ])
+        );
+        assert_eq!(m[4]["content"], "");
+        // Other servers keep the tool string and get no inserted reply.
+        let b = build_body(&req, Dialect::Standard);
+        let roles: Vec<String> = b["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .filter_map(|v| v["role"].as_str().map(str::to_owned))
+            .collect();
+        assert_eq!(
+            roles,
+            ["system", "user", "assistant", "tool", "user", "user"]
+        );
     }
 
     fn mistral_history() -> ChatRequest {

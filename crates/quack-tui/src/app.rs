@@ -485,11 +485,13 @@ pub(crate) struct Approval {
     pub request: ApprovalRequest,
 }
 
-/// An image attached to the next message, with the path it came from.
+/// An image attached to the next message: the path the engine loads, and the size its
+/// header gave, for the chip.
 #[derive(Debug, Clone)]
 pub(crate) struct Attachment {
     pub path: String,
-    pub image: quack_protocol::Image,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
 }
 
 #[derive(Debug)]
@@ -2006,6 +2008,9 @@ impl App {
         }
         self.scroll.set(0);
         if text.starts_with('/') {
+            // Commands that send a turn (skills, `/plan <task>`) take the attachments;
+            // the rest leave them waiting for the next message.
+            self.attachments = attachments;
             return self.execute(&text);
         }
         self.send(text, attachments);
@@ -2042,25 +2047,22 @@ impl App {
 
     /// A paste that is nothing but image file paths attaches them instead of inserting
     /// text: that is what dropping a file on the terminal sends. Anything else is pasted.
+    /// Only the headers are read here; the engine encodes the files when the turn is sent.
     fn attach_pasted(&mut self, text: &str) -> bool {
-        let tokens: Vec<&str> = text.split_whitespace().collect();
-        if tokens.is_empty()
-            || !tokens.iter().all(|t| {
-                let p = std::path::Path::new(t.strip_prefix("file://").unwrap_or(t));
-                p.is_file() && quack_protocol::image::is_image(p)
-            })
-        {
+        let Some(paths) = dropped_images(text) else {
             return false;
-        }
-        for token in tokens {
-            let raw = token.strip_prefix("file://").unwrap_or(token);
-            match quack_protocol::Image::from_path(std::path::Path::new(raw)) {
-                Ok(image) => self.attachments.push(Attachment {
-                    path: raw.to_owned(),
-                    image,
-                }),
-                Err(e) => self.note(e),
+        };
+        for (attachment, len) in paths {
+            if len > quack_protocol::image::MAX_RAW_BYTES as u64 {
+                self.note(format!(
+                    "{}: the image is {} KB; the limit is {} KB, so downscale it first",
+                    attachment.path,
+                    len / 1024,
+                    quack_protocol::image::MAX_RAW_BYTES / 1024
+                ));
+                continue;
             }
+            self.attachments.push(attachment);
         }
         true
     }
@@ -2161,7 +2163,8 @@ impl App {
                 || self.custom.iter().any(|c| c.name == name)
                 || self.mcp_prompts.iter().any(|c| c.name == name) =>
             {
-                self.send(text.trim().to_owned(), Vec::new());
+                let attachments = std::mem::take(&mut self.attachments);
+                self.send(text.trim().to_owned(), attachments);
             }
             None => self.note(format!("unknown command /{name}; /help lists commands")),
         }
@@ -2424,7 +2427,8 @@ impl App {
                 "off" | "exit" => self.end_plan(),
                 task => {
                     self.set_mode("plan");
-                    self.send(task.to_owned(), Vec::new());
+                    let attachments = std::mem::take(&mut self.attachments);
+                    self.send(task.to_owned(), attachments);
                 }
             },
             "context" => {
@@ -2601,6 +2605,99 @@ fn last_code_block(text: &str) -> Option<String> {
         }
     }
     last
+}
+
+/// The image files a paste names, as attachments with their byte lengths, when it names nothing
+/// else. Terminals send a dropped file as its path: quoted or backslash-escaped when it
+/// has spaces, or as a `file://` URL.
+fn dropped_images(text: &str) -> Option<Vec<(Attachment, u64)>> {
+    let image = |p: &str| {
+        let path = std::path::Path::new(p);
+        let (_, width, height, len) = quack_protocol::image::probe_file(path)?;
+        let attachment = Attachment {
+            path: p.to_owned(),
+            width,
+            height,
+        };
+        Some((attachment, len))
+    };
+    let whole = text.trim();
+    // One path with bare spaces, as some terminals paste it.
+    if let Some(one) = image(&file_url(whole)) {
+        return Some(vec![one]);
+    }
+    let words = split_paths(whole);
+    if words.is_empty() {
+        return None;
+    }
+    words.iter().map(|w| image(&file_url(w))).collect()
+}
+
+/// A `file://` URL as a path, with its percent escapes decoded; anything else as is.
+fn file_url(s: &str) -> String {
+    let Some(rest) = s.strip_prefix("file://") else {
+        return s.to_owned();
+    };
+    let bytes = rest.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = bytes
+            .get(i + 1..i + 3)
+            .and_then(|h| std::str::from_utf8(h).ok())
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match (bytes[i], hex) {
+            (b'%', Some(b)) => {
+                out.push(b);
+                i += 3;
+            }
+            (b, _) => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Split a paste into paths the way a shell would read dropped files: whitespace
+/// separates, quotes group, and outside Windows a backslash escapes the next character.
+fn split_paths(text: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quote: Option<char> = None;
+    let mut started = false;
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), c) => word.push(c),
+            (None, '\'' | '"') => {
+                quote = Some(c);
+                started = true;
+            }
+            (None, '\\') if !cfg!(windows) => {
+                if let Some(next) = chars.next() {
+                    word.push(next);
+                }
+                started = true;
+            }
+            (None, c) if c.is_whitespace() => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+            }
+            (None, c) => {
+                word.push(c);
+                started = true;
+            }
+        }
+    }
+    if started {
+        words.push(word);
+    }
+    words
 }
 
 #[cfg(test)]
@@ -3238,5 +3335,43 @@ mod tests {
         assert!(!app.should_quit());
         app.on_terminal(TermEvent::Key(ctrl_c));
         assert!(app.should_quit());
+    }
+
+    #[test]
+    fn dropped_paths_split_like_a_shell() {
+        assert_eq!(split_paths("a.png  b.png"), ["a.png", "b.png"]);
+        assert_eq!(
+            split_paths("'/tmp/my shot.png' \"x y.png\""),
+            ["/tmp/my shot.png", "x y.png"]
+        );
+        if !cfg!(windows) {
+            assert_eq!(split_paths("/tmp/my\\ shot.png"), ["/tmp/my shot.png"]);
+        }
+        assert_eq!(file_url("file:///tmp/my%20shot.png"), "/tmp/my shot.png");
+        assert_eq!(file_url("plain%20text"), "plain%20text");
+    }
+
+    #[test]
+    fn a_paste_of_image_paths_attaches_them() {
+        const PNG: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D, b'I', b'H', b'D', b'R',
+            0, 0, 0, 2, 0, 0, 0, 1, 8, 2, 0, 0, 0, 0x7D, 0x0C, 0xC0, 0xFA,
+        ];
+        let spaced =
+            std::env::temp_dir().join(format!("quack-tui-{} shot.png", std::process::id()));
+        std::fs::write(&spaced, PNG).expect("png");
+        let shown = spaced.display().to_string();
+        let mut app = App::new(info());
+        // Quoted, the way terminals send a dropped file with a space in its name.
+        assert!(app.attach_pasted(&format!("'{shown}'")));
+        // Unquoted with a bare space, as one path.
+        assert!(app.attach_pasted(&shown));
+        assert_eq!(app.attachments.len(), 2);
+        assert_eq!(app.attachments[0].path, shown);
+        assert_eq!(app.attachments[0].width, Some(2));
+        // Text that merely mentions the image is pasted as text.
+        assert!(!app.attach_pasted(&format!("look at {shown}")));
+        assert_eq!(app.attachments.len(), 2);
+        std::fs::remove_file(&spaced).ok();
     }
 }

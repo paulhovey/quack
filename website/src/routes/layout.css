@@ -1,0 +1,173 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/bricolage-grotesque';
+@import '@fontsource-variable/atkinson-hyperlegible-next';
+@import '@fontsource-variable/jetbrains-mono';
+
+/* mode-watcher puts `dark` on <html>: from the OS preference, or the hero's toggle. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+	--font-display: 'Bricolage Grotesque Variable', system-ui, sans-serif;
+	--font-sans: 'Atkinson Hyperlegible Next Variable', system-ui, sans-serif;
+	--font-mono: 'JetBrains Mono Variable', ui-monospace, Menlo, Consolas, monospace;
+
+	/* Plate paper and ink */
+	--color-paper: #ffffff;
+	--color-wash: #f1fafd;
+	--color-ink: #1d2a3a;
+	--color-ink-2: #46596d;
+	--color-rule: #d5dee6;
+
+	/* The TUI's inks: duck body, beak, water (theme.rs gradient) */
+	--color-duck: #ffd60a;
+	--color-duck-soft: #fff4b8;
+	--color-duck-line: #e8cf55;
+	--color-duck-ink: #c99d00;
+	--color-duck-glyph: #e8b800;
+	--color-beak: #ff9f43;
+	--color-beak-ink: #b25300;
+	--color-sky: #5ec8e5;
+	--color-sky-soft: #d6f2fa;
+	--color-sky-ink: #086a86;
+	--color-leaf: #8fd694;
+	--color-leaf-ink: #22743a;
+	--color-pink: #ff8fab;
+	--color-pink-ink: #b0244c;
+	--color-pink-soft: #fff2f5;
+
+	/* Ink on the bright fills (tabs, the copy button, highlights): dark in both modes */
+	--color-on-tint: #1d2a3a;
+
+	/* The footer's night */
+	--color-night: #1d2a3a;
+	--color-night-2: #c9d4df;
+
+	/* The terminal, as the TUI's dark theme draws it */
+	--color-term: #16191f;
+	--color-term-2: #22262e;
+	--color-term-dim: #8a94a6;
+	--color-term-text: #d8dee9;
+	--color-term-bar: #263e58;
+}
+
+/* Dark mode: the plates at dusk. The bright inks keep their colour, since they are the
+   TUI's; paper, rules and the text inks change. */
+:root.dark {
+	--color-paper: #17212d;
+	--color-wash: #0e161f;
+	--color-ink: #e8eef4;
+	--color-ink-2: #a6b4c2;
+	--color-rule: #2f3e4e;
+
+	--color-duck-soft: #3a330c;
+	--color-duck-line: #6e5d12;
+	--color-duck-ink: #ffd60a;
+	--color-duck-glyph: #ffd60a;
+	--color-beak-ink: #ffb070;
+	--color-sky-soft: #123647;
+	--color-sky-ink: #7fd3ec;
+	--color-leaf-ink: #9fe0a4;
+	--color-pink-ink: #ff9db5;
+	--color-pink-soft: #33161f;
+
+	--color-night: #0a1017;
+}
+
+@layer base {
+	html {
+		scroll-behavior: smooth;
+		background: var(--color-paper);
+		color: var(--color-ink);
+		scrollbar-color: var(--color-sky) var(--color-wash);
+	}
+	body {
+		background: var(--color-paper);
+		font-family: var(--font-sans);
+		-webkit-font-smoothing: antialiased;
+	}
+	::selection {
+		background: var(--color-duck);
+		color: var(--color-on-tint);
+	}
+	:focus-visible {
+		outline: 3px solid var(--color-sky-ink);
+		outline-offset: 3px;
+		border-radius: 4px;
+	}
+	a {
+		text-underline-offset: 0.2em;
+		text-decoration-thickness: 2px;
+	}
+	h1,
+	h2,
+	h3 {
+		font-family: var(--font-display);
+		text-wrap: balance;
+	}
+	code,
+	pre,
+	kbd {
+		font-family: var(--font-mono);
+		font-variant-ligatures: none;
+	}
+	@media (prefers-reduced-motion: reduce) {
+		html {
+			scroll-behavior: auto;
+		}
+		*,
+		*::before,
+		*::after {
+			animation-duration: 0.01ms !important;
+			animation-iteration-count: 1 !important;
+			transition-duration: 0.01ms !important;
+			animation-delay: 0s !important;
+		}
+	}
+}
+
+/* The water line the welcome duck floats on, carried down the page. */
+.water {
+	height: 10px;
+	background: repeating-linear-gradient(
+		90deg,
+		var(--color-sky) 0 28px,
+		var(--color-sky-soft) 28px 56px
+	);
+}
+
+/* The grinder's gears */
+@keyframes spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+@keyframes jitter {
+	0%,
+	100% {
+		transform: translate(0, 0);
+	}
+	25% {
+		transform: translate(-1.5px, 1px) rotate(-0.6deg);
+	}
+	50% {
+		transform: translate(1px, -1px) rotate(0.6deg);
+	}
+	75% {
+		transform: translate(-1px, -1px);
+	}
+}
+.spin-slow {
+	animation: spin 7s linear infinite;
+}
+.spin-slow-rev {
+	animation: spin 7s linear infinite reverse;
+}
+.spin-fast {
+	animation: spin 1.6s linear infinite;
+}
+.spin-fast-rev {
+	animation: spin 1.9s linear infinite reverse;
+}
+.jitter {
+	animation: jitter 0.2s linear infinite;
+}

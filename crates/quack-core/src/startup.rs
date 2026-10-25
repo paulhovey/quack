@@ -565,14 +565,18 @@ async fn try_provider(
     // Discover when no models are listed (the short provider form) or when asked to.
     let mut discovered: Vec<DiscoveredModel> = Vec::new();
     let mut discovery_error = None;
-    // Also when the model to use is listed without a context window: the models endpoint
-    // usually reports it, and the budget depends on it.
-    let target = wanted_model
-        .and_then(|m| provider.file.model(m))
-        .or_else(|| provider.file.models.first());
-    let needs_window = wanted_model.is_none_or(|m| provider.file.model(m).is_some())
-        && target.is_some_and(|m| m.context_window.is_none());
-    if provider.file.models.is_empty() || provider.file.discovery.enabled || needs_window {
+    // Also when the model to use is not listed, or listed without a context window or a
+    // price: the models endpoint usually reports both, and the budget and costs depend on
+    // them. A missing price alone is not worth a warning when the listing fails.
+    let target = match wanted_model {
+        Some(m) => provider.file.model(m),
+        None => provider.file.models.first(),
+    };
+    let needed = provider.file.models.is_empty()
+        || provider.file.discovery.enabled
+        || target.is_none_or(|m| m.context_window.is_none());
+    let priceless = target.is_some_and(|m| m.cost.is_none());
+    if needed || priceless {
         prov.send(LoadState::Running {
             detail: format!("listing models at {pid}"),
         });
@@ -602,7 +606,7 @@ async fn try_provider(
                 None => format!("{pid}: no models listed or discovered · add models = [\"…\"]"),
             })?,
     };
-    if let Some(e) = &discovery_error {
+    if let Some(e) = discovery_error.as_ref().filter(|_| needed) {
         warn(tx, format!("provider `{pid}`: could not list models: {e}"));
     }
     let mut model = provider

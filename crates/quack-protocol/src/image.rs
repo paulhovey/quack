@@ -100,22 +100,29 @@ fn jpeg(b: &[u8]) -> Option<(&'static str, Option<u32>, Option<u32>)> {
     if !b.starts_with(&[0xFF, 0xD8]) {
         return None;
     }
+    // A header cut short (`is_image` reads only the start) still says JPEG, just no size.
+    Some(jpeg_size(b).map_or(("image/jpeg", None, None), |(w, h)| {
+        ("image/jpeg", Some(w), Some(h))
+    }))
+}
+
+/// Walk the segments after SOI to the frame header.
+fn jpeg_size(b: &[u8]) -> Option<(u32, u32)> {
     let mut at = 2;
-    while let Some(marker) = b.get(at).copied() {
-        if marker != 0xFF {
-            return Some(("image/jpeg", None, None));
+    loop {
+        if *b.get(at)? != 0xFF {
+            return None;
         }
         let kind = *b.get(at + 1)?;
         // SOF0..SOF15 except DHT, JPG and DAC carry the frame size.
         if (0xC0..=0xCF).contains(&kind) && kind != 0xC4 && kind != 0xC8 && kind != 0xCC {
             let h = u32::from(u16::from_be_bytes([*b.get(at + 5)?, *b.get(at + 6)?]));
             let w = u32::from(u16::from_be_bytes([*b.get(at + 7)?, *b.get(at + 8)?]));
-            return Some(("image/jpeg", Some(w), Some(h)));
+            return Some((w, h));
         }
         let len = usize::from(u16::from_be_bytes([*b.get(at + 2)?, *b.get(at + 3)?]));
         at += 2 + len;
     }
-    Some(("image/jpeg", None, None))
 }
 
 fn webp(b: &[u8]) -> Option<(&'static str, Option<u32>, Option<u32>)> {
@@ -189,15 +196,25 @@ pub fn base64(bytes: &[u8]) -> String {
     out
 }
 
-/// Whether a file starts like an image we send. Reads the header, so it is cheap to
-/// call on pasted paths before anything is encoded.
-pub fn is_image(path: &std::path::Path) -> bool {
+/// How much of a file `probe_file` reads: enough to get past EXIF to a JPEG's frame
+/// header in most photos, without reading the whole file.
+const HEADER_BYTES: u64 = 64 * 1024;
+
+/// Probe a file from its first bytes: its media type, pixel size and byte length.
+/// Cheap enough to call on pasted paths before anything is encoded.
+pub fn probe_file(path: &std::path::Path) -> Option<(&'static str, Option<u32>, Option<u32>, u64)> {
     use std::io::Read;
-    let mut header = [0; 32];
-    let Ok(n) = std::fs::File::open(path).and_then(|mut f| f.read(&mut header)) else {
-        return false;
-    };
-    probe(&header[..n]).is_some()
+    let file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let mut header = Vec::new();
+    file.take(HEADER_BYTES).read_to_end(&mut header).ok()?;
+    let (media_type, width, height) = probe(&header)?;
+    Some((media_type, width, height, len))
+}
+
+/// Whether a file starts like an image we send.
+pub fn is_image(path: &std::path::Path) -> bool {
+    probe_file(path).is_some()
 }
 
 #[cfg(test)]
@@ -221,6 +238,8 @@ mod tests {
             0xFF, 0xD8, 0xFF, 0xC0, 0, 11, 8, 0, 4, 0, 6, 3, 0, 0, 0, 0xFF, 0xD9,
         ];
         assert_eq!(probe(&jpeg), Some(("image/jpeg", Some(6), Some(4))));
+        // Cut off inside the frame header: still a JPEG, size unknown.
+        assert_eq!(probe(&jpeg[..6]), Some(("image/jpeg", None, None)));
         assert_eq!(probe(b"hello"), None);
     }
 

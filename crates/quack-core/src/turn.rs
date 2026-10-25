@@ -497,7 +497,10 @@ pub(crate) fn sampling(s: &Setup) -> quack_config::provider::Sampling {
 
 /// A request to the session's model with its sampling and extra parameters; with the
 /// session's tools when `tools` is set.
-pub(crate) fn request(s: &Setup, messages: Vec<Message>, tools: bool) -> ChatRequest {
+pub(crate) fn request(s: &Setup, mut messages: Vec<Message>, tools: bool) -> ChatRequest {
+    if !s.tool_ctx.vision {
+        without_images(&mut messages);
+    }
     ChatRequest {
         model: s.model.id.clone(),
         messages,
@@ -513,6 +516,30 @@ pub(crate) fn request(s: &Setup, messages: Vec<Message>, tools: bool) -> ChatReq
             .unwrap_or_default(),
         cache_key: None,
         tool_mode: Some(s.model.tool_calling.mode),
+    }
+}
+
+/// Images in the history from a model that took them (before a `/models` switch, a
+/// resume on another model, or a planner handoff) become a note, since a model without
+/// vision would have the whole request rejected. The history itself keeps them.
+fn without_images(messages: &mut [Message]) {
+    for m in messages {
+        if let Message::User { content, images }
+        | Message::Tool {
+            content, images, ..
+        } = m
+            && !images.is_empty()
+        {
+            let n = images.len();
+            images.clear();
+            if !content.is_empty() {
+                content.push_str("\n\n");
+            }
+            content.push_str(&format!(
+                "[{n} image{} not sent: this model takes no images]",
+                if n == 1 { "" } else { "s" }
+            ));
+        }
     }
 }
 
@@ -1224,6 +1251,44 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn images_become_a_note_for_a_model_without_vision() {
+        let img = || quack_protocol::Image {
+            media_type: "image/png".into(),
+            data: "eHk=".into(),
+            width: Some(2),
+            height: Some(1),
+        };
+        let mut messages = vec![
+            Message::User {
+                content: String::new(),
+                images: vec![img(), img()],
+            },
+            Message::Tool {
+                call_id: "c1".into(),
+                content: "[image: pic.png]".into(),
+                images: vec![img()],
+            },
+        ];
+        without_images(&mut messages);
+        let Message::User { content, images } = &messages[0] else {
+            panic!("user message")
+        };
+        assert!(images.is_empty());
+        assert_eq!(content, "[2 images not sent: this model takes no images]");
+        let Message::Tool {
+            content, images, ..
+        } = &messages[1]
+        else {
+            panic!("tool message")
+        };
+        assert!(images.is_empty());
+        assert_eq!(
+            content,
+            "[image: pic.png]\n\n[1 image not sent: this model takes no images]"
+        );
+    }
 
     #[test]
     fn lenient_args() {

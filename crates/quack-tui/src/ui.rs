@@ -665,7 +665,7 @@ fn draw_attachments(f: &mut Frame<'_>, app: &App, area: Rect) {
         if n > 0 {
             spans.push(Span::styled(" · ", t.dim));
         }
-        let dims = match (a.image.width, a.image.height) {
+        let dims = match (a.width, a.height) {
             (Some(w), Some(h)) => format!(" {w}x{h}"),
             _ => String::new(),
         };

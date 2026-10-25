@@ -102,6 +102,13 @@ async fn a_turn_is_counted_priced_and_kept_on_resume() {
 
 #[tokio::test]
 async fn prices_listed_by_the_models_endpoint_are_used() {
+    // Listed without a window or a cost: the models endpoint fills in both.
+    priced_by_discovery(r#"["tiny"]"#).await;
+    // Listed with a window but no price: discovery still runs for the price.
+    priced_by_discovery(r#"[{ id = "tiny", context_window = 32768 }]"#).await;
+}
+
+async fn priced_by_discovery(models: &str) {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/v1/models"))
@@ -119,21 +126,15 @@ async fn prices_listed_by_the_models_endpoint_are_used() {
         .mount(&server)
         .await;
 
-    // Listed without a window or a cost: the models endpoint fills in both.
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut engine = Engine::spawn(Arc::new(workspace(
-        tmp.path(),
-        &server.uri(),
-        r#"["tiny"]"#,
-        "",
-    )));
+    let mut engine = Engine::spawn(Arc::new(workspace(tmp.path(), &server.uri(), models, "")));
     turn(&mut engine, "hello").await;
     let r = stats(&mut engine).await;
     // 1000 fresh at $2, 2000 cached at $0.50, 500 out at $8, per million.
     let want = (2000.0 + 1000.0 + 4000.0) / 1e6;
     assert!(
         (r.cost.expect("priced from discovery") - want).abs() < 1e-12,
-        "{:?}",
+        "{models}: {:?}",
         r.cost
     );
     engine.shutdown().await;

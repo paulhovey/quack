@@ -44,6 +44,8 @@ perf.data*
 !evals/hard/log-parser/repo/sample.log
 /tmp/
 /scratch/
+.impeccable
+PRODUCT.md
 
 # --- Editors and IDEs ---
 .idea/

@@ -71,7 +71,7 @@
         },
         "enabled": {
           "default": false,
-          "description": "Query the models endpoint at startup (async) and merge with `[[models]]`.",
+          "description": "Always query the models endpoint at startup (async) and merge with `[[models]]`.\nWithout it, startup queries only when no models are listed, or the model to use is\nnot listed or lacks a context window or a price.",
           "type": "boolean"
         },
         "include": {

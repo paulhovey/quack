@@ -188,3 +188,36 @@ async fn a_resume_replays_the_image() {
         "the replayed history still carries the image"
     );
 }
+
+#[tokio::test]
+async fn a_model_without_vision_gets_a_note_in_place_of_earlier_images() {
+    let server = MockServer::start().await;
+    view_image_script(&server).await;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut engine = engine(tmp.path(), &server, VISION).await;
+    std::fs::write(tmp.path().join("ws").join("pic.png"), PNG).expect("png");
+    common::turn(&mut engine, "look").await;
+    drop(engine);
+
+    // The same session resumed on a model that takes no images.
+    let loaded = common::workspace(tmp.path(), &server.uri(), r#"["tiny"]"#, "");
+    let mut second = Engine::spawn_with(Arc::new(loaded), Resume::Latest);
+    let mut resumed = false;
+    while let Ok(e) =
+        tokio::time::timeout(std::time::Duration::from_secs(10), second.events.recv()).await
+    {
+        if let Ok(Event::SessionResumed { .. }) = e {
+            resumed = true;
+            break;
+        }
+    }
+    assert!(resumed, "session resumed");
+    common::turn(&mut second, "and again").await;
+    let last = bodies(&server).await.pop().expect("requests");
+    assert!(last.contains("and again"), "{last}");
+    assert!(
+        !last.contains("base64"),
+        "no pixels go to a model without vision"
+    );
+    assert!(last.contains("1 image not sent"), "{last}");
+}
