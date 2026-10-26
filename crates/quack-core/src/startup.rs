@@ -59,6 +59,9 @@ pub(crate) struct Setup {
     pub agents: Arc<Vec<(String, quack_config::AgentFile)>>,
     /// Offer the MCP servers' tools; off for sub-agents that do not list `mcp`.
     pub mcp_tools: bool,
+    /// Set once the session has warned that the window is too small to work in after a
+    /// compaction, so the warning is given once.
+    pub cramped: std::sync::atomic::AtomicBool,
 }
 
 /// Files read from the workspace and config folders that shape the prompt.
@@ -806,6 +809,7 @@ async fn build_setup(
         commands: Arc::new(commands),
         agents: Arc::new(agents),
         mcp_tools: true,
+        cramped: Default::default(),
     })
 }
 

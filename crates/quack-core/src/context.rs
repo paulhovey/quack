@@ -16,6 +16,15 @@ use crate::turn::{self, TurnCtx};
 
 /// Share of the budget that history kept verbatim may use after a compaction.
 const KEEP_RATIO: f64 = 0.35;
+/// What a compaction leaves must fit in the room: the threshold less the system prompt and
+/// tools. Kept history may use this share of it, the summary aims for this share, and
+/// what the user said is carried within this share.
+const KEEP_SHARE: f64 = 0.25;
+const SUMMARY_SHARE: f64 = 0.15;
+const CARRIED_SHARE: f64 = 0.15;
+/// Less of the room than this free right after a compaction, and the session warns that
+/// the window is too small: the next few steps will compact again.
+const FREE_SHARE: f64 = 0.4;
 /// Messages at the end of history that pruning leaves alone.
 const PROTECT_MESSAGES: usize = 8;
 /// Assumed budget when the model's window is unknown.
@@ -26,7 +35,7 @@ const FALLBACK_BUDGET: u32 = 32_000;
 pub(crate) async fn fit(ctx: &TurnCtx, history: &mut Vec<Message>) {
     let s = &ctx.setup;
     let Some(budget) = s.budget else { return };
-    let threshold = (f64::from(budget) * s.context.compaction_threshold.clamp(0.1, 1.0)) as u32;
+    let threshold = limit(s, budget);
     let aggressive = s.context.cache_strategy == CacheStrategy::Aggressive;
     if !aggressive && turn::estimate(s, history) <= threshold {
         return;
@@ -151,7 +160,13 @@ pub(crate) async fn compact_now(
 ) -> Result<(), String> {
     let s = &ctx.setup;
     let budget = s.budget.unwrap_or(FALLBACK_BUDGET);
-    let keep = (f64::from(budget) * KEEP_RATIO) as u32;
+    // At a small window the system prompt and tools take much of the threshold, and a
+    // compaction sized by the budget alone leaves no room to work: the next step or two
+    // compact again, in a loop.
+    let limit = limit(s, budget);
+    let room = limit.saturating_sub(turn::estimate(s, &[])).max(budget / 8);
+    let share = |r: f64| (f64::from(room) * r) as u32;
+    let keep = ((f64::from(budget) * KEEP_RATIO) as u32).min(share(KEEP_SHARE));
     let scale = |h: &[Message]| {
         let raw = tokens::estimate(&serde_json::to_string(h).unwrap_or_default());
         s.estimator.lock().map_or(raw, |e| e.scale(raw))
@@ -181,6 +196,16 @@ pub(crate) async fn compact_now(
         prompt.push_str("\n\n");
         prompt.push_str(&extra);
     }
+    // What the user said is carried verbatim beside the summary (in characters, about four
+    // to a token), less the plan-mode note and the engine's own nudges.
+    let note = format!("\n\n{}", crate::engine::plan_note(s));
+    let carried = compact::carried(history, cut, share(CARRIED_SHARE) as usize * 4, |t| {
+        (t != turn::EMPTY_NUDGE).then(|| t.strip_suffix(note.as_str()).unwrap_or(t))
+    });
+    prompt.push_str(&compact::length_note(
+        share(SUMMARY_SHARE),
+        !carried.is_empty(),
+    ));
     // About 60% of the budget in characters, leaving room for the prompt and the reply.
     let text = compact::transcript(&history[..cut], budget as usize * 2);
     let messages = vec![
@@ -226,12 +251,6 @@ pub(crate) async fn compact_now(
         }
     };
 
-    // What the user said is carried verbatim, within an eighth of the budget (in tokens),
-    // less the plan-mode note and the engine's own nudges.
-    let note = format!("\n\n{}", crate::engine::plan_note(s));
-    let carried = compact::carried(history, cut, budget as usize / 2, |t| {
-        (t != turn::EMPTY_NUDGE).then(|| t.strip_suffix(note.as_str()).unwrap_or(t))
-    });
     let message = compact::summary_message(&summary, &carried, &turn::changed_files(ctx));
     compact::apply(history, cut, message.clone());
     session::record(
@@ -244,6 +263,16 @@ pub(crate) async fn compact_now(
         replaced: u32::try_from(cut).unwrap_or(u32::MAX),
     });
     ctx.context_estimate(history);
+    let free = limit.saturating_sub(turn::estimate(s, history));
+    if free < share(FREE_SHARE) && !s.cramped.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        ctx.emit(Event::Warning {
+            message: format!(
+                "the context window is too small to work in: after compacting, {free} of \
+                 {limit} tokens are free, so the next steps will compact again · use a model \
+                 with a larger window, or raise [context] window"
+            ),
+        });
+    }
     Ok(())
 }
 
@@ -275,8 +304,11 @@ async fn summarize(ctx: &TurnCtx, req: quack_providers::ChatRequest) -> Result<S
 
 /// Requests estimated above this get pruned, then compacted.
 pub(crate) fn threshold(s: &Setup) -> Option<u32> {
-    s.budget
-        .map(|b| (f64::from(b) * s.context.compaction_threshold.clamp(0.1, 1.0)) as u32)
+    s.budget.map(|b| limit(s, b))
+}
+
+fn limit(s: &Setup, budget: u32) -> u32 {
+    (f64::from(budget) * s.context.compaction_threshold.clamp(0.1, 1.0)) as u32
 }
 
 /// What is using the context. `history` is `None` while a turn holds it.

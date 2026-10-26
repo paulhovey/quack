@@ -271,8 +271,10 @@ Everything below works today. Planned work is listed separately at the end.
 - Automatic compaction at a threshold or when the server reports the window is full, and
   `/compact [focus]` on demand. The summary keeps everything you said word for word (your
   current request whole, earlier messages cut to a few thousand characters if long) and
-  lists the files changed so far, through any number of compactions. If the model cannot
-  summarize (or answers with a tool call), a plain list is kept.
+  lists the files changed so far, through any number of compactions. The summary and the
+  turns kept after it are sized to leave room to work after the system prompt and tools,
+  and a window too small for that gets one warning. If the model cannot summarize (or
+  answers with a tool call), a plain list is kept.
 - `[context] recall = true` keeps the whole of long command output the model saw only in
   part, and of old outputs that pruning shortened, and gives the model a `recall` tool to
   page through them or pull out matching lines. Off by default until it is measured.

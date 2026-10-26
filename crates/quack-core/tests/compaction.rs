@@ -199,6 +199,60 @@ async fn three_turns(server: &MockServer, tmp: &std::path::Path) -> Vec<Event> {
 }
 
 #[tokio::test]
+async fn a_small_window_sizes_the_summary_and_warns_once() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(body_string_contains(SUMMARIZER))
+        .respond_with(sse("SUMMARY-TEXT"))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(sse("ok"))
+        .mount(&server)
+        .await;
+
+    // Budget 6,800 tokens, threshold 5,440. Each message is about 2,600 tokens, so every
+    // turn from the third compacts, and what is kept after it leaves little room.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let loaded = Arc::new(workspace(
+        tmp.path(),
+        &server.uri(),
+        r#"[{ id = "tiny", context_window = 8000 }]"#,
+    ));
+    let big = "x".repeat(9_000);
+    let mut engine = Engine::spawn(loaded);
+    let mut events = Vec::new();
+    for n in 0..5 {
+        events.extend(turn(&mut engine, &format!("TURN{n} {big}")).await);
+    }
+    engine.shutdown().await;
+    let compactions = events
+        .iter()
+        .filter(|e| matches!(e, Event::Compacted { .. }))
+        .count();
+    assert!(compactions >= 2, "{events:?}");
+    let warnings: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Warning { message } if message.contains("too small to work in") => Some(message),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(warnings.len(), 1, "{events:?}");
+    let all = bodies(&server).await;
+    let summarize = all
+        .iter()
+        .find(|b| b.contains(SUMMARIZER))
+        .expect("summary request");
+    assert!(
+        summarize.contains("Keep the summary under"),
+        "{summarize:.2000}"
+    );
+    assert!(summarize.contains("name the task in a sentence"));
+}
+
+#[tokio::test]
 async fn a_tool_call_for_a_summary_is_asked_again() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

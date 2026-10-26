@@ -82,7 +82,8 @@ pub fn cut_point(
         // Only the current turn, and it fits.
         return None;
     }
-    // The current turn alone is too big: keep its most recent steps that fit, at least one.
+    // The current turn alone is too big: keep its most recent steps that fit, at least one,
+    // or the whole turn when it has no steps yet (one long message).
     let after = turns.last().map_or(0, |t| t + 1);
     let steps: Vec<usize> = crate::boundaries(history)
         .filter(|&i| i >= after && i > 0)
@@ -91,6 +92,7 @@ pub fn cut_point(
         .iter()
         .find(|&&i| estimate(&history[i..]) <= keep_tokens)
         .or(steps.last())
+        .or(turns.last().filter(|&&t| t > 0))
         .copied()
 }
 
@@ -240,7 +242,7 @@ pub fn summary_message(summary: &str, carried: &Carried, changed: &[String]) -> 
                 .join("\n"),
         );
     }
-    if carried.earlier.is_empty() && carried.current.is_none() {
+    if carried.is_empty() {
         return Message::User {
             content,
             images: Vec::new(),
@@ -275,6 +277,35 @@ pub struct Carried {
     /// The request the current turn answers, whole, when the cut leaves no user message
     /// after it.
     pub current: Option<String>,
+}
+
+impl Carried {
+    pub fn is_empty(&self) -> bool {
+        self.earlier.is_empty() && self.current.is_none()
+    }
+}
+
+/// Summaries this long need no length limit in the prompt.
+const UNLIMITED_WORDS: u32 = 2_000;
+
+/// Added to the summary prompt: a length to aim for when the summary has `tokens` to fit
+/// in, and when what the user said is carried beside it, not to restate it.
+pub fn length_note(tokens: u32, carried: bool) -> String {
+    let mut note = String::new();
+    let words = (tokens * 3 / 4 / 50 * 50).max(100);
+    if words < UNLIMITED_WORDS {
+        note.push_str(&format!(
+            "\n\nKeep the summary under {words} words: it must leave room to work in a small \
+             context window."
+        ));
+    }
+    if carried {
+        note.push_str(
+            "\n\nThe user's messages are kept word for word beside the summary, so under Goal \
+             name the task in a sentence instead of restating them.",
+        );
+    }
+    note
 }
 
 /// What the user said before `cut`: every user message, and what earlier summaries carried,
@@ -476,6 +507,21 @@ mod tests {
         assert_eq!(cut_point(&h, 1, 1000, chars), Some(8));
         // A single turn: nothing before it, and it fits.
         assert_eq!(cut_point(&h[..2], KEEP_TURNS, 1000, chars), None);
+        // The current turn is one message over the budget, with no steps to cut between:
+        // everything before it goes.
+        let mut long = h[..8].to_vec();
+        long.push(user(&"q".repeat(500)));
+        assert_eq!(cut_point(&long, KEEP_TURNS, 150, chars), Some(8));
+    }
+
+    #[test]
+    fn a_small_room_asks_for_a_short_summary() {
+        let note = length_note(1_000, true);
+        assert!(note.contains("under 750 words"), "{note}");
+        assert!(note.contains("name the task in a sentence"));
+        // Large windows get no limit, and nothing carried, nothing said about it.
+        assert_eq!(length_note(20_000, false), "");
+        assert!(length_note(10, false).contains("under 100 words"));
     }
 
     #[test]

@@ -172,6 +172,7 @@ fn derive(base: &Setup, def: &AgentFile) -> Setup {
         commands: base.commands.clone(),
         agents: Arc::default(),
         mcp_tools: def.tools.is_empty() || def.tools.iter().any(|t| t == "mcp"),
+        cramped: Default::default(),
     }
 }
 
