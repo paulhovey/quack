@@ -452,7 +452,7 @@ impl Permissions {
         }
         if matches!(
             subject,
-            Subject::Skill | Subject::ToolSearch | Subject::Plan
+            Subject::Skill | Subject::ToolSearch | Subject::Plan | Subject::Recall
         ) {
             return Decision::Allow;
         }

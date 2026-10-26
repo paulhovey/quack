@@ -178,6 +178,7 @@ impl Tool for Shell {
                 model,
                 images: Vec::new(),
                 summary: format!("{status} · {lines} lines"),
+                full: (trimmed != body).then(|| body.clone()),
                 detail: Some(body),
             }
         })

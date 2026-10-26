@@ -709,6 +709,9 @@ async fn build_setup(
         grammars: Arc::new(quack_tools::grammar::Grammars::from_layers(
             config.item_layers().iter().map(|(_, d)| d.as_path()),
         )),
+        observations: Arc::new(quack_tools::recall::Observations::new(
+            config.settings.context.recall,
+        )),
     };
     let registry = Arc::new(Registry::builtin());
     let vars = PromptVars {

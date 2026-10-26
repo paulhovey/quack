@@ -359,6 +359,7 @@ impl Tool for McpTool {
                     format!("failed: {first}")
                 },
                 detail: Some(out.text.clone()),
+                full: None,
                 model: out.text,
             }
         })
@@ -722,6 +723,7 @@ impl Tool for ReadResource {
                 images: Vec::new(),
                 summary: format!("{chars} characters"),
                 detail: Some(out.text.clone()),
+                full: None,
                 model: out.text,
             }
         })

@@ -64,7 +64,13 @@ async fn compacts_at_the_threshold_and_resumes_compacted() {
     );
     let last = all.last().expect("request");
     assert!(last.contains("[compaction summary]") && last.contains("SUMMARY-TEXT"));
-    assert!(last.contains("THIRD") && !last.contains("FIRST") && !last.contains("SECOND"));
+    // What the user said earlier is carried verbatim, cut to a few thousand characters
+    // each, so its requirements outlive the summary; the bulk is still gone.
+    assert!(last.contains("THIRD"));
+    assert!(last.contains("### Earlier message\\nFIRST xxx"));
+    assert!(last.contains("### Earlier message\\nSECOND xxx"));
+    assert_eq!(last.matches("characters cut").count(), 2);
+    assert!(last.len() < 30_000, "{} bytes", last.len());
     engine.shutdown().await;
 
     // A resumed session continues from the compacted history.
@@ -79,7 +85,7 @@ async fn compacts_at_the_threshold_and_resumes_compacted() {
     turn(&mut engine, "FOURTH").await;
     let last = bodies(&server).await.pop().expect("request");
     assert!(last.contains("SUMMARY-TEXT") && last.contains("THIRD") && last.contains("FOURTH"));
-    assert!(!last.contains("FIRST"));
+    assert!(last.contains("### Earlier message\\nFIRST xxx"));
     engine.shutdown().await;
 }
 

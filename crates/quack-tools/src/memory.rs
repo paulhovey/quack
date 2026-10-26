@@ -254,6 +254,7 @@ mod tests {
             vision: false,
             outline_above: 0,
             grammars: crate::grammar::Grammars::builtin(),
+            observations: Arc::default(),
         }
     }
 

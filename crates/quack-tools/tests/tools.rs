@@ -29,6 +29,7 @@ fn ctx(root: &std::path::Path) -> ToolCtx {
         vision: false,
         outline_above: 0,
         grammars: quack_tools::grammar::Grammars::builtin(),
+        observations: Default::default(),
     }
 }
 

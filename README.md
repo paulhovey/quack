@@ -126,7 +126,9 @@ Everything below works today. Planned work is listed separately at the end.
   `--suite evals/hard` runs 14 longer tasks with hidden tests, most on one shared shop
   project, meant to separate models and profiles that all pass the small suite. Each
   failed run is labelled with why (`no-change`, `wrong-files`, `edit-failed`, `untested`,
-  `wrong-fix`, ...), and `scripts/eval-compare.py` compares two setups task by task with
+  `wrong-fix`, ...), every run with habits that make a pass less trustworthy
+  (`unverified`, `blind-retry`, `regression`; a pass with none is a clean pass), and
+  `scripts/eval-compare.py` compares two setups task by task with
   confidence intervals. `--planner <provider/model>` plans each task with that model first.
 - Speed in the status bar: tokens per second and time to first token.
 
@@ -267,9 +269,13 @@ Everything below works today. Planned work is listed separately at the end.
   whole-file reads (only their outline is kept), failed attempts that a later call fixed,
   and large old outputs (cut to their start and end).
 - Automatic compaction at a threshold or when the server reports the window is full, and
-  `/compact [focus]` on demand. The summary keeps your request word for word and lists the
-  files changed so far, through any number of compactions. If the model cannot summarize
-  (or answers with a tool call), a plain list is kept.
+  `/compact [focus]` on demand. The summary keeps everything you said word for word (your
+  current request whole, earlier messages cut to a few thousand characters if long) and
+  lists the files changed so far, through any number of compactions. If the model cannot
+  summarize (or answers with a tool call), a plain list is kept.
+- `[context] recall = true` keeps the whole of long command output the model saw only in
+  part, and of old outputs that pruning shortened, and gives the model a `recall` tool to
+  page through them or pull out matching lines. Off by default until it is measured.
 - `[context] window = 16384` (or `-c context.window=16384`) holds any model to a smaller
   window than it has, for a local server's memory or to see how a session copes.
 - `/context` shows where the tokens go as one band, each part in its own fill, with the

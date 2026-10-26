@@ -69,6 +69,11 @@ def main(args):
         "cost $": lambda x: x.get("cost") or 0.0,
         "prompt k": lambda x: x["prompt_tokens"] / 1000,
     }
+    # Passes with no process label (see `Process` in crates/quack-exec/src/eval.rs), when
+    # every run on both sides was graded.
+    graded = all("process" in x for side in (a, b) for t in tasks for x in side[t])
+    if graded:
+        metrics["clean pass"] = lambda x: x["passed"] and not x["process"]
     va = {m: per_task(a, f) for m, f in metrics.items()}
     vb = {m: per_task(b, f) for m, f in metrics.items()}
 
@@ -96,8 +101,9 @@ def main(args):
     for m in metrics:
         diffs = [vb[m][t] - va[m][t] for t in tasks]
         d, lo, hi = interval(diffs, rng)
-        scale, unit = (100, " pts") if m == "pass rate" else (1, "")
-        p = {"pass rate": 1, "cost $": 4}.get(m, 2)
+        rate = m in ("pass rate", "clean pass")
+        scale, unit = (100, " pts") if rate else (1, "")
+        p = 1 if rate else {"cost $": 4}.get(m, 2)
         clear = "clear" if lo > 0 or hi < 0 else "not clear"
         print(
             f"  {m:<10} A {mean(list(va[m].values())) * scale:9.{p}f}  "
@@ -109,6 +115,10 @@ def main(args):
         c = Counter(x.get("failure") or "unlabelled" for t in tasks for x in side[t]
                     if not x["passed"])
         print(f"{label} failures: " + (", ".join(f"{k} {v}" for k, v in c.most_common()) or "none"))
+    if graded:
+        for label, side in (("A", a), ("B", b)):
+            c = Counter(p for t in tasks for x in side[t] for p in x["process"])
+            print(f"{label} process: " + (", ".join(f"{k} {v}" for k, v in c.most_common()) or "none"))
 
 
 if __name__ == "__main__":

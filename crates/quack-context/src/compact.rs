@@ -8,8 +8,17 @@ use quack_providers::{Message, ToolCall};
 
 /// Starts every summary message.
 pub const SUMMARY_MARKER: &str = "[compaction summary]";
-/// Heads the user's request, carried verbatim through every compaction.
-const REQUEST_HEADING: &str = "## The user's current request (verbatim)";
+/// Heads what the user said, carried verbatim through every compaction.
+const REQUEST_HEADING: &str = "## What the user said, oldest first (verbatim)";
+/// The heading summaries written before 2026-10-25 used, over the latest request alone.
+const OLD_REQUEST_HEADING: &str = "## The user's current request (verbatim)";
+/// Heads each earlier user message under `REQUEST_HEADING`.
+const EARLIER: &str = "### Earlier message";
+/// Heads the request the current turn answers under `REQUEST_HEADING`.
+const CURRENT: &str = "### Current request";
+/// Each earlier user message is carried cut to this many characters (the current request
+/// is carried whole).
+const CARRIED_CHARS: usize = 2_000;
 /// Heads the files the session changed, listed by the engine rather than the summarizer.
 const FILES_HEADING: &str = "## Files changed in this session";
 
@@ -93,14 +102,22 @@ pub fn is_summary(m: &Message) -> bool {
 /// tool-call template. Long tool results are cut; when the whole text is over `max_chars`,
 /// the oldest messages are dropped (an earlier summary is always kept).
 pub fn transcript(history: &[Message], max_chars: usize) -> String {
-    let mut parts: Vec<String> = history.iter().map(render).collect();
-    let mut total: usize = parts.iter().map(|p| p.len() + 2).sum();
+    let mut parts: Vec<(bool, String)> = history
+        .iter()
+        .map(|m| (matches!(m, Message::User { .. }), render(m)))
+        .collect();
+    let mut total: usize = parts.iter().map(|(_, p)| p.len() + 2).sum();
     let first = usize::from(history.first().is_some_and(is_summary));
     let mut dropped = 0;
     while total > max_chars && parts.len() > first + 1 {
-        total -= parts.remove(first).len() + 2;
+        // What the user said goes last: it is where the requirements are.
+        let at = (first..parts.len() - 1)
+            .find(|&i| !parts[i].0)
+            .unwrap_or(first);
+        total -= parts.remove(at).1.len() + 2;
         dropped += 1;
     }
+    let mut parts: Vec<String> = parts.into_iter().map(|(_, p)| p).collect();
     if dropped > 0 {
         parts.insert(
             first,
@@ -201,11 +218,11 @@ fn clip_line(s: &str, max: usize) -> String {
     }
 }
 
-/// The message that replaces the summarized span. When the cut falls inside the current
-/// turn, the user's request is carried over verbatim so it is never lost to a summary.
+/// The message that replaces the summarized span. What the user said in it is carried
+/// over verbatim (`carried`), so a summary can never paraphrase a requirement away.
 /// `changed` lists the files the session changed (from the engine's checkpoints), so the
 /// model knows its work is on disk without reading everything again.
-pub fn summary_message(summary: &str, request: Option<&str>, changed: &[String]) -> Message {
+pub fn summary_message(summary: &str, carried: &Carried, changed: &[String]) -> Message {
     let mut content = format!(
         "{SUMMARY_MARKER}\nEarlier parts of this conversation were summarized to save \
          context. The work it describes is on disk. Read a file again only for lines you need \
@@ -223,9 +240,24 @@ pub fn summary_message(summary: &str, request: Option<&str>, changed: &[String])
                 .join("\n"),
         );
     }
-    if let Some(r) = request {
-        content.push_str(&format!("\n\n{REQUEST_HEADING}\n"));
-        content.push_str(r);
+    if carried.earlier.is_empty() && carried.current.is_none() {
+        return Message::User {
+            content,
+            images: Vec::new(),
+        };
+    }
+    content.push_str(&format!("\n\n{REQUEST_HEADING}"));
+    if carried.left_out > 0 {
+        content.push_str(&format!(
+            "\n({} older messages left out to fit)",
+            carried.left_out
+        ));
+    }
+    for e in &carried.earlier {
+        content.push_str(&format!("\n\n{EARLIER}\n{e}"));
+    }
+    if let Some(r) = &carried.current {
+        content.push_str(&format!("\n\n{CURRENT}\n{r}"));
     }
     Message::User {
         content,
@@ -233,28 +265,120 @@ pub fn summary_message(summary: &str, request: Option<&str>, changed: &[String])
     }
 }
 
-/// The latest user request before `cut`, when the cut leaves no user message after it.
-/// After an earlier compaction that request lives in the summary, so it is taken from there.
-pub fn carried_request(history: &[Message], cut: usize) -> Option<&str> {
-    let kept_user = history[cut.min(history.len())..]
-        .iter()
-        .any(|m| matches!(m, Message::User { .. }));
-    if kept_user {
-        return None;
+/// What the user said in the summarized span, carried verbatim through every compaction.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Carried {
+    /// Earlier messages, oldest first, each cut to `CARRIED_CHARS`.
+    pub earlier: Vec<String>,
+    /// How many of the oldest were left out to fit.
+    pub left_out: usize,
+    /// The request the current turn answers, whole, when the cut leaves no user message
+    /// after it.
+    pub current: Option<String>,
+}
+
+/// What the user said before `cut`: every user message, and what earlier summaries carried,
+/// in order. `clean` takes off what the engine added to a user message (plan-mode notes),
+/// or returns `None` for a message the engine wrote itself. Earlier messages are left out,
+/// oldest first, to keep the whole within `max_chars`; the current request always stays.
+pub fn carried<'a>(
+    history: &'a [Message],
+    cut: usize,
+    max_chars: usize,
+    clean: impl Fn(&'a str) -> Option<&'a str>,
+) -> Carried {
+    let cut = cut.min(history.len());
+    // (text, whether it may still need cutting)
+    let mut said: Vec<(String, bool)> = Vec::new();
+    let mut left_out = 0;
+    for m in &history[..cut] {
+        match m {
+            Message::User { content, .. } if is_summary(m) => {
+                let (entries, n) = parse_carried(content);
+                said.extend(entries);
+                left_out += n;
+            }
+            Message::User { content, .. } => {
+                if let Some(text) = clean(content).map(str::trim).filter(|t| !t.is_empty()) {
+                    said.push((text.to_owned(), true));
+                }
+            }
+            _ => {}
+        }
     }
-    history[..cut].iter().rev().find_map(|m| match m {
-        Message::User { content, .. } if is_summary(m) => content
-            .split_once(&format!("\n\n{REQUEST_HEADING}\n"))
-            .map(|(_, request)| request),
-        Message::User { content, .. } => Some(content.as_str()),
-        _ => None,
-    })
+    let kept_user = history[cut..]
+        .iter()
+        .any(|m| matches!(m, Message::User { .. }) && !is_summary(m));
+    let current = if kept_user {
+        None
+    } else {
+        said.pop().map(|(text, _)| text)
+    };
+    let mut earlier: Vec<String> = said
+        .into_iter()
+        .map(|(text, fresh)| {
+            if fresh {
+                clip(&text, CARRIED_CHARS)
+            } else {
+                text
+            }
+        })
+        .collect();
+    let room = max_chars.saturating_sub(current.as_ref().map_or(0, String::len));
+    let mut total: usize = earlier.iter().map(|e| e.len() + EARLIER.len() + 3).sum();
+    while total > room && !earlier.is_empty() {
+        total -= earlier.remove(0).len() + EARLIER.len() + 3;
+        left_out += 1;
+    }
+    Carried {
+        earlier,
+        left_out,
+        current,
+    }
+}
+
+/// The messages an earlier summary carried, and how many it had already left out. Entries
+/// marked `true` were the current request then and are cut if they become earlier ones.
+fn parse_carried(content: &str) -> (Vec<(String, bool)>, usize) {
+    if let Some((_, old)) = content.split_once(&format!("\n\n{OLD_REQUEST_HEADING}\n")) {
+        return (vec![(old.trim().to_owned(), true)], 0);
+    }
+    let Some((_, section)) = content.split_once(&format!("\n\n{REQUEST_HEADING}")) else {
+        return (Vec::new(), 0);
+    };
+    let mut marks: Vec<(usize, &str, bool)> = [(EARLIER, false), (CURRENT, true)]
+        .iter()
+        .flat_map(|&(h, current)| {
+            let mark = format!("\n\n{h}\n");
+            section
+                .match_indices(&mark)
+                .map(|(i, _)| (i, h, current))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    marks.sort_unstable_by_key(|&(i, ..)| i);
+    let left_out = section[..marks.first().map_or(section.len(), |m| m.0)]
+        .trim()
+        .strip_prefix('(')
+        .and_then(|s| s.split_once(' '))
+        .and_then(|(n, _)| n.parse().ok())
+        .unwrap_or(0);
+    let entries = marks
+        .iter()
+        .enumerate()
+        .map(|(k, &(i, h, current))| {
+            let start = i + h.len() + 3;
+            let end = marks.get(k + 1).map_or(section.len(), |m| m.0);
+            (section[start..end].trim().to_owned(), current)
+        })
+        .collect();
+    (entries, left_out)
 }
 
 /// What the summarizer wrote, without the header and the sections the engine adds.
 fn summary_body(content: &str) -> &str {
     let body = content.split_once("\n\n").map_or("", |(_, rest)| rest);
-    let end = [FILES_HEADING, REQUEST_HEADING]
+    let end = [FILES_HEADING, REQUEST_HEADING, OLD_REQUEST_HEADING]
         .iter()
         .filter_map(|h| body.find(&format!("\n\n{h}\n")))
         .min()
@@ -316,6 +440,18 @@ mod tests {
             sealed: None,
         }
     }
+    fn current(s: &str) -> Carried {
+        Carried {
+            current: Some(s.into()),
+            ..Carried::default()
+        }
+    }
+    fn body(m: &Message) -> &str {
+        let Message::User { content, .. } = m else {
+            panic!("summary is a user message")
+        };
+        content
+    }
     fn chars(h: &[Message]) -> u32 {
         h.iter()
             .map(|m| match m {
@@ -350,8 +486,9 @@ mod tests {
         }
         let cut = cut_point(&h, KEEP_TURNS, 250, chars).expect("cut");
         assert_eq!(cut, 5, "keeps the last two steps");
-        assert_eq!(carried_request(&h, cut), Some("fix the bug"));
-        let summary = summary_message("did things", carried_request(&h, cut), &[]);
+        let c = carried(&h, cut, 10_000, Some);
+        assert_eq!(c.current.as_deref(), Some("fix the bug"));
+        let summary = summary_message("did things", &c, &[]);
         apply(&mut h, cut, summary);
         assert_eq!(h.len(), 3);
         assert!(is_summary(&h[0]));
@@ -371,9 +508,13 @@ mod tests {
                 h.push(asst(&"x".repeat(100)));
             }
             let cut = cut_point(&h, KEEP_TURNS, 250, chars).expect("cut");
-            let request = carried_request(&h, cut);
-            assert_eq!(request, Some("add partial shipments"), "round {round}");
-            let summary = summary_message(&format!("round {round}"), request, &["a.py".into()]);
+            let c = carried(&h, cut, 10_000, Some);
+            assert_eq!(
+                c.current.as_deref(),
+                Some("add partial shipments"),
+                "round {round}"
+            );
+            let summary = summary_message(&format!("round {round}"), &c, &["a.py".into()]);
             apply(&mut h, cut, summary);
         }
         let Message::User { content, .. } = &h[0] else {
@@ -387,7 +528,7 @@ mod tests {
     fn the_summary_lists_changed_files_and_does_not_ask_for_rereads() {
         let m = summary_message(
             "did things",
-            Some("fix it"),
+            &current("fix it"),
             &["src/a.rs".into(), "b.py".into()],
         );
         let Message::User { content, .. } = &m else {
@@ -419,7 +560,7 @@ mod tests {
         let h = vec![
             summary_message(
                 "## Goal\nship parts of orders",
-                Some("the request"),
+                &current("the request"),
                 &["x.py".into()],
             ),
             user("go on"),
@@ -455,7 +596,7 @@ mod tests {
     #[test]
     fn transcript_drops_oldest_but_keeps_the_summary() {
         let h = vec![
-            summary_message("before", None, &[]),
+            summary_message("before", &Carried::default(), &[]),
             user(&"a".repeat(500)),
             asst(&"b".repeat(500)),
             user("latest"),
@@ -465,5 +606,110 @@ mod tests {
         assert!(t.contains("2 older messages left out"));
         assert!(!t.contains("aaaa"));
         assert!(clip(&"é".repeat(2000), 100).len() < 200);
+    }
+
+    #[test]
+    fn earlier_requirements_survive_every_compaction() {
+        // Turn 1 sets a rule, turn 2 asks for the work; a long turn 2 then compacts three
+        // times, each cut inside it.
+        let mut h = vec![
+            user("use pnpm, never npm"),
+            asst("ok"),
+            user("add partial shipments"),
+        ];
+        for round in 0..3 {
+            for _ in 0..6 {
+                h.push(asst(&"x".repeat(100)));
+            }
+            let cut = cut_point(&h, KEEP_TURNS, 250, chars).expect("cut");
+            let c = carried(&h, cut, 10_000, Some);
+            assert_eq!(c.earlier, ["use pnpm, never npm"], "round {round}");
+            assert_eq!(c.current.as_deref(), Some("add partial shipments"));
+            apply(
+                &mut h,
+                cut,
+                summary_message(&format!("round {round}"), &c, &[]),
+            );
+        }
+        let content = body(&h[0]);
+        assert_eq!(
+            content.matches("use pnpm, never npm").count(),
+            1,
+            "{content}"
+        );
+        assert!(content.ends_with(
+            "### Earlier message\nuse pnpm, never npm\n\n### Current request\nadd partial shipments"
+        ));
+        assert_eq!(summary_body(content), "round 2");
+
+        // A new turn: the old current request becomes an earlier message, and nothing is
+        // carried as current because the new request is kept verbatim.
+        h.push(user("now add refunds"));
+        h.push(asst("ok"));
+        let c = carried(&h, 1, 10_000, Some);
+        assert_eq!(c.earlier, ["use pnpm, never npm", "add partial shipments"]);
+        assert_eq!(c.current, None);
+    }
+
+    #[test]
+    fn carrying_skips_engine_text_and_keeps_to_the_budget() {
+        let note = "\n\n[Plan mode] plan first";
+        let h = vec![
+            user("rule one"),
+            user("Continue."),
+            user(&format!("rule two{note}")),
+            user(&"p".repeat(5_000)),
+            user("the request"),
+            asst("x"),
+        ];
+        fn clean(t: &str) -> Option<&str> {
+            (t != "Continue.").then(|| t.strip_suffix("\n\n[Plan mode] plan first").unwrap_or(t))
+        }
+        let c = carried(&h, h.len(), 100_000, clean);
+        assert_eq!(c.earlier.len(), 3);
+        assert_eq!(c.earlier[..2], ["rule one", "rule two"]);
+        assert!(c.earlier[2].len() < 2_100 && c.earlier[2].contains("characters cut"));
+        assert_eq!(c.current.as_deref(), Some("the request"));
+
+        // Over the budget, the oldest go first and are counted; the request stays whole.
+        let c = carried(&h, h.len(), 2_080, clean);
+        assert_eq!(c.left_out, 2);
+        assert_eq!(c.earlier.len(), 1);
+        assert_eq!(c.current.as_deref(), Some("the request"));
+        // The count carries through the next summary.
+        let next = vec![summary_message("s", &c, &[]), user("more"), asst("y")];
+        let again = carried(&next, 1, 100_000, Some);
+        assert_eq!(again.left_out, 2);
+        // "more" is kept after the cut, so the old request is an earlier message now.
+        assert_eq!(again.earlier[0], c.earlier[0]);
+        assert_eq!(again.earlier[1], "the request");
+        assert_eq!(again.current, None);
+        assert_eq!(carried(&next, 3, 100_000, Some).earlier.len(), 2);
+    }
+
+    #[test]
+    fn summaries_from_before_the_change_still_carry_their_request() {
+        let old = user(
+            "[compaction summary]\nintro\n\ndid things\n\n## The user's current request \
+             (verbatim)\nfix the bug",
+        );
+        assert_eq!(summary_body(body(&old)), "did things");
+        let h = vec![old, asst("x")];
+        let c = carried(&h, 2, 10_000, Some);
+        assert_eq!(c.current.as_deref(), Some("fix the bug"));
+    }
+
+    #[test]
+    fn transcript_keeps_user_messages_longest() {
+        let h = vec![
+            user("rule: tabs"),
+            asst(&"b".repeat(500)),
+            asst(&"c".repeat(500)),
+            user("latest"),
+        ];
+        let t = transcript(&h, 700);
+        assert!(t.contains("rule: tabs") && t.contains("latest"), "{t}");
+        assert!(t.contains("1 older messages left out"));
+        assert!(!t.contains("bbbb") && t.contains("cccc"));
     }
 }

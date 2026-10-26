@@ -41,6 +41,8 @@ pub enum Subject {
     ToolSearch,
     /// Updating the model's own plan (`todo`); changes nothing.
     Plan,
+    /// Reading back an output the model was already shown in part (`recall`).
+    Recall,
     /// Starting a sub-agent (`task`). Its own calls are checked one by one; this decides
     /// only whether it may start (plan mode runs only read-only agents).
     Agent {
@@ -80,6 +82,9 @@ pub struct ToolOutput {
     pub summary: String,
     /// Full diff or output for the UI, when it differs from `model`.
     pub detail: Option<String>,
+    /// The whole output when `model` holds only part of it (a long command output trimmed
+    /// in the middle). The engine keeps it for `recall`.
+    pub full: Option<String>,
 }
 
 impl ToolOutput {
@@ -90,6 +95,7 @@ impl ToolOutput {
             images: Vec::new(),
             summary: summary.into(),
             detail: None,
+            full: None,
         }
     }
 
@@ -101,6 +107,7 @@ impl ToolOutput {
             model: format!("Error: {message}"),
             images: Vec::new(),
             detail: None,
+            full: None,
         }
     }
 
@@ -247,6 +254,8 @@ pub struct ToolCtx {
     pub outline_above: usize,
     /// Grammars and their `grammars/` query overrides, for outlines.
     pub grammars: Arc<crate::grammar::Grammars>,
+    /// Full outputs kept for `recall`; disabled hides the tool.
+    pub observations: Arc<crate::recall::Observations>,
 }
 
 impl ToolCtx {
@@ -328,6 +337,7 @@ impl Registry {
             Arc::new(crate::todo::Todo),
             Arc::new(crate::ask::AskUser),
             Arc::new(crate::task::Task),
+            Arc::new(crate::recall::Recall),
         ];
         Self { tools }
     }
@@ -364,6 +374,7 @@ pub(crate) fn test_ctx() -> ToolCtx {
         vision: false,
         outline_above: 0,
         grammars: crate::grammar::Grammars::builtin(),
+        observations: Arc::default(),
     }
 }
 

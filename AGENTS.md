@@ -88,6 +88,7 @@ There is one engine and three in-process clients, connected by an Op/Event proto
    Models run in parallel; `EVAL_ARGS="--suite evals/hard"` (the suite that separates setups; several times the cost of `tasks`), `"--repeat 3"`, `--tasks a,b` or `--planner charm-hyper/kimi-k3` (plan with that model, carry out with the `-m` one; compare it against both models alone) pass through. It ends with `scripts/eval-table.py evals/results/<date>`, which prints one row per model and profile.
 4. **Read the signals.** The pass rate saturates on `evals/tasks`; on `evals/hard` it should not:
    - **failure labels** (`eval-table.py` lists them per setup): `bad-calls` and `edit-failed` point at the profile or edit tool, `untested` at the prompt's advice to run tests, `wrong-files`/`missed-files` at search and navigation, `wrong-fix` at the model.
+   - **clean passes and process labels**: `unverified` (no command after the last edit), `blind-retry`, `regression`. When pass rates tie, fewer clean passes means the setup is getting lucky; `eval-compare.py` pairs `clean pass` like the pass rate.
    - **parse failures**: the profile's tool names or argument shapes don't suit the model. Any non-zero count is a profile bug.
    - **edit failures**: the edit tool's description or format confuses the model.
    - **steps and prompt tokens**: each step re-sends the whole context, so they decide the cost.

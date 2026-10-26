@@ -127,6 +127,9 @@ pub struct ContextSettings {
     /// reports one: to try a small window, or to keep a local server's memory down (Ollama
     /// gets it as `num_ctx`). Unset: the model's whole window.
     pub window: Option<u32>,
+    /// Keep the full text of outputs the model sees only part of (long command output, old
+    /// results that pruning shortens) and offer a `recall` tool to page through them.
+    pub recall: bool,
 }
 
 impl Default for ContextSettings {
@@ -136,6 +139,7 @@ impl Default for ContextSettings {
             cache_strategy: CacheStrategy::Auto,
             compaction_threshold: 0.80,
             window: None,
+            recall: false,
         }
     }
 }

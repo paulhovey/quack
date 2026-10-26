@@ -8,7 +8,9 @@
 //! dropped; the brief that replaces them follows as a `message`; the transcript keeps
 //! them), `approval` and `questions` (what the user answered; replay skips them, since
 //! the tool results carry the answers), `model_switch` (also skipped), `agent` (a sub-agent
-//! run started; its own records are in `agents/<id>.jsonl`, which replay never reads).
+//! run started; its own records are in `agents/<id>.jsonl`, which replay never reads),
+//! `observation` (the whole of an output the model saw only part of, under the handle
+//! `recall` takes; replay skips it, `observations` reads it).
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -177,6 +179,34 @@ pub(crate) fn replay(records: &[Record]) -> (Vec<Message>, Vec<ReplayItem>, u32)
     }
     repair_dangling_calls(&mut history);
     (history, items, turns)
+}
+
+/// The outputs kept for `recall` (`observation` records), as `(handle, text)`.
+pub(crate) fn observations(records: &[Record]) -> impl Iterator<Item = (&str, &str)> {
+    records
+        .iter()
+        .filter(|r| r.kind == "observation")
+        .filter_map(|r| {
+            Some((
+                r.data.get("handle")?.as_str()?,
+                r.data.get("text")?.as_str()?,
+            ))
+        })
+}
+
+/// Keep the whole of an output for `recall`, in memory and in the log; returns its handle.
+pub(crate) fn observe(
+    log: Option<&SharedLog>,
+    kept: &quack_tools::recall::Observations,
+    text: &str,
+) -> String {
+    let handle = kept.keep(text);
+    record(
+        log,
+        "observation",
+        json!({ "handle": handle, "text": text }),
+    );
+    handle
 }
 
 /// A crash between a tool call and its result leaves a call without a result, which

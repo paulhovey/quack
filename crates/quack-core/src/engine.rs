@@ -476,7 +476,7 @@ impl Engine {
         let resume = std::mem::take(&mut self.resume);
         let resumed = resume != Resume::New;
         let history = self
-            .open_saved(&resume, &setup.model_ref)
+            .open_saved(&resume, &setup.model_ref, &setup.tool_ctx.observations)
             .unwrap_or_else(|| {
                 if resume != Resume::New {
                     self.warn("starting a new session".into());
@@ -511,7 +511,12 @@ impl Engine {
 
     /// Load the requested session, if any, and reopen its log for appending. `None` when
     /// there is nothing to load or it failed (with a warning).
-    fn open_saved(&mut self, resume: &Resume, model: &str) -> Option<Vec<Message>> {
+    fn open_saved(
+        &mut self,
+        resume: &Resume,
+        model: &str,
+        kept: &quack_tools::recall::Observations,
+    ) -> Option<Vec<Message>> {
         let entry = match session::find(&self.config, resume) {
             Ok(Some(e)) => e,
             Ok(None) => return None,
@@ -529,6 +534,7 @@ impl Engine {
             }
         };
         let (history, items, turns) = session::replay(&records);
+        kept.replace(session::observations(&records));
         self.stats = Arc::new(Mutex::new(crate::stats::Stats::from_log(&records)));
         self.log = None;
         match ps.reopen(entry.clone()) {
@@ -653,7 +659,12 @@ impl Engine {
     fn switch_session(&mut self, target: Option<SessionId>) {
         // The new session starts outside plan mode, on the session's own model.
         self.restore_editor();
-        let Some(model) = self.convo.as_ref().map(|c| c.setup.model_ref.clone()) else {
+        let Some((model, kept)) = self.convo.as_ref().map(|c| {
+            (
+                c.setup.model_ref.clone(),
+                c.setup.tool_ctx.observations.clone(),
+            )
+        }) else {
             return self.warn("no model is ready; sessions open once one is".into());
         };
         if target.as_ref() == Some(&self.session.id) {
@@ -666,7 +677,7 @@ impl Engine {
         let history = match target {
             Some(id) => {
                 self.sync_log();
-                match self.open_saved(&Resume::Id(id.0), &model) {
+                match self.open_saved(&Resume::Id(id.0), &model, &kept) {
                     Some(h) => h,
                     None => return,
                 }
@@ -674,6 +685,7 @@ impl Engine {
             None => {
                 self.sync_log();
                 self.log = None;
+                kept.replace([]);
                 self.session.id = new_session_id();
                 self.stats = Arc::default();
                 self.turns = 0;
@@ -2191,7 +2203,7 @@ fn load_image(
 
 /// The request appended to each message in plan mode: the profile's `plan.md` (or the
 /// default), and when read-only sub-agents can run, a pointer to them.
-fn plan_note(setup: &Setup) -> String {
+pub(crate) fn plan_note(setup: &Setup) -> String {
     let note = setup.profile.plan_prompt.as_deref().unwrap_or(PLAN_PROMPT);
     let explorers: Vec<&str> = setup
         .tool_ctx

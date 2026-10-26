@@ -17,6 +17,7 @@ pub mod permissions;
 #[cfg(feature = "lang-common")]
 mod ps_split;
 mod read;
+pub mod recall;
 mod registry;
 mod search;
 mod shell;

@@ -187,7 +187,7 @@ impl TurnCtx {
 }
 
 /// Sent once per turn after an empty reply.
-const EMPTY_NUDGE: &str =
+pub(crate) const EMPTY_NUDGE: &str =
     "Your last reply was empty. Continue: call a tool if you need one, otherwise answer.";
 
 enum StepEnd {
@@ -893,7 +893,16 @@ fn begin(ctx: &TurnCtx, call: &ToolCall, summary: &str) {
     });
 }
 
-fn finish(ctx: &TurnCtx, call: &ToolCall, summary: &str, out: ToolOutput) -> ToolOutput {
+fn finish(ctx: &TurnCtx, call: &ToolCall, summary: &str, mut out: ToolOutput) -> ToolOutput {
+    let kept = &ctx.setup.tool_ctx.observations;
+    if let Some(full) = out.full.take()
+        && kept.enabled()
+    {
+        let handle = session::observe(ctx.log.as_ref(), kept, &full);
+        out.model.push('\n');
+        out.model
+            .push_str(&quack_tools::recall::hint(&handle, full.lines().count()));
+    }
     session::record(
         ctx.log.as_ref(),
         "tool",

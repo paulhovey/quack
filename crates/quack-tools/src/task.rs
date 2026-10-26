@@ -233,6 +233,7 @@ impl Tool for Task {
                     images: Vec::new(),
                     summary: report.summary,
                     detail: Some(report.text),
+                    full: None,
                 }
             }
         })

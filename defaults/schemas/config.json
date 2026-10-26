@@ -42,6 +42,11 @@
           "format": "double",
           "type": "number"
         },
+        "recall": {
+          "default": false,
+          "description": "Keep the full text of outputs the model sees only part of (long command output, old\nresults that pruning shortens) and offer a `recall` tool to page through them.",
+          "type": "boolean"
+        },
         "window": {
           "default": null,
           "description": "Use at most this many tokens of the model's context window, also when nothing\nreports one: to try a small window, or to keep a local server's memory down (Ollama\ngets it as `num_ctx`). Unset: the model's whole window.",
@@ -562,6 +567,7 @@
         "budget_ratio": 0.85,
         "cache_strategy": "auto",
         "compaction_threshold": 0.8,
+        "recall": false,
         "window": null
       }
     },

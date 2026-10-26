@@ -62,6 +62,13 @@ pub(crate) fn prune_now(ctx: &TurnCtx, history: &mut [Message]) {
                 .filter(|o| !o.symbols.is_empty())
                 .map(|o| o.render(&quack_tools::paths::display(root, path)))
         },
+        keep: &|text| {
+            let kept = &s.tool_ctx.observations;
+            kept.enabled().then(|| {
+                let handle = session::observe(ctx.log.as_ref(), kept, text);
+                format!("`recall` with id \"{handle}\" returns all of it")
+            })
+        },
     };
     let ops = prune::plan(history, protect_from, &hooks);
     if ops.is_empty() {
@@ -219,8 +226,13 @@ pub(crate) async fn compact_now(
         }
     };
 
-    let request = compact::carried_request(history, cut).map(str::to_owned);
-    let message = compact::summary_message(&summary, request.as_deref(), &turn::changed_files(ctx));
+    // What the user said is carried verbatim, within an eighth of the budget (in tokens),
+    // less the plan-mode note and the engine's own nudges.
+    let note = format!("\n\n{}", crate::engine::plan_note(s));
+    let carried = compact::carried(history, cut, budget as usize / 2, |t| {
+        (t != turn::EMPTY_NUDGE).then(|| t.strip_suffix(note.as_str()).unwrap_or(t))
+    });
+    let message = compact::summary_message(&summary, &carried, &turn::changed_files(ctx));
     compact::apply(history, cut, message.clone());
     session::record(
         ctx.log.as_ref(),

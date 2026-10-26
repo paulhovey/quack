@@ -56,6 +56,9 @@ pub struct Hooks<'a> {
     pub stale: &'a dyn Fn(&str) -> bool,
     /// The outline of a file's text (`path`, `text`), when its language has one.
     pub outline: &'a dyn Fn(&str, &str) -> Option<String>,
+    /// Keep the whole of an output about to be shortened; returns how the model gets it
+    /// back (`recall`), or `None` when nothing keeps it.
+    pub keep: &'a dyn Fn(&str) -> Option<String>,
 }
 
 impl std::fmt::Debug for Hooks<'_> {
@@ -172,7 +175,7 @@ pub fn plan(history: &[Message], protect_from: usize, hooks: &Hooks<'_>) -> Vec<
             }
         }
         if content.len() > LARGE_CHARS
-            && let Some(short) = head_and_tail(content)
+            && let Some(short) = head_and_tail(content, hooks.keep)
         {
             ops.push(PruneOp {
                 index: *index,
@@ -287,8 +290,8 @@ fn covers(outer: Option<(u64, u64)>, inner: Option<(u64, u64)>) -> bool {
 }
 
 /// The first and last lines of a long output with a note in between, or `None` when that
-/// would not make it meaningfully shorter.
-fn head_and_tail(content: &str) -> Option<String> {
+/// would not make it meaningfully shorter. Only then is the whole handed to `keep`.
+fn head_and_tail(content: &str, keep: &dyn Fn(&str) -> Option<String>) -> Option<String> {
     let lines: Vec<&str> = content.lines().collect();
     let clip = |s: String, from_end: bool| -> String {
         if s.len() <= KEEP_CHARS {
@@ -323,9 +326,13 @@ fn head_and_tail(content: &str) -> Option<String> {
         )
     };
     let (head, tail) = (clip(head, false), clip(tail, true));
-    let out =
-        format!("{MARKER}: this old output was shortened; {elided} omitted]\n{head}\n[…]\n{tail}");
-    (out.len() * 2 < content.len()).then_some(out)
+    if (head.len() + tail.len() + 100) * 2 >= content.len() {
+        return None;
+    }
+    let back = keep(content).map_or_else(String::new, |how| format!("; {how}"));
+    Some(format!(
+        "{MARKER}: this old output was shortened; {elided} omitted{back}]\n{head}\n[…]\n{tail}"
+    ))
 }
 
 /// Apply ops to history. Ops that no longer fit (index out of range or not a tool result)
@@ -390,6 +397,7 @@ mod tests {
             classify: &classify,
             stale: &|_| false,
             outline: &|_, _| None,
+            keep: &|_| None,
         }
     }
 
@@ -467,6 +475,7 @@ mod tests {
                 classify: &classify,
                 stale: &stale,
                 outline: &outline,
+                keep: &|_| panic!("reads are not kept"),
             },
         );
         assert_eq!(
@@ -555,6 +564,46 @@ mod tests {
         assert!(c.starts_with(MARKER) && c.contains("450 lines omitted"));
         assert!(c.contains("line 1\n") && c.contains("line 500") && !c.contains("line 200\n"));
         assert!(plan(&h, 1, &hooks()).is_empty(), "protected");
+
+        // With a store, the whole output is kept and the stub says how to get it back.
+        let kept = std::cell::RefCell::new(Vec::new());
+        let keep = |text: &str| {
+            kept.borrow_mut().push(text.to_owned());
+            Some("`recall` with id \"o1\" returns all of it".to_owned())
+        };
+        let ops = plan(
+            &h,
+            2,
+            &Hooks {
+                keep: &keep,
+                ..hooks()
+            },
+        );
+        assert!(ops[0].content.starts_with(
+            "[pruned: this old output was shortened; 450 lines omitted; `recall` with id \"o1\" \
+             returns all of it]\nline 1\n"
+        ));
+        assert_eq!(
+            kept.borrow().as_slice(),
+            [h[1].clone()].map(|m| match m {
+                Message::Tool { content, .. } => content,
+                _ => unreachable!(),
+            })
+        );
+        // Nothing is kept for an output too short to shorten.
+        let small = vec![call("1", "shell", "-"), result("1", "x\n".repeat(30))];
+        assert!(
+            plan(
+                &small,
+                2,
+                &Hooks {
+                    keep: &keep,
+                    ..hooks()
+                }
+            )
+            .is_empty()
+        );
+        assert_eq!(kept.borrow().len(), 1);
     }
 
     #[test]

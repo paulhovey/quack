@@ -128,6 +128,14 @@ async fn runs_checks_and_reports() {
     let edit = by("edit-one");
     assert!(edit.passed, "{edit:?}");
     assert_eq!((edit.steps, edit.tool_calls, edit.edit_failures), (2, 1, 0));
+    // It passed, but never ran anything after its edit.
+    let labels: Vec<&str> = edit.process.iter().map(|p| p.label()).collect();
+    assert_eq!(labels, ["unverified"]);
+    assert_eq!(
+        serde_json::to_value(edit).expect("json")["process"],
+        json!(["unverified"])
+    );
+    assert!(by("answer").process.is_empty());
     // How full the context got: the larger of the two requests.
     assert_eq!(
         (edit.prompt_tokens, edit.peak_prompt, edit.pruned),

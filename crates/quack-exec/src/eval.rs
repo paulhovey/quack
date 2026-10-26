@@ -215,6 +215,11 @@ pub struct RunResult {
     /// Why a failed run failed, as one label (see `Failure`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<Failure>,
+    /// How the run went about it, passed or not (see `Process`). A pass with any of these
+    /// may owe more to luck than to the setup. Always written, so results from before it
+    /// existed (no key) are told apart from clean runs (`[]`).
+    #[serde(default)]
+    pub process: Vec<Process>,
     /// The files the model changed, added or removed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changed: Vec<String>,
@@ -567,6 +572,78 @@ impl Failure {
 }
 
 /// What `classify` reads about a finished run.
+/// A habit the runner saw in a run's tool calls that makes its result less trustworthy,
+/// whether it passed or not: a pass that never checked its last change, or got there by
+/// rerunning failures, may not pass again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Process {
+    /// It ran no command after its last successful edit, so the final change went unchecked.
+    Unverified,
+    /// It ran a command that had just failed again, unchanged, with no edit in between.
+    BlindRetry,
+    /// A command that had succeeded failed later: a change broke what had worked.
+    Regression,
+}
+
+impl Process {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Unverified => "unverified",
+            Self::BlindRetry => "blind-retry",
+            Self::Regression => "regression",
+        }
+    }
+}
+
+/// One tool call as the runner saw it: the internal tool, its summary (a shell call's is
+/// `$ <command>`) and whether it succeeded (a command: exit code 0).
+#[derive(Debug, Clone)]
+pub struct Call {
+    pub tool: String,
+    pub summary: String,
+    pub ok: bool,
+}
+
+/// The process labels for a run's calls, in `Process` order.
+pub fn process(calls: &[Call]) -> Vec<Process> {
+    let edit = |c: &Call| c.ok && matches!(c.tool.as_str(), "edit" | "apply_patch" | "write");
+    let shell = |c: &Call| c.tool == "shell";
+    let mut out = Vec::new();
+    if let Some(last) = calls.iter().rposition(edit)
+        && !calls[last + 1..].iter().any(shell)
+    {
+        out.push(Process::Unverified);
+    }
+    // The last result of each command since the last edit, and whether it ever succeeded.
+    let mut since_edit: HashMap<&str, bool> = HashMap::new();
+    let mut succeeded: HashMap<&str, bool> = HashMap::new();
+    let (mut blind, mut regressed) = (false, false);
+    for c in calls {
+        if edit(c) {
+            since_edit.clear();
+            continue;
+        }
+        if !shell(c) {
+            continue;
+        }
+        let cmd = c.summary.as_str();
+        blind |= !c.ok && since_edit.get(cmd) == Some(&false);
+        regressed |= !c.ok && succeeded.get(cmd) == Some(&true);
+        since_edit.insert(cmd, c.ok);
+        if c.ok {
+            succeeded.insert(cmd, true);
+        }
+    }
+    if blind {
+        out.push(Process::BlindRetry);
+    }
+    if regressed {
+        out.push(Process::Regression);
+    }
+    out
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Outcome<'a> {
     pub timed_out: bool,
@@ -672,6 +749,7 @@ pub async fn run_task(task: &Task, opts: &EvalOptions, run: u32) -> RunResult {
     let mut answer = String::new();
     let mut names: HashMap<String, String> = HashMap::new();
     let mut tools: Vec<String> = Vec::new();
+    let mut calls: Vec<Call> = Vec::new();
     let mut sent = false;
     // With a planner, the first turn is in plan mode and accepting it starts the second.
     let mut planning = opts.planner.is_some();
@@ -731,6 +809,11 @@ pub async fn run_task(task: &Task, opts: &EvalOptions, run: u32) -> RunResult {
                         result.edit_failures += 1;
                     }
                 }
+                calls.push(Call {
+                    tool: tool.clone(),
+                    summary,
+                    ok: r.ok,
+                });
                 tools.push(tool);
             }
             Event::ApprovalRequest { call_id, .. } => {
@@ -778,6 +861,7 @@ pub async fn run_task(task: &Task, opts: &EvalOptions, run: u32) -> RunResult {
     engine.shutdown().await;
     result.seconds = started.elapsed().as_secs_f64();
     result.changed = changed_files(&start, &ws);
+    result.process = process(&calls);
     let mut only_answer_failed = false;
     if result.error.is_none() || interrupted {
         if let Err(e) = task.reveal(&ws) {
@@ -966,6 +1050,70 @@ mod tests {
         let failed = check(&checks, &tmp, "no", &[], &none);
         assert_eq!(failed.len(), 2, "{failed:?}");
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn process_labels_read_the_calls() {
+        fn labels(calls: &[(&str, bool)]) -> Vec<&'static str> {
+            let calls: Vec<Call> = calls
+                .iter()
+                .map(|&(summary, ok)| Call {
+                    tool: internal_tool(summary),
+                    summary: summary.into(),
+                    ok,
+                })
+                .collect();
+            process(&calls).into_iter().map(Process::label).collect()
+        }
+        let test = "$ pytest -q";
+        // Edit, test fails, edit, test passes: a clean run.
+        let clean = [
+            ("read a.py", true),
+            ("edit a.py", true),
+            (test, false),
+            ("edit a.py", true),
+            (test, true),
+        ];
+        assert!(labels(&clean).is_empty());
+        // The last edit was never followed by a command.
+        assert_eq!(labels(&[(test, true), ("edit a.py", true)]), ["unverified"]);
+        // A failed edit doesn't count as a change to check.
+        assert!(labels(&[("edit a.py", true), (test, true), ("edit a.py", false)]).is_empty());
+        // No edits at all (an answer-only task): nothing to verify.
+        assert!(labels(&[("read a.py", true)]).is_empty());
+        // The same failing command again with nothing changed in between.
+        assert_eq!(
+            labels(&[
+                ("edit a.py", true),
+                (test, false),
+                ("read a.py", true),
+                (test, false)
+            ]),
+            ["blind-retry"]
+        );
+        // Tests went green, an edit broke them, and a later edit fixed them.
+        assert_eq!(
+            labels(&[
+                ("edit a.py", true),
+                (test, true),
+                ("edit b.py", true),
+                (test, false),
+                ("edit b.py", true),
+                (test, true),
+            ]),
+            ["regression"]
+        );
+        // All three, in order.
+        assert_eq!(
+            labels(&[
+                (test, true),
+                ("edit a.py", true),
+                (test, false),
+                (test, false),
+                ("write a.py", true)
+            ]),
+            ["unverified", "blind-retry", "regression"]
+        );
     }
 
     #[test]
