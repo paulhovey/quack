@@ -1539,8 +1539,13 @@ fn advice(r: &quack_protocol::ContextReport) -> String {
     }
 }
 
-/// The `/memory` modal. `notes` is `None` while the engine reads them.
-pub(crate) fn memory(notes: Option<&[quack_protocol::MemoryNote]>, theme: &Theme) -> Modal {
+/// The `/memory` modal. `notes` is `None` while the engine reads them. From 80% of the
+/// index cap (`fill`), the tab title says so.
+pub(crate) fn memory(
+    notes: Option<&[quack_protocol::MemoryNote]>,
+    fill: u32,
+    theme: &Theme,
+) -> Modal {
     let items = match notes {
         None => vec![placeholder(
             "reading notes…",
@@ -1587,7 +1592,11 @@ pub(crate) fn memory(notes: Option<&[quack_protocol::MemoryNote]>, theme: &Theme
     Modal::new(
         "Memory",
         vec![ModalTab {
-            title: "Notes".into(),
+            title: if fill >= 80 {
+                format!("Notes · index {fill}% full")
+            } else {
+                "Notes".into()
+            },
             items,
         }],
     )

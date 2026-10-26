@@ -431,7 +431,8 @@ fn policy_hosts_leave_only_allowed_servers() {
 }
 
 /// The request after a resume is byte-for-byte the request the live session would have
-/// sent: same system prompt, tools, history (tool calls, results, reasoning) and params.
+/// sent: same system prompt, tools, history (tool calls, results, reasoning), plan
+/// reminder and params.
 #[tokio::test]
 async fn resume_reproduces_the_request_exactly() {
     let server = MockServer::start().await;
@@ -449,7 +450,8 @@ async fn resume_reproduces_the_request_exactly() {
         .and(path("/v1/chat/completions"))
         .respond_with(sse(&[
             r#"{"choices":[{"delta":{"content":"Writing it."}}]}"#,
-            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"write","arguments":"{\"path\":\"notes.txt\",\"content\":\"hi\\n\"}"}}]},"finish_reason":"tool_calls"}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"write","arguments":"{\"path\":\"notes.txt\",\"content\":\"hi\\n\"}"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":1,"id":"c2","function":{"name":"todo","arguments":"{\"items\":[{\"text\":\"write notes\",\"status\":\"done\"},{\"text\":\"answer questions\",\"status\":\"in_progress\"}]}"}}]},"finish_reason":"tool_calls"}]}"#,
         ]))
         .up_to_n_times(1)
         .mount(&server)
@@ -495,4 +497,8 @@ async fn resume_reproduces_the_request_exactly() {
         "{messages:#?}"
     );
     assert!(bodies[0]["tools"].as_array().is_some_and(|t| !t.is_empty()));
+    assert!(
+        bodies[0].to_string().contains("[~] answer questions"),
+        "the plan reminder rides on the request: {messages:#?}"
+    );
 }

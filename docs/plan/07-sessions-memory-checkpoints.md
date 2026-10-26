@@ -37,6 +37,7 @@ Each line is one JSON object with `{"v":1, "t":"<type>", "ts":"…", ...}`:
 | `prune` | list of `PruneOp`s ([05](05-context-management.md)) |
 | `compaction` | replaced range, summary text, model used |
 | `model_switch` | from/to |
+| `plan` | the `todo` checklist after each change; resume restores the last one, `/new` starts empty |
 | `usage` | per-request token usage, TTFT, cache stats |
 | `checkpoint` | checkpoint id, files |
 | `rewind` / `fork` | target event index |
@@ -126,6 +127,14 @@ As implemented (M2, 2026-10-18):
 - `/memory` lists notes from both scopes with their text and file path. Ctrl-S deletes the selected note.
 - The startup panel shows the note count and the project memory folder.
 - Memory writes have their own permission subject. They are outside the workspace, so the edit rules and `read-only` mode don't apply to them; only `memory.writes` does.
+
+When to save, and keeping notes healthy (2026-10-25):
+- **Triggers in the prompt.** The `memory` tool description (which every profile gets) names the moments to save: the user corrects how the model works, states a lasting preference ("always", "never", "from now on", "I prefer"), accepts an approach after pushing back, or the model learns an unwritten project fact. It asks for the reason in the note, an update rather than a near-duplicate, and nothing secret, already in the repo, or only about this task. `generic`, `kimi-code` and `qwen-code` say the same in short.
+- **Nudge** (`quack-core/src/nudge.rs`, `memory.nudge`, default on). When the typed message sounds like a correction or lasting preference (phrases such as "from now on", "I prefer", "next time", or an opening like "No," or "Always "; code blocks, quoted lines, slash commands and messages over 1,200 characters don't count), one bracketed line is added at the end of the user message, naming the memory tool as the profile calls it. It goes into the message itself, as the undo note does, so the history stays append-only for every provider and no model call is spent. Tested in `core/tests/instructions.rs`.
+- **The notes are the source of truth.** `MemoryStore::reconcile` rebuilds the index's note lines from each note's front matter on every read for the prompt, every write and `/memory`: one line per note, in place, new ones at the end; lines for missing notes and git conflict markers go; other hand-written lines stay. So a git or Syncthing merge, a note added or deleted by hand, or two sessions writing at once leave a correct index. A note line edited by hand in `MEMORY.md` is rewritten from the note: edit the note instead. Files that aren't valid note names (a sync tool's `x.sync-conflict-….md`) are ignored.
+- **Index size.** `index_fill` is the index's size as a share of `memory.index_max_tokens`. From 80%, the startup panel and the `/memory` tab title show it, and each memory write tells the model to merge overlapping notes and delete stale ones; past 100%, notes beyond the cap are left out of the prompt.
+- **Stale notes.** Reading a project note lists the backticked paths in it (words with a path separator; a trailing `:line` is allowed) that are not in the workspace now, and asks the model to check the note before relying on it. The tool description also says a note is as old as its `updated` date.
+- Not done: an end-of-session reflection pass (one model call asking what was worth remembering), proposed as opt-in; and an eval across two sessions that checks a preference given in the first is followed in the second.
 
 ## Checkpoints (file undo)
 

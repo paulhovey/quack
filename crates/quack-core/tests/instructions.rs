@@ -109,7 +109,13 @@ async fn memory_index_in_the_prompt_and_notes_saved_by_the_tool() {
     std::fs::create_dir_all(&global).expect("mkdir");
     std::fs::write(
         global.join("MEMORY.md"),
-        "- [tabs](notes/tabs.md) — prefers tabs\n",
+        "- [tabs](notes/tabs.md) — prefers tabs\n- [gone](notes/gone.md) — deleted note\n",
+    )
+    .expect("write");
+    std::fs::create_dir_all(global.join("notes")).expect("mkdir");
+    std::fs::write(
+        global.join("notes/tabs.md"),
+        "---\nname: tabs\ndescription: prefers tabs\ntype: user\n---\n\nTabs.\n",
     )
     .expect("write");
     let loaded = common::workspace(tmp.path(), &server.uri(), r#"["tiny"]"#, "");
@@ -117,8 +123,10 @@ async fn memory_index_in_the_prompt_and_notes_saved_by_the_tool() {
     let mut engine = Engine::spawn(Arc::new(loaded));
     turn(&mut engine, "remember pnpm").await;
     let first = bodies(&server).await.remove(0);
+    // The index is rebuilt from the notes, so the line for a deleted one is gone.
     assert!(
-        first.contains("MEMORY: global memory:\\n- [tabs](notes/tabs.md) — prefers tabs"),
+        first.contains("MEMORY: global memory:\\n- [tabs](notes/tabs.md) — prefers tabs\"")
+            && !first.contains("gone"),
         "{first}"
     );
     let projects = global.join("projects");
@@ -131,6 +139,39 @@ async fn memory_index_in_the_prompt_and_notes_saved_by_the_tool() {
     let note = std::fs::read_to_string(project.join("notes/uses-pnpm.md")).expect("note");
     assert!(note.contains("Use pnpm, never npm."));
     engine.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_lasting_preference_gets_a_reminder_to_save_it() {
+    const NUDGE: &str = "[If this message corrects how you work or states a lasting preference";
+    for nudge in [true, false] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(sse_text("ok"))
+            .mount(&server)
+            .await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(tmp.path().join("user")).expect("mkdir");
+        std::fs::write(
+            tmp.path().join("user/config.toml"),
+            format!("[memory]\nnudge = {nudge}\n"),
+        )
+        .expect("config");
+        let loaded = common::workspace(tmp.path(), &server.uri(), r#"["tiny"]"#, "");
+        let mut engine = Engine::spawn(Arc::new(loaded));
+        turn(&mut engine, "fix the failing test").await;
+        turn(&mut engine, "From now on, use pnpm.").await;
+        let all = bodies(&server).await;
+        assert!(!all[0].contains(NUDGE));
+        // At the end of the user's message, where it stays in the history.
+        assert_eq!(
+            all[1].contains("From now on, use pnpm.\\n\\n[If this message corrects"),
+            nudge,
+            "{}",
+            all[1]
+        );
+        engine.shutdown().await;
+    }
 }
 
 #[tokio::test]

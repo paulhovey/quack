@@ -85,6 +85,24 @@ impl Plan {
         Ok(items[at].0.clone())
     }
 
+    /// Replace the plan with one rebuilt from its [`checklist`](Self::checklist) text, as a
+    /// session log stores it. An empty text clears it.
+    pub fn restore(&self, checklist: &str) {
+        let items = checklist
+            .lines()
+            .filter_map(|l| {
+                let status = match l.get(..3)? {
+                    "[x]" => Status::Done,
+                    "[~]" => Status::InProgress,
+                    "[ ]" => Status::Pending,
+                    _ => return None,
+                };
+                Some((l[3..].trim_start().to_owned(), status))
+            })
+            .collect();
+        self.set(items);
+    }
+
     /// Changes with every update of the plan.
     pub fn version(&self) -> u64 {
         self.version.load(Ordering::Relaxed)
@@ -251,6 +269,22 @@ impl Tool for Todo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restores_from_its_checklist() {
+        let p = Plan::default();
+        p.set(vec![
+            ("read [the] code".into(), Status::Done),
+            ("fix it".into(), Status::InProgress),
+            ("test".into(), Status::Pending),
+        ]);
+        let q = Plan::default();
+        q.restore(&p.checklist());
+        assert_eq!(q.checklist(), p.checklist());
+        assert_eq!(q.reminder(), p.reminder());
+        q.restore("");
+        assert!(q.checklist().is_empty());
+    }
 
     #[test]
     fn accepts_the_shapes_models_send() {

@@ -8,7 +8,8 @@
 //! dropped; the brief that replaces them follows as a `message`; the transcript keeps
 //! them), `approval` and `questions` (what the user answered; replay skips them, since
 //! the tool results carry the answers), `model_switch` (also skipped), `agent` (a sub-agent
-//! run started; its own records are in `agents/<id>.jsonl`, which replay never reads).
+//! run started; its own records are in `agents/<id>.jsonl`, which replay never reads),
+//! `plan` (the `todo` checklist after a change; the last one is the plan on resume).
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -62,11 +63,26 @@ pub(crate) fn find(config: &Loaded, resume: &Resume) -> Result<Option<IndexEntry
     }
 }
 
-/// Rebuild model history and the display transcript from a session's records.
-pub(crate) fn replay(records: &[Record]) -> (Vec<Message>, Vec<ReplayItem>, u32) {
+/// A session rebuilt from its records.
+#[derive(Debug, Default)]
+pub(crate) struct Replayed {
+    /// The model's history, as the next request sends it.
+    pub history: Vec<Message>,
+    /// The display transcript.
+    pub items: Vec<ReplayItem>,
+    /// User turns in `history`.
+    pub turns: u32,
+    /// The plan's checklist (`Plan::restore`); empty when there is none.
+    pub plan: String,
+}
+
+/// Rebuild model history, the display transcript and the plan from a session's records.
+pub(crate) fn replay(records: &[Record]) -> Replayed {
     let mut history = Vec::new();
     let mut items = Vec::new();
     let mut turns: u32 = 0;
+    // A rewind leaves the plan as it was, as it does live.
+    let mut plan = String::new();
     // `(history index, items length)` at each user message, to cut the transcript on rewind.
     let mut marks: Vec<(usize, usize)> = Vec::new();
     for r in records {
@@ -172,11 +188,21 @@ pub(crate) fn replay(records: &[Record]) -> (Vec<Message>, Vec<ReplayItem>, u32)
             // The live session repaired its history when it resumed; do the same at the
             // same point so later prune and compaction records line up.
             "resume" => repair_dangling_calls(&mut history),
+            "plan" => {
+                if let Some(c) = r.data.get("checklist").and_then(|v| v.as_str()) {
+                    c.clone_into(&mut plan);
+                }
+            }
             _ => {}
         }
     }
     repair_dangling_calls(&mut history);
-    (history, items, turns)
+    Replayed {
+        history,
+        items,
+        turns,
+        plan,
+    }
 }
 
 /// A crash between a tool call and its result leaves a call without a result, which
@@ -277,7 +303,12 @@ mod tests {
             ),
             msg(user("three")),
         ];
-        let (history, items, turns) = replay(&records);
+        let Replayed {
+            history,
+            items,
+            turns,
+            ..
+        } = replay(&records);
         assert_eq!(
             history,
             [user("[compaction summary] S"), user("two"), user("three")]
@@ -304,10 +335,18 @@ mod tests {
             msg(asst("a1")),
             msg(user("two")),
             msg(asst("a2")),
+            rec("plan", json!({ "checklist": "[~] two" })),
             rec("rewind", json!({ "to": 2 })),
             msg(user("two again")),
         ];
-        let (history, items, turns) = replay(&records);
+        let Replayed {
+            history,
+            items,
+            turns,
+            plan,
+        } = replay(&records);
+        // As live: a rewind changes the conversation, not the plan.
+        assert_eq!(plan, "[~] two");
         assert_eq!(history, [user("one"), asst("a1"), user("two again")]);
         assert_eq!(turns, 2);
         assert_eq!(

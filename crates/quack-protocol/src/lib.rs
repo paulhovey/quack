@@ -341,6 +341,9 @@ pub enum Event {
     },
     MemoryNotes {
         notes: Vec<MemoryNote>,
+        /// How full the memory index is, as a percentage of `memory.index_max_tokens`.
+        #[serde(default)]
+        index_fill: u32,
     },
     DoctorReport {
         checks: Vec<DoctorCheck>,

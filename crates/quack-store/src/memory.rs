@@ -3,7 +3,9 @@
 //!
 //! Each scope is a directory holding `MEMORY.md` (one index line per note) and
 //! `notes/<name>.md` (front matter plus body). Everything is plain text the user can read,
-//! edit and commit; lines of the index the user wrote by hand are kept.
+//! edit, sync and commit. The notes are the source of truth: the index's note lines are
+//! rebuilt from their front matter (`reconcile`), so a hand edit, a sync conflict or two
+//! sessions writing at once can't leave it wrong. Lines the user wrote by hand are kept.
 
 use std::path::{Path, PathBuf};
 
@@ -39,6 +41,8 @@ pub const KINDS: &[&str] = &["user", "project", "feedback", "reference"];
 pub struct MemoryStore {
     pub global: PathBuf,
     pub project: PathBuf,
+    /// Bytes of index the prompt takes; the rest is left out.
+    pub index_cap: usize,
 }
 
 impl MemoryStore {
@@ -46,7 +50,14 @@ impl MemoryStore {
         Self {
             global: global.into(),
             project: project.into(),
+            // `memory.index_max_tokens`' default, at about 3.5 bytes a token.
+            index_cap: 5_250,
         }
+    }
+
+    pub fn with_index_cap(mut self, bytes: usize) -> Self {
+        self.index_cap = bytes;
+        self
     }
 
     pub fn dir(&self, scope: Scope) -> &Path {
@@ -60,13 +71,11 @@ impl MemoryStore {
         self.dir(scope).join("notes").join(format!("{name}.md"))
     }
 
-    /// Both indexes for the system prompt, capped at `max_bytes`; empty when there are none.
-    pub fn index_text(&self, max_bytes: usize) -> String {
+    /// Both indexes, uncut.
+    fn index_full(&self) -> String {
         let mut out = String::new();
         for scope in [Scope::Global, Scope::Project] {
-            let Ok(text) = std::fs::read_to_string(self.dir(scope).join("MEMORY.md")) else {
-                continue;
-            };
+            let text = self.reconcile(scope);
             let text = text.trim();
             if text.is_empty() {
                 continue;
@@ -76,8 +85,14 @@ impl MemoryStore {
             }
             out.push_str(&format!("{} memory:\n{text}", scope.label()));
         }
-        if out.len() > max_bytes {
-            let mut cut = max_bytes;
+        out
+    }
+
+    /// Both indexes for the prompt, capped at `index_cap`; empty when there are none.
+    pub fn index_text(&self) -> String {
+        let mut out = self.index_full();
+        if out.len() > self.index_cap {
+            let mut cut = self.index_cap;
             while !out.is_char_boundary(cut) {
                 cut -= 1;
             }
@@ -87,6 +102,12 @@ impl MemoryStore {
             out.push_str("\n… [more notes; use the memory tool to list them]");
         }
         out
+    }
+
+    /// How full the index is, as a percentage of `index_cap`. Past 100, notes are left out
+    /// of the prompt.
+    pub fn index_fill(&self) -> usize {
+        self.index_full().len() * 100 / self.index_cap.max(1)
     }
 
     /// Note names with descriptions, by scope.
@@ -102,6 +123,8 @@ impl MemoryStore {
                     .to_string_lossy()
                     .strip_suffix(".md")?
                     .to_owned();
+                // Skips sync tools' conflict copies (`x.sync-conflict-….md`) and stray files.
+                check_name(&name).ok()?;
                 let text = std::fs::read_to_string(e.path()).unwrap_or_default();
                 Some((name, front(&text, "description").unwrap_or_default()))
             })
@@ -146,7 +169,7 @@ impl MemoryStore {
         let io = |e: std::io::Error| format!("cannot write {}: {e}", path.display());
         std::fs::create_dir_all(path.parent().unwrap_or(self.dir(scope))).map_err(io)?;
         std::fs::write(&path, text).map_err(io)?;
-        self.set_index_line(scope, name, Some(description))?;
+        self.reconcile(scope);
         Ok(path)
     }
 
@@ -155,41 +178,74 @@ impl MemoryStore {
         let path = self.note_path(scope, name);
         std::fs::remove_file(&path)
             .map_err(|_| format!("no {} note named `{name}`", scope.label()))?;
-        self.set_index_line(scope, name, None)
+        self.reconcile(scope);
+        Ok(())
     }
 
-    /// Replace (or remove, with `None`) the index line linking to this note.
-    fn set_index_line(
-        &self,
-        scope: Scope,
-        name: &str,
-        description: Option<&str>,
-    ) -> Result<(), String> {
+    /// The scope's index, brought in line with its notes and saved when that changed it.
+    /// Each note gets one line, built from its front matter, where its line was or else at
+    /// the end; lines for missing notes and merge-conflict markers go; other lines stay.
+    fn reconcile(&self, scope: Scope) -> String {
         let path = self.dir(scope).join("MEMORY.md");
         let old = std::fs::read_to_string(&path).unwrap_or_default();
-        let link = format!("](notes/{name}.md)");
-        let line = description.map(|d| format!("- [{name}](notes/{name}.md) — {d}"));
+        let notes = self.list(scope);
+        let line = |(name, d): &(String, String)| {
+            let d = if d.is_empty() { name } else { d };
+            format!("- [{name}](notes/{name}.md) — {d}")
+        };
+        let mut placed: Vec<&str> = Vec::new();
         let mut lines: Vec<String> = Vec::new();
-        let mut placed = false;
         for l in old.lines() {
-            if l.contains(&link) {
-                if let (Some(new), false) = (&line, placed) {
-                    lines.push(new.clone());
-                    placed = true;
+            if ["<<<<<<<", "|||||||", "=======", ">>>>>>>"]
+                .iter()
+                .any(|m| l.starts_with(m))
+            {
+                continue;
+            }
+            match linked(l) {
+                None => lines.push(l.to_owned()),
+                Some(name) => {
+                    if let Some(n) = notes.iter().find(|n| n.0 == name)
+                        && !placed.contains(&name)
+                    {
+                        lines.push(line(n));
+                        placed.push(name);
+                    }
                 }
-            } else {
-                lines.push(l.to_owned());
             }
         }
-        if let (Some(new), false) = (line, placed) {
-            lines.push(new);
+        for n in notes.iter().filter(|n| !placed.contains(&n.0.as_str())) {
+            lines.push(line(n));
         }
         let mut text = lines.join("\n");
         if !text.is_empty() {
             text.push('\n');
         }
-        std::fs::write(&path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))
+        if text != old {
+            // Best effort: a read-only folder still gets a correct index in the prompt.
+            let _ = std::fs::write(&path, &text);
+        }
+        text
     }
+}
+
+/// Said once the index is 80% full (`MemoryStore::index_fill`), so notes get merged before
+/// some drop out of the prompt.
+pub fn fill_warning(fill: usize) -> Option<String> {
+    match fill {
+        0..80 => None,
+        80..=100 => Some(format!("index {fill}% full")),
+        _ => Some(format!(
+            "index {fill}% full: notes past the cap are left out of the prompt"
+        )),
+    }
+}
+
+/// The note an index line links to, as in `- [name](notes/name.md) — …`.
+fn linked(line: &str) -> Option<&str> {
+    let rest = &line[line.find("](notes/")? + "](notes/".len()..];
+    let name = &rest[..rest.find(".md)")?];
+    check_name(name).ok().map(|()| name)
 }
 
 /// Names are file names on every OS: lowercase letters, digits and dashes.
@@ -269,7 +325,7 @@ mod tests {
                 "Build needs protoc 28".to_owned()
             )]
         );
-        let prompt = m.index_text(10_000);
+        let prompt = m.index_text();
         assert!(prompt.starts_with("global memory:\n- [prefers-tabs]"));
         assert!(prompt.contains("project memory:\n# Hand-written heading"));
 
@@ -298,7 +354,7 @@ mod tests {
     #[test]
     fn index_is_capped_on_a_line_boundary() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let m = MemoryStore::new(tmp.path().join("g"), tmp.path().join("p"));
+        let m = MemoryStore::new(tmp.path().join("g"), tmp.path().join("p")).with_index_cap(200);
         for n in 0..20 {
             m.write(
                 Scope::Global,
@@ -309,7 +365,8 @@ mod tests {
             )
             .expect("write");
         }
-        let t = m.index_text(200);
+        assert!(m.index_fill() > 100);
+        let t = m.index_text();
         assert!(t.len() < 260 && t.ends_with("use the memory tool to list them]"));
         assert!(
             t.lines()
@@ -317,5 +374,42 @@ mod tests {
                 .nth(1)
                 .is_some_and(|l| l.ends_with("some description"))
         );
+    }
+
+    #[test]
+    fn index_is_rebuilt_from_the_notes() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let m = MemoryStore::new(tmp.path().join("g"), tmp.path().join("p"));
+        m.write(Scope::Project, "a", "Note a", "project", "A.")
+            .expect("write");
+        m.write(Scope::Project, "b", "Note b", "project", "B.")
+            .expect("write");
+        // A merge conflict, a duplicate, a line for a deleted note, and a note written by
+        // hand (or synced in) with no index line. A sync tool's conflict copy is ignored.
+        std::fs::write(
+            m.project.join("MEMORY.md"),
+            "# Mine\n<<<<<<< HEAD\n- [a](notes/a.md) — old a\n=======\n\
+             - [a](notes/a.md) — other a\n- [gone](notes/gone.md) — Gone\n>>>>>>> theirs\n",
+        )
+        .expect("index");
+        std::fs::write(
+            m.project.join("notes/c.md"),
+            "---\nname: c\ndescription: Note c\ntype: project\n---\n\nC.\n",
+        )
+        .expect("note");
+        std::fs::write(m.project.join("notes/a.sync-conflict-20261025.md"), "x").expect("copy");
+
+        assert_eq!(
+            m.index_text(),
+            "project memory:\n# Mine\n- [a](notes/a.md) — Note a\n\
+             - [b](notes/b.md) — Note b\n- [c](notes/c.md) — Note c"
+        );
+        // Saved, so the user sees the repaired file too.
+        assert!(
+            std::fs::read_to_string(m.project.join("MEMORY.md"))
+                .expect("index")
+                .starts_with("# Mine\n- [a](notes/a.md) — Note a\n- [b]")
+        );
+        assert_eq!(m.list(Scope::Project).len(), 3);
     }
 }

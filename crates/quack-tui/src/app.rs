@@ -1075,9 +1075,9 @@ impl App {
                     self.modal = Some(modal::doctor(Some(&checks), &self.theme));
                 }
             }
-            Event::MemoryNotes { notes } => {
+            Event::MemoryNotes { notes, index_fill } => {
                 if self.modal.as_ref().is_some_and(|m| m.title == "Memory") {
-                    self.modal = Some(modal::memory(Some(&notes), &self.theme));
+                    self.modal = Some(modal::memory(Some(&notes), index_fill, &self.theme));
                 }
             }
             Event::ContextReport { report } => {
@@ -2304,7 +2304,7 @@ impl App {
                 }
             }
             "memory" if args.is_empty() => {
-                self.modal = Some(modal::memory(None, &self.theme));
+                self.modal = Some(modal::memory(None, 0, &self.theme));
                 self.ops.push(Op::ListMemory);
             }
             "memory" => match args

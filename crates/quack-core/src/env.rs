@@ -153,7 +153,8 @@ pub(crate) fn memory_store(config: &Loaded) -> MemoryStore {
             .join("projects")
             .join(project_key(&config.dirs.workspace_root)),
     };
-    MemoryStore::new(global, project)
+    // About 3.5 bytes per token.
+    MemoryStore::new(global, project).with_index_cap(m.index_max_tokens as usize * 7 / 2)
 }
 
 /// Skill folders, lowest precedence first: system, user, `~/.agents/skills`, the project

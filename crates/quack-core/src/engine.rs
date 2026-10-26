@@ -475,14 +475,18 @@ impl Engine {
         self.session.profile = setup.profile.id.clone();
         let resume = std::mem::take(&mut self.resume);
         let resumed = resume != Resume::New;
-        let history = self
+        let (history, plan) = self
             .open_saved(&resume, &setup.model_ref)
             .unwrap_or_else(|| {
                 if resume != Resume::New {
                     self.warn("starting a new session".into());
                 }
-                Vec::new()
+                (Vec::new(), String::new())
             });
+        if !plan.is_empty() {
+            setup.tool_ctx.plan.restore(&plan);
+            self.emit(Event::Plan { checklist: plan });
+        }
         self.emit(Event::SessionConfigured {
             session: self.session.clone(),
         });
@@ -509,9 +513,10 @@ impl Engine {
         self.start_context = self.session_hooks(HookEvent::SessionStart, source);
     }
 
-    /// Load the requested session, if any, and reopen its log for appending. `None` when
-    /// there is nothing to load or it failed (with a warning).
-    fn open_saved(&mut self, resume: &Resume, model: &str) -> Option<Vec<Message>> {
+    /// Load the requested session, if any, and reopen its log for appending. Returns its
+    /// history and plan checklist; `None` when there is nothing to load or it failed (with
+    /// a warning).
+    fn open_saved(&mut self, resume: &Resume, model: &str) -> Option<(Vec<Message>, String)> {
         let entry = match session::find(&self.config, resume) {
             Ok(Some(e)) => e,
             Ok(None) => return None,
@@ -528,7 +533,12 @@ impl Engine {
                 return None;
             }
         };
-        let (history, items, turns) = session::replay(&records);
+        let session::Replayed {
+            history,
+            items,
+            turns,
+            plan,
+        } = session::replay(&records);
         self.stats = Arc::new(Mutex::new(crate::stats::Stats::from_log(&records)));
         self.log = None;
         match ps.reopen(entry.clone()) {
@@ -552,7 +562,7 @@ impl Engine {
             session: self.session.clone(),
             items,
         });
-        Some(history)
+        Some((history, plan))
     }
 
     /// `/export`: the transcript so far, from the session log.
@@ -570,7 +580,7 @@ impl Engine {
             Ok(r) => r,
             Err(e) => return self.warn(format!("cannot read the session log: {e}")),
         };
-        let (_, items, _) = session::replay(&records);
+        let items = session::replay(&records).items;
         let started = quack_store::time::date(entry.started);
         let header = crate::export::Header {
             id: &self.session.id.0,
@@ -663,7 +673,7 @@ impl Engine {
         if let Some(end) = self.session_hooks(HookEvent::SessionEnd, "switch") {
             drop(end); // runs on; nothing waits for it
         }
-        let history = match target {
+        let (history, plan) = match target {
             Some(id) => {
                 self.sync_log();
                 match self.open_saved(&Resume::Id(id.0), &model) {
@@ -678,15 +688,17 @@ impl Engine {
                 self.stats = Arc::default();
                 self.turns = 0;
                 self.title = None;
-                Vec::new()
+                (Vec::new(), String::new())
             }
         };
         if let Some(c) = &mut self.convo {
-            // Session approvals belong to the session they were given in.
+            // Session approvals and the plan belong to the session they were made in.
             c.perms = Arc::new(Mutex::new(c.setup.permissions.clone()));
             c.nested = nested(&self.config, &c.setup, &history);
             c.history = Some(history);
+            c.setup.tool_ctx.plan.restore(&plan);
         }
+        self.emit(Event::Plan { checklist: plan });
         self.emit_mode();
         self.emit(Event::SessionConfigured {
             session: self.session.clone(),
@@ -1018,7 +1030,10 @@ impl Engine {
                 });
             }
         }
-        self.emit(Event::MemoryNotes { notes });
+        self.emit(Event::MemoryNotes {
+            notes,
+            index_fill: u32::try_from(store.index_fill()).unwrap_or(u32::MAX),
+        });
     }
 
     fn save_setting(&self, key: &str, value: &str, scope: &WriteScope) {
@@ -2059,9 +2074,23 @@ impl Engine {
             .lock()
             .is_ok_and(|p| p.plan)
             .then(|| plan_note(&setup));
+        // A correction or lasting preference: remind the model to save it.
+        let remember = setup
+            .surface
+            .name_of("memory")
+            .filter(|_| {
+                self.config.settings.memory.nudge
+                    && setup.tool_ctx.memory.is_some()
+                    && crate::nudge::lasting(&typed)
+            })
+            .map(crate::nudge::note);
         let compose = move |body: String| {
             let body = match notes {
                 Some(n) => format!("{n}\n\n{body}"),
+                None => body,
+            };
+            let body = match remember {
+                Some(r) => format!("{body}\n\n{r}"),
                 None => body,
             };
             match plan {

@@ -1215,9 +1215,12 @@ async fn run_call(ctx: &TurnCtx, call: &ToolCall) -> ToolOutput {
         }
     };
     if s.tool_ctx.plan.version() != plan_version {
-        ctx.emit(Event::Plan {
-            checklist: s.tool_ctx.plan.checklist(),
-        });
+        let checklist = s.tool_ctx.plan.checklist();
+        // The session's plan is restored from the log on resume; a sub-agent's is its own.
+        if ctx.agent.is_none() {
+            session::record(ctx.log.as_ref(), "plan", json!({ "checklist": checklist }));
+        }
+        ctx.emit(Event::Plan { checklist });
     }
     drop(tctx);
     let _ = forward.await;

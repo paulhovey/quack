@@ -374,6 +374,64 @@ async fn new_list_resume_title_and_save_setting() {
     engine.shutdown().await;
 }
 
+/// The plan belongs to its session: `/new` starts without it and `/resume` brings it back.
+#[tokio::test]
+async fn the_plan_follows_its_session() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(sse(&[
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"todo","arguments":"{\"items\":[{\"text\":\"fix the parser\",\"status\":\"in_progress\"}]}"}}]},"finish_reason":"tool_calls"}]}"#,
+        ]))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(sse(&[
+            r#"{"choices":[{"delta":{"content":"Hi."},"finish_reason":"stop"}]}"#,
+        ]))
+        .mount(&server)
+        .await;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut engine = Engine::spawn(Arc::new(workspace(tmp.path(), &server.uri())));
+    let last = || async {
+        let requests = server.received_requests().await.unwrap_or_default();
+        String::from_utf8_lossy(&requests.last().expect("request").body).into_owned()
+    };
+
+    turn(&mut engine, "first question").await;
+    assert!(last().await.contains("[~] fix the parser"));
+    engine.submit(Op::NewSession).await;
+    turn(&mut engine, "second question").await;
+    assert!(!last().await.contains("fix the parser"));
+
+    engine.submit(Op::ListSessions).await;
+    let sessions = loop {
+        if let Event::SessionList { sessions } = next(&mut engine.events).await {
+            break sessions;
+        }
+    };
+    engine
+        .submit(Op::ResumeSession {
+            id: sessions[1].id.clone(),
+        })
+        .await;
+    let checklist = loop {
+        if let Event::Plan { checklist } = next(&mut engine.events).await {
+            break checklist;
+        }
+    };
+    assert_eq!(checklist, "[~] fix the parser");
+    turn(&mut engine, "third question").await;
+    let body = last().await;
+    assert!(
+        body.contains("third question") && body.contains("[~] fix the parser"),
+        "{body}"
+    );
+    engine.shutdown().await;
+}
+
 #[tokio::test]
 async fn an_empty_reply_is_nudged_once() {
     let server = MockServer::start().await;

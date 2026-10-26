@@ -140,10 +140,14 @@ pub(crate) async fn run(
     });
     let store = env::memory_store(&config);
     let notes = store.list(Scope::Global).len() + store.list(Scope::Project).len();
+    let fill = store.index_fill();
     reporter(Subsystem::Memory).send(LoadState::Ready {
         detail: format!(
-            "{notes} note{} · {}",
+            "{notes} note{}{} · {}",
             if notes == 1 { "" } else { "s" },
+            quack_store::memory::fill_warning(fill)
+                .map(|w| format!(" · {w}"))
+                .unwrap_or_default(),
             store.project.display()
         ),
     });
@@ -726,10 +730,10 @@ async fn build_setup(
             &tool_ctx.skills,
             config.settings.skills.index_max_tokens as usize * 7 / 2,
         ),
-        memory_index: tool_ctx.memory.as_ref().map_or_else(String::new, |m| {
-            // About 3.5 bytes per token.
-            m.index_text(config.settings.memory.index_max_tokens as usize * 7 / 2)
-        }),
+        memory_index: tool_ctx
+            .memory
+            .as_ref()
+            .map_or_else(String::new, |m| m.index_text()),
         ..PromptVars::default()
     };
     // `shape` reads `vision` to decide whether `view_image` is offered.

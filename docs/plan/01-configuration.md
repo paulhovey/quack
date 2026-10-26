@@ -94,7 +94,8 @@ deny  = ["shell:rm -rf /*", "mcp:github/delete_*"]   # kinds: shell, edit, read,
 path = "~/notes/quack-memory"   # default: <user data>/memory
 project_scope = "data-dir"        # data-dir | repo (store under .quack/memory and commit it)
 writes = "auto"                   # auto | ask: approve the model's memory writes
-index_max_tokens = 1500           # cap on the note index in the system prompt
+index_max_tokens = 1500           # cap on the note index in the prompt
+nudge = true                      # remind the model to save corrections and lasting preferences
 
 [skills]
 compat_paths = []                 # more skill folders, e.g. ".claude/skills" once accepted

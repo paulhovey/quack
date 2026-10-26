@@ -15,6 +15,7 @@ mod lsp;
 mod mcp;
 mod mcp_ask;
 mod models;
+mod nudge;
 mod sandbox;
 mod session;
 pub mod setup;

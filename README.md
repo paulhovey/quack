@@ -318,7 +318,13 @@ Everything below works today. Planned work is listed separately at the end.
   It loads as if its files were in that folder, and your own files win over it. `/bundles`
   lists them and turns each on or off (`[bundles] disabled`).
 - Memory: markdown notes for each project and globally, with optional approval before a note
-  is saved. `/memory` shows them.
+  is saved. `/memory` shows them. Point `memory.path` at a synced or committed folder and edit
+  notes by hand: the index (`MEMORY.md`) is rebuilt from the notes, so sync conflicts and
+  deleted notes can't leave it wrong. A message that sounds like a correction or a lasting
+  preference ("from now on…", "no, …") gets a one-line reminder to save it
+  (`memory.nudge = false` turns that off). A note that names files no longer in the
+  workspace is flagged when read, and the model is told to merge notes once the index nears
+  `memory.index_max_tokens`.
 
 ### MCP
 

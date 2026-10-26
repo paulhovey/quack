@@ -180,10 +180,15 @@
       "properties": {
         "index_max_tokens": {
           "default": 1500,
-          "description": "Cap on the memory index in the system prompt.",
+          "description": "Cap on the memory index in the prompt.",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
+        },
+        "nudge": {
+          "default": true,
+          "description": "Remind the model to save a note when a message sounds like a correction or a lasting\npreference (\"from now on\", \"I prefer\", \"no, ...\").",
+          "type": "boolean"
         },
         "path": {
           "default": "",
@@ -612,6 +617,7 @@
       "$ref": "#/$defs/MemorySettings",
       "default": {
         "index_max_tokens": 1500,
+        "nudge": true,
         "path": "",
         "project_scope": "data-dir",
         "writes": "auto"

@@ -279,8 +279,11 @@ pub struct MemorySettings {
     pub project_scope: MemoryScope,
     /// Whether the model's memory writes need approval.
     pub writes: MemoryWrites,
-    /// Cap on the memory index in the system prompt.
+    /// Cap on the memory index in the prompt.
     pub index_max_tokens: u32,
+    /// Remind the model to save a note when a message sounds like a correction or a lasting
+    /// preference ("from now on", "I prefer", "no, ...").
+    pub nudge: bool,
 }
 
 impl Default for MemorySettings {
@@ -290,6 +293,7 @@ impl Default for MemorySettings {
             project_scope: MemoryScope::default(),
             writes: MemoryWrites::default(),
             index_max_tokens: 1_500,
+            nudge: true,
         }
     }
 }

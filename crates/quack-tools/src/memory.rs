@@ -2,7 +2,7 @@
 
 use futures::future::BoxFuture;
 use quack_protocol::ApprovalRequest;
-use quack_store::memory::{KINDS, MemoryStore, Scope};
+use quack_store::memory::{KINDS, MemoryStore, Scope, fill_warning};
 use serde_json::{Value, json};
 
 use crate::registry::{Subject, Tool, ToolCtx, ToolKind, ToolOutput, opt_str};
@@ -57,12 +57,18 @@ impl Tool for Memory {
 
     fn description(&self, _ctx: &ToolCtx) -> String {
         "Long-term memory: markdown notes kept across sessions. The index of saved notes is \
-         in the system prompt. `view` lists notes, or reads one with `name`. `create` and \
-         `update` write a note (`name`, a one-line `description`, `type`, `content`); `delete` \
-         removes one. Scope `project` (default) is for this repository, `global` for every \
-         project. Save what will matter in later sessions: the user's preferences and \
-         corrections, project facts that are not written down in the repository. Never save \
-         secrets, and nothing that is already in the code or docs."
+         shown at the start of the session. `view` lists notes, or reads one with `name`. \
+         `create` and `update` write a note (`name`, a one-line `description`, `type`, \
+         `content`); `delete` removes one. Scope `project` (default) is for this repository, \
+         `global` for every project.\n\
+         Save a note when the user corrects how you work, states a lasting preference \
+         (\"always\", \"never\", \"from now on\", \"I prefer\"), accepts an approach after \
+         pushing back, or when you learn a project fact that is not written down anywhere. \
+         Say why in the note, so a later session can judge cases it doesn't cover. Update \
+         the note that covers a topic instead of adding a near-duplicate. Never save secrets, \
+         what the code or docs already say, or details that only matter to the current task. \
+         A note is as old as its `updated` date: check that a file, function or flag it \
+         names still exists before relying on it."
             .into()
     }
 
@@ -158,7 +164,20 @@ fn run(args: &Value, ctx: &ToolCtx) -> Result<ToolOutput, String> {
                         .map(|t| (Scope::Project, t))
                         .or_else(|_| m.read(Scope::Global, n).map(|t| (Scope::Global, t))),
                 };
-                let (s, text) = found?;
+                let (s, mut text) = found?;
+                // Global notes are about every project, so their paths need not be here.
+                let missing = if s == Scope::Project {
+                    missing_paths(&text, &ctx.root)
+                } else {
+                    Vec::new()
+                };
+                if !missing.is_empty() {
+                    text.push_str(&format!(
+                        "\n[Not in the workspace now: {}. Check the note is still true before \
+                         relying on it, then update or delete it.]",
+                        missing.join(", ")
+                    ));
+                }
                 ToolOutput::ok(text, format!("read {} note {n}", s.label()))
             }
         });
@@ -196,13 +215,45 @@ fn run(args: &Value, ctx: &ToolCtx) -> Result<ToolOutput, String> {
             });
             let path = m.write(scope, name, description, kind, content)?;
             let verb = if exists { "updated" } else { "saved" };
-            Ok(ToolOutput::ok(
-                format!("{verb} {} note `{name}`.", scope.label()),
-                format!("{verb} {} note {name}", scope.label()),
+            let mut said = format!("{verb} {} note `{name}`.", scope.label());
+            if let Some(w) = fill_warning(m.index_fill()) {
+                said.push_str(&format!(
+                    " The memory {w}; merge notes that overlap and delete stale ones."
+                ));
+            }
+            Ok(
+                ToolOutput::ok(said, format!("{verb} {} note {name}", scope.label()))
+                    .with_detail(format!("{}\n\n{content}", path.display())),
             )
-            .with_detail(format!("{}\n\n{content}", path.display())))
         }
     }
+}
+
+/// Paths a note names in backticks that are not in the workspace now. Only words with a
+/// path separator count, so `foo.bar()` and `--flag` are left alone.
+fn missing_paths(note: &str, root: &std::path::Path) -> Vec<String> {
+    let mut out = Vec::new();
+    for (i, word) in note.split('`').enumerate() {
+        // Odd pieces are inside backticks.
+        let looks_like_path = i % 2 == 1
+            && (word.contains('/') || word.contains('\\'))
+            && !word.contains("://")
+            && !word.starts_with('-')
+            && !word
+                .chars()
+                .any(|c| c.is_whitespace() || "*?<>{}$~|\"'()".contains(c));
+        if !looks_like_path {
+            continue;
+        }
+        // `src/main.rs:12` names a line.
+        let path = word.trim_end_matches(|c: char| c.is_ascii_digit() || c == ':');
+        let path = path.strip_prefix("./").unwrap_or(path);
+        let shown = format!("`{word}`");
+        if !path.is_empty() && !root.join(path).exists() && !out.contains(&shown) {
+            out.push(shown);
+        }
+    }
+    out
 }
 
 fn list(m: &MemoryStore, only: Option<Scope>) -> ToolOutput {
@@ -312,6 +363,52 @@ mod tests {
         assert_eq!(
             s(json!({"action":"delete"})),
             Subject::Memory { write: true }
+        );
+    }
+
+    #[test]
+    fn reading_a_note_flags_paths_that_are_gone() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let c = ctx(tmp.path());
+        std::fs::create_dir_all(tmp.path().join("src")).expect("mkdir");
+        std::fs::write(tmp.path().join("src/main.rs"), "").expect("write");
+        let body = "Entry is `src/main.rs:3`; config in `src/old.rs` and `./conf/x.toml`. \
+                    Not paths: `foo.bar()`, `a b/c`, `https://x/y`, `--out/x`.";
+        run(
+            &json!({"action":"create","name":"layout","description":"d","content":body}),
+            &c,
+        )
+        .expect("create");
+        let read = run(&json!({"action":"view","name":"layout"}), &c).expect("view");
+        assert!(
+            read.model.ends_with(
+                "[Not in the workspace now: `src/old.rs`, `./conf/x.toml`. Check the note is \
+                 still true before relying on it, then update or delete it.]"
+            ),
+            "{}",
+            read.model
+        );
+    }
+
+    #[test]
+    fn a_full_index_asks_for_merging() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut c = ctx(tmp.path());
+        c.memory = Some(Arc::new(
+            MemoryStore::new(tmp.path().join("g"), tmp.path().join("p")).with_index_cap(100),
+        ));
+        let first = run(&json!({"action":"create","name":"a","content":"short"}), &c).expect("a");
+        assert_eq!(first.model, "saved project note `a`.");
+        let second = run(
+            &json!({"action":"create","name":"b","content":"a longer description of b"}),
+            &c,
+        )
+        .expect("b");
+        assert!(
+            second.model.contains("The memory index ")
+                && second.model.ends_with("delete stale ones."),
+            "{}",
+            second.model
         );
     }
 }
