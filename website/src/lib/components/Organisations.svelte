@@ -3,11 +3,11 @@
 	import PlateHeading from '#lib/components/PlateHeading.svelte';
 
 	const points = [
-		['Nothing built in', 'Every provider, model profile and MCP server is a small TOML file. Delete one and that capability is gone; a test checks startup stays clean for every default file.'],
+		['Nothing built in that reaches out', 'Every provider and MCP server is a small TOML file. Delete one and that capability is gone; a test checks startup stays clean for every default file. Only the core prompt and sub-agents are compiled in.'],
 		['Hosts you allow', 'On top of contacting only what’s configured, `[policy.providers] hosts` and `[policy.mcp] hosts` narrow where providers and MCP servers may point, and `quack doctor` lists every host it can reach.'],
 		['Settings you can lock', 'Config layers from system to user, project, environment and command line. An administrator’s locks hold in `/config`, and `quack config show --origin` says where each value came from.'],
 		['Hooks users can’t remove', 'Hooks in the system config folder are enforced: block a tool call, add context, or check a prompt, in any language.'],
-		['Ship your own files', '`quack-plucked` is the duck without its feathers: the binary alone, for teams that ship their own providers and profiles.'],
+		['Ship your own files', '`quack-plucked` is the duck without its feathers: the whole agent minus the hosted-service providers, for teams with their own model server. The Config plate below walks through it.'],
 		['Apache-2.0, few crates', 'Every dependency is counted per OS before it’s added. The keyring adds no crates on Linux.']
 	];
 	const parts = (t: string) => t.split(/(`[^`]+`)/).filter(Boolean);
@@ -33,11 +33,11 @@
 			<figure class="lg:sticky lg:top-8 space-y-4">
 				<div class="rounded-xl border-2 border-ink bg-term text-term-text overflow-hidden">
 					<p class="px-4 py-2 text-[13px] font-mono text-term-dim border-b border-white/10">providers.d/lab.toml</p>
-					<pre class="px-4 py-4 text-[14px] leading-relaxed overflow-x-auto"><span class="text-sky">base_url</span> = <span class="text-duck">"http://gpu-01.lab:8000/v1"</span></pre>
+					<pre class="px-4 py-4 text-[13px] sm:text-[14px] leading-relaxed overflow-x-auto"><span class="text-sky">base_url</span> = <span class="text-duck">"http://gpu-01.lab:8000/v1"</span></pre>
 				</div>
 				<div class="rounded-xl border-2 border-ink bg-term text-term-text overflow-hidden">
 					<p class="px-4 py-2 text-[13px] font-mono text-term-dim border-b border-white/10">/etc/quack/config.toml</p>
-					<pre class="px-4 py-4 text-[14px] leading-relaxed overflow-x-auto"><span class="text-term-dim">[policy.providers]</span>
+					<pre class="px-4 py-4 text-[13px] sm:text-[14px] leading-relaxed overflow-x-auto"><span class="text-term-dim">[policy.providers]</span>
 <span class="text-sky">hosts</span> = [<span class="text-duck">"gpu-01.lab"</span>]</pre>
 				</div>
 				<figcaption class="text-sm text-ink-2">

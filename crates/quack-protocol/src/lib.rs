@@ -201,6 +201,12 @@ pub enum Event {
     SessionConfigured {
         session: SessionInfo,
     },
+    /// The session's title changed: taken from the first prompt, set with `SetTitle`, or
+    /// none for a new session.
+    SessionTitle {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+    },
     /// Every configured provider with its models (declared and discovered).
     ModelCatalog {
         providers: Vec<ProviderModels>,

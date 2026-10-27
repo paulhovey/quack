@@ -14,6 +14,7 @@ quack-config.workspace = true
 minijinja = { version = "3.0.1", default-features = false, features = ["builtins", "serde"] }
 serde.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -25,7 +25,7 @@ cargo run -q -p quack-cli -- config schema --dir defaults/schemas   # after chan
 - quack does not read `.env` files. If a `.env` holds a provider key (for example `CHARM_API_KEY`, which `defaults/providers.d/charm-hyper.toml` reads with `api_key = { env = ... }`), export it in the shell with `set -a; . ./.env; set +a`. Never print, log or commit its values.
 - **Live model calls can cost the user money** (pay-as-you-go keys). Prove behaviour against the wiremock mock server in tests. Make a live call only when only a real model can answer the question, and say so when you do.
 - `QUACK_DEFAULTS_DIR=defaults target/debug/quack doctor` shows the config layers, the defaults bundle, providers (ready or why not) and reachable hosts, without calling a model.
-- `scripts/install.sh --from-source` builds a release binary and installs it, with the bundle, into `~/.local`. `--plucked` installs the binary only. `scripts/package.sh <target>` builds the release archives that `.github/workflows/release.yml` publishes.
+- `scripts/install.sh --from-source` builds a release binary and installs it, with the bundle, into `~/.local`. `--plucked` installs the bundle without the hosted-service providers (`scripts/copy-defaults.sh`), `--binary-only` the binary alone. `scripts/package.sh <target>` builds the release archives that `.github/workflows/release.yml` publishes.
 - Other scripts:
   - `scripts/no-egress.sh` runs in a loopback-only network namespace with `strace -e connect` (Linux).
   - `scripts/first-frame.sh <ms>` checks the startup budget.
@@ -129,7 +129,7 @@ There is one engine and three in-process clients, connected by an Op/Event proto
 
 These are the project's core promises; tests and CI enforce them:
 
-- **No built-ins**: no provider ids, base URLs or MCP commands are compiled into the binary. Everything is TOML under `defaults/`, loaded as a layer beneath system, user and project config. Startup must survive the deletion of any single default file (`removing_any_default_file_leaves_startup_clean` in `quack-core/tests/invariants.rs`).
+- **No built-ins**: no provider ids, base URLs or MCP commands are compiled into the binary. Everything is TOML under `defaults/`, loaded as a layer beneath system, user and project config. Startup must survive the deletion of any single default file (`removing_any_default_file_leaves_startup_clean` in `quack-core/tests/invariants.rs`). The exception is the core, which reaches nothing: the `generic` profile and the `explore` and `general` agents are compiled in from `defaults/` with `include_str!` (`quack-profiles/src/loader.rs`, `quack-core/src/env.rs`), so edit them there. A file with the same id in any layer replaces them (`core/tests/builtins.rs`).
 - **No implicit egress**: the binary contacts only what is configured. This is enforced by an in-process recording proxy test (`no_egress_beyond_the_configured_provider`) and by `scripts/no-egress.sh`. Never add a network call outside the configured providers and MCP servers.
 - **First frame under 50 ms**: the Linux CI budget, measured with the hidden `--trace-startup` flag.
 - **Prefix stability**: the system prompt and tool block stay byte-identical across turns except at epoch boundaries, so server KV caches stay warm. `crates/quack-core/tests/prefix.rs` checks it for every shipped profile: each request must extend the one before. Don't put anything that changes per turn (time, counters, the plan) into the system prompt, and nothing that changes per session or project either (workspace, date, AGENTS.md, memory): that belongs in the profile's `context.md`, which goes at the start of the first user message, so the system prompt and tools are cached across sessions too. Per-request extras ride on the last message, the way the plan reminder does in `stream_step`. Resume fidelity (the request after a resume equals the live one byte for byte) is tested in `invariants.rs`.
@@ -137,7 +137,7 @@ These are the project's core promises; tests and CI enforce them:
 ## Conventions and gotchas
 
 - **User-facing TOML stays minimal.** Provider and model files should work with two lines (`base_url`, `models`). Every new field must be optional with a sensible default, and an unset field should mean the obvious thing (for example, an unset `cost.cached_input` means the `input` price). After changing a config struct, regenerate `defaults/schemas/`.
-- **Defaults are data.** Ship more defaults as files under `defaults/`, never as code. The packaged `quack` archives include the bundle; `quack-plucked` archives are the binary only.
+- **Defaults are data.** Ship more defaults as files under `defaults/`, never as code. The packaged `quack` archives include the bundle; `quack-plucked` archives include it without the provider files for hosted services.
 - **Dependencies must earn their place.** Before adding a crate, count what it pulls in on each OS (`cargo tree -e normal --target <triple>`). Use `default-features = false` where possible.
 - **Platform-gated tests must gate their imports too.** CI compiles `--all-targets` with `-D warnings` on Windows, so a `#[cfg(unix)]` test leaves its imports and helpers as unused-import or dead-code errors there. Gate them with the same `#[cfg(...)]`, as `crates/quack-core/tests/trust.rs` does.
 - **Lints:**

@@ -90,8 +90,8 @@
 		<div class="grid grid-cols-1 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] gap-x-10 gap-y-12 pt-10 md:pt-16 items-start">
 			<div>
 				<div class="flex items-end justify-between gap-4">
-					<h1 class="font-display font-extrabold tracking-[-0.045em] leading-[0.86] text-[clamp(4.5rem,13vw,9.5rem)]">quack</h1>
-					<Duck class="lg:hidden text-[clamp(1rem,4.2vw,1.4rem)] -mb-1" />
+					<h1 class="font-display font-extrabold tracking-[-0.045em] leading-[0.86] text-[clamp(3.5rem,19vw,4.5rem)] sm:text-[clamp(4.5rem,13vw,9.5rem)]">quack</h1>
+					<Duck class="lg:hidden text-[clamp(0.7rem,3.4vw,1.4rem)] -mb-1" />
 				</div>
 				<p class="mt-6 font-display font-bold text-[clamp(1.7rem,3.4vw,2.6rem)] leading-[1.08] tracking-[-0.02em]">
 					Any model.<br />Any provider.<br /><span class="bg-duck text-on-tint px-1.5 -mx-1.5 box-decoration-clone">No leaks.</span>

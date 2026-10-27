@@ -4,18 +4,20 @@
 
 The **binary** and the **defaults** stay separate on disk (nothing is compiled in), but the
 normal install ships both. Most people install `quack` and get everything; organisations
-that ship their own files install or update with `quack-plucked`, which never touches the
-defaults.
+that run their own model server install `quack-plucked`, the same bundle without the
+provider files for hosted services (2026-10-26). The core prompt (`generic`) and the
+`explore` and `general` sub-agents are compiled into the binary from the bundle's own
+files, so the binary alone is a complete agent.
 
 | Part | Contains | Who removes what |
 |---|---|---|
-| binary | Engine, adapters (per features), grammars (per features), two themes, empty fallback profile, minimal deny-list floor | Recompile with fewer features |
-| defaults bundle | `providers.d/`, `profiles.d/`, `mcp.d/` (examples, disabled), `lsp.d/`, `themes/`, `grammars/` queries, `schemas/`, `compat.toml` (other-harness detection list), `tokenizers/` (optional) | Delete files, or install with `--plucked` |
+| binary | Engine, adapters (per features), grammars (per features), two themes, the `generic` profile and `explore`/`general` agents (from the bundle's files, `include_str!`), empty fallback profile, minimal deny-list floor | Recompile with fewer features; `enabled = false` files turn the compiled-in items off |
+| defaults bundle | `providers.d/`, `profiles.d/`, `agents.d/`, `mcp.d/` (examples, disabled), `lsp.d/`, `hooks.d/` (example, disabled), `themes/`, `grammars/` queries, `schemas/`, `compat.toml` (other-harness detection list) | Delete files; `--plucked` leaves out the hosted-service providers |
 
 | Release flavour | Contains |
 |---|---|
 | `quack` (default) | binary + defaults bundle |
-| `quack-plucked` (`--plucked`) | binary only; an existing defaults folder is left as it is |
+| `quack-plucked` (`--plucked`) | binary + defaults bundle without the provider files whose `base_url` is off the machine (`scripts/copy-defaults.sh`) |
 
 ## Where defaults live after install
 
@@ -100,20 +102,22 @@ The install scripts (`scripts/install.sh` for Linux and macOS, `scripts/install.
 Windows) download the archive for this machine, check it against `SHA256SUMS`, and install
 the binary and the defaults:
 
-- `--plucked` (`-Plucked`): the binary only. An existing defaults folder is left
-  alone; a fresh plucked install has none.
+- `--plucked` (`-Plucked`): the plucked archive, whose bundle has no hosted-service
+  providers. With `--from-source`, the checkout's bundle is filtered the same way.
+- `--binary-only` (`-BinaryOnly`): the binary only. An existing defaults folder is left
+  alone; a fresh install this way has none, and runs on the compiled-in core.
 - `--prefix`, `--version`, `--archive FILE` (offline installs), `--from-source [DIR]` (build
   a checkout with cargo), `--uninstall` (keeps config, sessions and memory).
 - The binary is replaced by renaming, so a running quack is never left with a half-written
   file (Windows renames the running exe out of the way).
 - A full install replaces the defaults folder as a whole, so files removed upstream go away
   and files the user deleted come back. Turning a default off for good is done in the user
-  layer (`enabled = false`), or by updating with `--plucked`.
+  layer (`enabled = false`), or by updating with `--binary-only`.
 - Windows adds the install folder to the user `PATH`; Unix prints a hint if `bin` is not on it.
 
 ### Packages, formulas and SBOM (2026-10-25)
 
-- `scripts/package-linux.sh <target> <version>` builds `quack_<v>_<arch>.deb` and `quack-plucked_<v>_<arch>.deb`. They conflict with and replace each other, install `/usr/bin/quack` (and `/usr/share/quack/defaults` for `quack`), and depend on nothing, since the binaries are static. It uses `dpkg-deb` alone, with no cargo plugin. Where `rpmbuild` is installed, the same layout also becomes `.rpm`s. The release's musl jobs install `rpm` and run it on tags. The `.deb` was checked locally (`dpkg-deb --info/--contents`, and an unpacked binary found its bundle). The `.rpm` path runs first in CI.
+- `scripts/package-linux.sh <target> <version>` builds `quack_<v>_<arch>.deb` and `quack-plucked_<v>_<arch>.deb`. They conflict with and replace each other, install `/usr/bin/quack` and `/usr/share/quack/defaults` (the plucked bundle for `quack-plucked`), and depend on nothing, since the binaries are static. It uses `dpkg-deb` alone, with no cargo plugin. Where `rpmbuild` is installed, the same layout also becomes `.rpm`s. The release's musl jobs install `rpm` and run it on tags. The `.deb` was checked locally (`dpkg-deb --info/--contents`, and an unpacked binary found its bundle). The `.rpm` path runs first in CI.
 - `scripts/homebrew.sh <version> SHA256SUMS` writes `quack.rb` and `quack-plucked.rb` (macOS and Linux, ARM and Intel, `conflicts_with` each other) into the release for a tap repository. Publishing the tap is left to the maintainer.
 - The publish job runs `cargo cyclonedx` (0.5.9, pinned) on `quack-cli` for all targets and attaches `quack.cdx.json` (CycloneDX 1.5; 430 components on 2026-10-25).
 - `docs/enterprise.md` is written: packages, the system policy with a checked example, a company defaults bundle, the air-gapped build (run with vendored sources, an empty `CARGO_HOME` and `--offline`), and checking egress.

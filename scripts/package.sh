@@ -5,7 +5,8 @@
 #
 # Writes two archives to out-dir (default dist/):
 #   quack-<target>.tar.gz          the binary and the defaults bundle (what most people want)
-#   quack-plucked-<target>.tar.gz  the binary only, for updating it without touching defaults
+#   quack-plucked-<target>.tar.gz  the same without the provider files for outside services,
+#                                  for setups that add their own provider
 # Windows targets get .zip instead.
 #
 # Unix layout is a prefix (bin/quack, share/quack/defaults/) so it can be unpacked
@@ -28,10 +29,13 @@ out=$(cd "$out" && pwd)
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 
-# Copies the defaults bundle without editor or OS leftovers.
+# The defaults bundle for one flavour (scripts/copy-defaults.sh says what plucked leaves out).
 copy_defaults() {
-  mkdir -p "$1"
-  (cd "$root/defaults" && tar cf - --exclude='*/.*' --exclude='*~' .) | (cd "$1" && tar xf -)
+  if [ "$flavour" = quack ]; then
+    "$root/scripts/copy-defaults.sh" "$1"
+  else
+    "$root/scripts/copy-defaults.sh" "$1" --plucked
+  fi
 }
 
 for flavour in quack quack-plucked; do
@@ -41,7 +45,7 @@ for flavour in quack quack-plucked; do
   case $target in
     *windows*)
       cp "$bin" "$dir/$exe"
-      [ $flavour = quack ] && copy_defaults "$dir/defaults"
+      copy_defaults "$dir/defaults"
       rm -f "$out/$flavour-$target.zip"
       if command -v 7z >/dev/null; then
         (cd "$stage" && 7z a -tzip -bso0 "$out/$flavour-$target.zip" "$flavour-$target")
@@ -53,7 +57,7 @@ for flavour in quack quack-plucked; do
       mkdir -p "$dir/bin"
       cp "$bin" "$dir/bin/$exe"
       chmod 755 "$dir/bin/$exe"
-      [ $flavour = quack ] && copy_defaults "$dir/share/quack/defaults"
+      copy_defaults "$dir/share/quack/defaults"
       tar -C "$stage" -czf "$out/$flavour-$target.tar.gz" "$flavour-$target"
       ;;
   esac

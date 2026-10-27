@@ -246,6 +246,17 @@ impl Engine {
         let _ = self.tx.send(event);
     }
 
+    /// Change the session title, telling clients when it differs (an empty title is none).
+    fn set_title(&mut self, title: Option<String>) {
+        let title = title.filter(|t| !t.is_empty());
+        if title != self.title {
+            self.title = title;
+            self.emit(Event::SessionTitle {
+                title: self.title.clone(),
+            });
+        }
+    }
+
     async fn run(mut self, mut ops: mpsc::Receiver<Op>, mut asks: mpsc::Receiver<ServerAsk>) {
         self.emit(Event::SessionConfigured {
             session: self.session.clone(),
@@ -557,7 +568,7 @@ impl Engine {
         }
         self.session.id = SessionId(entry.id.clone());
         self.turns = turns;
-        self.title = Some(entry.title).filter(|t| !t.is_empty());
+        self.set_title(Some(entry.title));
         self.emit(Event::SessionResumed {
             session: self.session.clone(),
             items,
@@ -646,7 +657,8 @@ impl Engine {
         };
         let parent = std::mem::replace(&mut self.session.id, id);
         self.log = Some(Arc::new(Mutex::new(log)));
-        self.title = self.title.take().map(|t| format!("{t} (fork)"));
+        let title = self.title.as_ref().map(|t| format!("{t} (fork)"));
+        self.set_title(title);
         self.sync_log();
         self.emit(Event::SessionConfigured {
             session: self.session.clone(),
@@ -687,7 +699,7 @@ impl Engine {
                 self.session.id = new_session_id();
                 self.stats = Arc::default();
                 self.turns = 0;
-                self.title = None;
+                self.set_title(None);
                 (Vec::new(), String::new())
             }
         };
@@ -1739,7 +1751,7 @@ impl Engine {
                     "title",
                     serde_json::json!({ "title": title }),
                 );
-                self.title = Some(title).filter(|t| !t.is_empty());
+                self.set_title(Some(title));
                 self.sync_log();
             }
             Op::SaveSetting { key, value, scope } => self.save_setting(&key, &value, &scope),
@@ -2109,7 +2121,7 @@ impl Engine {
                 .chars()
                 .take(80)
                 .collect();
-            self.title = Some(first);
+            self.set_title(Some(first));
         }
         let cancel = CancellationToken::new();
         self.running = Some((turn, cancel.clone()));

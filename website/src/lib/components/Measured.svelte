@@ -98,14 +98,17 @@
 				>
 			</div>
 			<figure>
-				<img
-					src="/assets/eval/frontier-harness-chart.svg"
-					alt="FrontierHarness Eval: pass rate against median cost per task for 12 harness configurations running Kimi K3"
-					class="w-full rounded-xl border-2 border-ink"
-					loading="lazy"
-					width="1200"
-					height="630"
-				/>
+				<!-- The chart's labels are too small to read on a phone; a tap opens it full size. -->
+				<a href="/assets/eval/frontier-harness-chart.svg" class="block">
+					<img
+						src="/assets/eval/frontier-harness-chart.svg"
+						alt="FrontierHarness Eval: pass rate against median cost per task for 12 harness configurations running Kimi K3"
+						class="w-full rounded-xl border-2 border-ink"
+						loading="lazy"
+						width="1200"
+						height="630"
+					/>
+				</a>
 				<details class="mt-4 group">
 					<summary class="list-none [&::-webkit-details-marker]:hidden cursor-pointer inline-flex items-center gap-1.5 font-semibold text-ink hover:text-sky-ink"><ChevronRight class="w-4 h-4 text-beak-ink transition-transform group-open:rotate-90" aria-hidden="true" />The numbers behind the chart</summary>
 					<div class="mt-3 overflow-x-auto">

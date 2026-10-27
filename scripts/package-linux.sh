@@ -6,7 +6,7 @@
 #
 # Two packages, which conflict with each other, as with the archives:
 #   quack          /usr/bin/quack and the defaults bundle in /usr/share/quack/defaults
-#   quack-plucked  /usr/bin/quack only
+#   quack-plucked  the same, without the provider files for outside services
 # The binary finds the bundle at <exe>/../share/quack/defaults, so no configuration is
 # needed. Release builds are static (musl), so the packages depend on nothing.
 set -euo pipefail
@@ -34,7 +34,7 @@ summary="Terminal coding agent for open-weight models"
 describe() {
   case $1 in
     quack) echo "The quack binary with its defaults bundle (providers, profiles, MCP and language server files)." ;;
-    quack-plucked) echo "The quack binary only, without the defaults bundle; for setups that ship their own." ;;
+    quack-plucked) echo "The quack binary and its defaults bundle without the hosted model services; for setups that add their own provider." ;;
   esac
 }
 
@@ -45,9 +45,9 @@ lay_out() {
   install -Dm644 "$root/LICENSE" "$dir/usr/share/doc/$flavour/copyright"
   install -Dm644 "$root/NOTICE" "$dir/usr/share/doc/$flavour/NOTICE"
   if [ "$flavour" = quack ]; then
-    mkdir -p "$dir/usr/share/quack/defaults"
-    (cd "$root/defaults" && tar cf - --exclude='*/.*' --exclude='*~' .) |
-      (cd "$dir/usr/share/quack/defaults" && tar xf -)
+    "$root/scripts/copy-defaults.sh" "$dir/usr/share/quack/defaults"
+  else
+    "$root/scripts/copy-defaults.sh" "$dir/usr/share/quack/defaults" --plucked
   fi
 }
 

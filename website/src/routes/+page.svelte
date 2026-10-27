@@ -6,6 +6,7 @@
 	import FieldMarks from '#lib/components/FieldMarks.svelte';
 	import Measured from '#lib/components/Measured.svelte';
 	import Organisations from '#lib/components/Organisations.svelte';
+	import Config from '#lib/components/Config.svelte';
 	import Install from '#lib/components/Install.svelte';
 	import Footer from '#lib/components/Footer.svelte';
 </script>
@@ -37,6 +38,7 @@
 	<FieldMarks />
 	<Measured />
 	<Organisations />
+	<Config />
 	<Install />
 </main>
 <Footer />

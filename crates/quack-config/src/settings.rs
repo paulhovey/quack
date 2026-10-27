@@ -84,6 +84,9 @@ pub struct UiSettings {
     pub mouse: bool,
     /// Replace spinners with static indicators.
     pub reduced_motion: bool,
+    /// Set the terminal's window title to the duck and the session title, restoring the
+    /// old one on exit.
+    pub terminal_title: bool,
 }
 
 impl Default for UiSettings {
@@ -95,6 +98,7 @@ impl Default for UiSettings {
             ascii: false,
             mouse: true,
             reduced_motion: false,
+            terminal_title: true,
         }
     }
 }

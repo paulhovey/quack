@@ -4,8 +4,10 @@ Model profiles, one directory each: `profile.toml` plus a `system.md` prompt tem
 (minijinja), and optionally a `context.md`. `context.md` is the per-session part (workspace,
 date, files, AGENTS.md, skills, memory), sent at the start of the first user message so the
 system prompt and tools stay the same in every project and the server's prompt cache reuses
-them. Without one, everything goes in `system.md`. Delete a directory to remove that profile; with none installed the binary
-uses its compiled-in empty profile.
+them. Without one, everything goes in `system.md`. Delete a directory to remove that profile. `generic` is also compiled into
+the binary from these same files, so a binary without the bundle still has it; a `generic`
+folder in any layer replaces it, and one whose `profile.toml` holds only `enabled = false`
+turns it off, leaving the empty profile (no prompt beyond the instructions).
 
 - `generic`: a short original prompt for any model, using the internal tool names.
 - `qwen-code`: Qwen Code tool names (`read_file`, `edit`, `run_shell_command`, ...).

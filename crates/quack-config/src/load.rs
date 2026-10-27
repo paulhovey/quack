@@ -474,31 +474,48 @@ fn apply_locks(
         let Some(locked) = merge::get_path(base, key) else {
             // Locked while unset (an optional key like `model.small`): it stays unset.
             if merge::remove_path(merged, key) {
-                let from = origins
-                    .remove(key)
-                    .map_or_else(|| "a higher layer".into(), |o| o.to_string());
+                let from = overridden_by(origins, base_origins, key);
                 warnings.push(format!(
                     "`{key}` is locked by policy; value from {from} ignored"
                 ));
+                origins.retain(|k, _| !covers(key, k));
             } else {
                 warnings.push(format!("policy locks unknown or unset key `{key}`"));
             }
             continue;
         };
         if merge::get_path(merged, key) != Some(locked) {
-            let from = origins
-                .get(key)
-                .map_or_else(|| "a higher layer".into(), ToString::to_string);
+            let from = overridden_by(origins, base_origins, key);
             warnings.push(format!(
                 "`{key}` is locked by policy; value from {from} ignored"
             ));
             merge::set_path(merged, key, locked.clone());
-            match base_origins.get(key) {
-                Some(o) => origins.insert(key.clone(), o.clone()),
-                None => origins.remove(key),
-            };
+            // A locked table's origins are its leaves' (`network.offline`), so put back
+            // every origin under the key, not only the key's own.
+            origins.retain(|k, _| !covers(key, k));
+            origins.extend(
+                base_origins
+                    .iter()
+                    .filter(|(k, _)| covers(key, k))
+                    .map(|(k, o)| (k.clone(), o.clone())),
+            );
         }
     }
+}
+
+/// Whether the dotted key `key` is `lock` or sits inside it.
+fn covers(lock: &str, key: &str) -> bool {
+    key.strip_prefix(lock)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+}
+
+/// Where the value a lock throws away came from: the first origin under the locked key
+/// that differs from the locked layer's own.
+fn overridden_by(origins: &Origins, base_origins: &Origins, lock: &str) -> String {
+    origins
+        .iter()
+        .find(|(k, o)| covers(lock, k) && base_origins.get(*k) != Some(*o))
+        .map_or_else(|| "a higher layer".into(), |(_, o)| o.to_string())
 }
 
 #[cfg(test)]
@@ -653,6 +670,37 @@ mod tests {
         assert_eq!(l.settings.permissions.mode, PermissionMode::AutoEdit);
         assert_eq!(l.settings.policy.locked, ["network.offline"]);
         assert_eq!(l.warnings.len(), 3, "{:?}", l.warnings);
+    }
+
+    #[test]
+    fn a_locked_table_reports_its_leaves_from_the_locking_layer() {
+        let f = Fixture::new();
+        f.write(
+            "system/config.toml",
+            "[network]\noffline = true\n[policy]\nlocked = [\"network\"]",
+        );
+        f.write(
+            "user/config.toml",
+            "[network]\noffline = false\nproxy = \"http://p:3128\"",
+        );
+        let l = f.load(|_| {});
+        assert!(l.settings.network.offline);
+        assert!(l.settings.network.proxy.is_empty());
+        assert!(matches!(
+            l.origin_of("network.offline"),
+            Origin::File {
+                layer: LayerKind::System,
+                ..
+            }
+        ));
+        assert_eq!(l.origin_of("network.proxy"), &Origin::Default);
+        assert!(
+            l.warnings
+                .iter()
+                .any(|w| w.starts_with("`network` is locked") && w.contains("user")),
+            "{:?}",
+            l.warnings
+        );
     }
 
     #[test]

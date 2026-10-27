@@ -63,6 +63,16 @@
 			quack: 'The binary contacts only the providers and MCP servers you configure. A proxy test and a CI run in a loopback-only network namespace hold it to that, and administrators can limit the hosts further.',
 			before: `POST https://telemetry.example.com/v1/events`,
 			after: `connect() → only the base_url in your provider file`
+		},
+		{
+			id: 'workspace_upload',
+			label: 'Whole workspace uploaded',
+			short: 'uploads',
+			symptom: 'To build a code index or embeddings, the agent sends every file in the folder to a remote service, including .env files, keys and internal code nobody asked it to read.',
+			generic: 'Your whole repository ends up on a server you never chose. Several harnesses have been caught doing this.',
+			quack: 'No surprise uploads. Nothing indexes, embeds or syncs your workspace. The model sees the names of the top-level files, your AGENTS.md, and only the files it opens with a tool call, and each of those calls shows in the session.',
+			before: `PUT https://index.example.com/v1/repos/acme-internal   (4,812 files)`,
+			after: `✓ read src/auth.rs · 140 lines   // the only file the model saw`
 		}
 	];
 
@@ -92,7 +102,7 @@
 		<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
 			<!-- The generic grinder -->
 			<div class="rounded-2xl border-2 border-ink/80 bg-paper p-6 sm:p-8">
-				<div class="flex items-baseline justify-between gap-4">
+				<div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
 					<h3 class="text-2xl font-extrabold">The generic grinder</h3>
 					<span class="text-sm font-semibold text-pink-ink">one harness for every model</span>
 				</div>
@@ -128,7 +138,7 @@
 
 			<!-- quack -->
 			<div class="rounded-2xl border-2 border-ink bg-paper p-6 sm:p-8 shadow-[0_10px_30px_-12px_rgba(29,42,58,0.3)]">
-				<div class="flex items-baseline justify-between gap-4">
+				<div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
 					<h3 class="text-2xl font-extrabold">
 						<span class="font-mono"><span class="text-duck-ink">_(o)</span><span class="text-beak-ink">&gt;</span></span> quack
 					</h3>
@@ -163,7 +173,7 @@
 		<!-- The account of the chosen failure -->
 		<div id="grinder-detail" role="tabpanel" class="mt-6 rounded-2xl border-2 border-ink bg-paper p-6 sm:p-8">
 			{#each modes as m}<span id="grinder-{m.id}" class="block -mt-24 pt-24" aria-hidden="true"></span>{/each}
-			<h3 class="text-3xl font-extrabold">{selected.label}</h3>
+			<h3 class="text-2xl sm:text-3xl font-extrabold">{selected.label}</h3>
 			<p class="mt-2 text-lg text-ink-2 max-w-[70ch]">{selected.symptom}</p>
 			<div class="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
 				<div>

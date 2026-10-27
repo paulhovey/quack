@@ -1,9 +1,10 @@
 # Defaults bundle
 
-Default data files that are installed next to the binary by the normal `quack` release,
-and left out of `quack-plucked` (docs/plan/14-packaging-and-distribution.md). Nothing here is
-compiled in. Delete any file, or the whole bundle, and the binary still starts cleanly with
-the empty profile.
+Default data files that are installed next to the binary by the normal `quack` release.
+`quack-plucked` installs them too, without the provider files for hosted services
+(`scripts/copy-defaults.sh`; docs/plan/14-packaging-and-distribution.md). Only the core is
+compiled in, from these same files: `profiles.d/generic/` and `agents.d/explore.toml` and
+`general.toml`. Delete any file, or the whole bundle, and the binary still starts cleanly.
 
 The bundle loads as a layer beneath the system layer. Its location is resolved at runtime,
 and `QUACK_DEFAULTS_DIR` overrides it. To run from a checkout:

@@ -572,6 +572,8 @@ pub struct App {
     pub(crate) sandbox_off: bool,
     /// Text for the terminal's clipboard (OSC 52), written by the event loop.
     clipboard: Option<String>,
+    /// The session title, for the terminal window's title.
+    session_title: Option<String>,
     /// Installed skills, runnable as `/<name>`.
     skills: Vec<quack_protocol::SkillInfo>,
     /// Custom slash commands, minus any that a built-in command's name hides.
@@ -649,6 +651,7 @@ impl App {
             mode_before_yolo: String::new(),
             sandbox_off: false,
             clipboard: None,
+            session_title: None,
             skills: Vec::new(),
             custom: Vec::new(),
             mcp_prompts: Vec::new(),
@@ -686,6 +689,25 @@ impl App {
         self.copied
             .filter(|(at, _)| self.frame.wrapping_sub(*at) < COPIED_FRAMES)
             .map(|(_, n)| n)
+    }
+
+    /// The terminal window's title: the duck from the reply marker, then the session title
+    /// (`quack` until there is one), marked while a turn runs and when something waits for
+    /// the user. None with `ui.terminal_title` off.
+    pub fn window_title(&self) -> Option<String> {
+        if !self.info.ui.terminal_title {
+            return None;
+        }
+        let g = &self.glyphs;
+        let state = if self.approval.is_some() || self.asking.is_some() {
+            format!("{} ", g.attention)
+        } else if self.turn_running {
+            format!("{} ", g.think)
+        } else {
+            String::new()
+        };
+        let title = self.session_title.as_deref().unwrap_or("quack");
+        Some(format!("{state}{} {title}", g.assistant))
     }
 
     pub fn take_ops(&mut self) -> Vec<Op> {
@@ -921,6 +943,10 @@ impl App {
             Event::SessionConfigured { session } => {
                 self.info.model = session.model;
                 self.info.profile = session.profile;
+            }
+            Event::SessionTitle { title } => {
+                self.session_title = title;
+                self.dirty = false;
             }
             Event::ModelCatalog { providers, current }
                 if self.modal.as_ref().is_some_and(|m| m.title == "Providers") =>
@@ -2633,6 +2659,10 @@ impl App {
                 self.info.ui.reduced_motion = value == "true";
                 true
             }
+            "ui.terminal_title" => {
+                self.info.ui.terminal_title = value == "true";
+                true
+            }
             "ui.theme" => {
                 self.info.ui.theme = value.trim_matches('"').to_owned();
                 self.theme = Theme::resolve(&self.info.ui.theme, self.info.no_color);
@@ -2797,6 +2827,29 @@ mod tests {
             bundles: Vec::new(),
             bundles_disabled: Vec::new(),
         }
+    }
+
+    #[test]
+    fn window_title_is_the_duck_and_the_session_title() {
+        let mut app = App::new(info());
+        assert_eq!(app.window_title().as_deref(), Some("_(•)> quack"));
+        app.on_engine(Event::SessionTitle {
+            title: Some("fix the login bug".into()),
+        });
+        assert_eq!(
+            app.window_title().as_deref(),
+            Some("_(•)> fix the login bug")
+        );
+        app.turn_running = true;
+        assert_eq!(
+            app.window_title().as_deref(),
+            Some("✻ _(•)> fix the login bug")
+        );
+        app.on_engine(Event::SessionTitle { title: None });
+        app.turn_running = false;
+        assert_eq!(app.window_title().as_deref(), Some("_(•)> quack"));
+        app.info.ui.terminal_title = false;
+        assert_eq!(app.window_title(), None);
     }
 
     // Without a runtime (a plain `#[test]`), highlighting happens on the spot.

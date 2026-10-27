@@ -542,6 +542,11 @@
           "$ref": "#/$defs/StartupPanel",
           "default": "auto"
         },
+        "terminal_title": {
+          "default": true,
+          "description": "Set the terminal's window title to the duck and the session title, restoring the\nold one on exit.",
+          "type": "boolean"
+        },
         "theme": {
           "default": "auto",
           "description": "`auto`, `dark`, `light`, or a theme name from `themes/`.",
@@ -720,6 +725,7 @@
         "reduced_motion": false,
         "show_reasoning": "collapsed",
         "startup_panel": "auto",
+        "terminal_title": true,
         "theme": "auto"
       }
     }

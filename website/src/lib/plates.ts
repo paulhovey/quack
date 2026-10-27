@@ -6,5 +6,6 @@ export const plates = [
 	{ id: 'field-marks', tab: 'Field marks', color: 'var(--color-leaf)' },
 	{ id: 'measured', tab: 'Measured', color: 'var(--color-pink)' },
 	{ id: 'organisations', tab: 'For teams', color: 'var(--color-duck)' },
+	{ id: 'config', tab: 'Config', color: 'var(--color-sky)' },
 	{ id: 'install', tab: 'Install', color: 'var(--color-beak)' }
 ] as const;

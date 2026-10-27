@@ -109,7 +109,7 @@ fn local(config: &Loaded) -> Vec<DoctorCheck> {
         None => check(
             "defaults",
             CheckStatus::Info,
-            "no defaults bundle; only your own provider and profile files are used",
+            "no defaults bundle; your own files, plus the built-in generic profile and sub-agents",
         ),
     });
     // Providers are inserted here by `run`.

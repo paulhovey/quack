@@ -3,9 +3,10 @@
 #
 #   scripts/homebrew.sh <version> <SHA256SUMS> [out-dir]
 #
-# Writes quack.rb (binary and defaults bundle) and quack-plucked.rb (binary only) for a
-# tap repository (Formula/ in github.com/<owner>/homebrew-quack). They point at the
-# release's archives for macOS and Linux, on Intel and ARM.
+# Writes quack.rb (binary and defaults bundle) and quack-plucked.rb (the same without the
+# hosted model services) for a tap repository (Formula/ in
+# github.com/<owner>/homebrew-quack). They point at the release's archives for macOS and
+# Linux, on Intel and ARM.
 set -euo pipefail
 
 version=${1:?usage: homebrew.sh <version> <SHA256SUMS> [out-dir]}
@@ -74,6 +75,7 @@ formula quack Quack quack-plucked \
   '    (share/"quack").install "share/quack/defaults"
 ' > "$out/quack.rb"
 formula quack-plucked QuackPlucked quack \
-  "Terminal coding agent for open-weight models (binary only, no defaults bundle)" \
-  '' > "$out/quack-plucked.rb"
+  "Terminal coding agent for open-weight models (no hosted model services)" \
+  '    (share/"quack").install "share/quack/defaults"
+' > "$out/quack-plucked.rb"
 echo "wrote $out/quack.rb and $out/quack-plucked.rb"

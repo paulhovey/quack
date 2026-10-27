@@ -5,14 +5,16 @@
 #   curl -fsSL .../install.sh | sh -s -- --plucked
 #
 # By default this installs the binary and the defaults bundle (provider, model profile,
-# language server and MCP example files). Pass --plucked to install or update only the
-# binary and leave any defaults alone: for organisations that ship their own files.
+# language server and MCP example files). --plucked installs the same bundle without the
+# provider files for outside services, for organisations that add their own provider.
+# --binary-only updates the binary and leaves the installed defaults alone.
 set -eu
 
 repo=paulhovey/quack
 prefix=${QUACK_INSTALL_PREFIX:-$HOME/.local}
 version=latest
 plucked=0
+binary_only=0
 archive=
 source_dir=
 target=
@@ -24,7 +26,10 @@ Install quack.
 
 Usage: install.sh [options]
 
-  --plucked            Install or update only the binary. Existing defaults are left as
+  --plucked            Leave out the provider files for hosted services (OpenRouter,
+                       Claude, OpenAI, ...). Profiles, sub-agents, MCP, language servers
+                       and the local server files are all installed.
+  --binary-only        Install or update only the binary. Existing defaults are left as
                        they are; none are installed if there were none.
   --prefix DIR         Install into DIR/bin and DIR/share/quack (default: ~/.local,
                        or $QUACK_INSTALL_PREFIX).
@@ -40,7 +45,7 @@ Usage: install.sh [options]
 
 A full install replaces the defaults folder, so files you deleted from it come back.
 To turn a default off for good, override it in your own config instead (for example
-`enabled = false` in ~/.config/quack/providers.d/<id>.toml), or update with --plucked.
+`enabled = false` in ~/.config/quack/providers.d/<id>.toml), or update with --binary-only.
 EOF
 }
 
@@ -50,6 +55,7 @@ die() { printf 'quack: %s\n' "$*" >&2; exit 1; }
 while [ $# -gt 0 ]; do
   case $1 in
     --plucked) plucked=1 ;;
+    --binary-only) binary_only=1 ;;
     --prefix) [ $# -ge 2 ] || die "--prefix needs a directory"; prefix=$2; shift ;;
     --prefix=*) prefix=${1#*=} ;;
     --version) [ $# -ge 2 ] || die "--version needs a tag"; version=$2; shift ;;
@@ -83,7 +89,7 @@ fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
-# Where the new files come from: $new_bin, and $new_defaults unless plucked.
+# Where the new files come from: $new_bin and $new_defaults.
 new_defaults=
 if [ -n "$source_dir" ]; then
   [ -f "$source_dir/Cargo.toml" ] || die "$source_dir is not a quack checkout"
@@ -97,6 +103,10 @@ if [ -n "$source_dir" ]; then
     new_bin=$source_dir/target/release/quack
   fi
   new_defaults=$source_dir/defaults
+  if [ $plucked = 1 ]; then
+    "$source_dir/scripts/copy-defaults.sh" "$tmp/defaults" --plucked || die "copying the defaults failed"
+    new_defaults=$tmp/defaults
+  fi
 else
   if [ -z "$archive" ]; then
     case $(uname -s) in
@@ -109,7 +119,7 @@ else
       aarch64 | arm64) arch=aarch64 ;;
       *) die "unsupported CPU $(uname -m)" ;;
     esac
-    # --plucked fetches the smaller archive without the bundle.
+    # --plucked fetches the archive whose bundle has no hosted services.
     name=quack-$arch-$os.tar.gz
     [ $plucked = 1 ] && name=quack-plucked-$arch-$os.tar.gz
     if [ "$version" = latest ]; then
@@ -155,11 +165,11 @@ mv -f "$bindir/.quack.new" "$bindir/quack"
 say "installed $bindir/quack"
 
 # The defaults: replaced as a whole, so files removed upstream disappear too.
-if [ $plucked = 1 ]; then
+if [ $binary_only = 1 ]; then
   if [ -d "$defaults" ]; then
-    say "left the defaults in $defaults as they are (--plucked)"
+    say "left the defaults in $defaults as they are (--binary-only)"
   else
-    say "no defaults installed (--plucked): add providers with \`quack setup\` or your own files"
+    say "no defaults installed (--binary-only): add providers with \`quack setup\` or your own files"
   fi
 elif [ -z "$new_defaults" ]; then
   say "this archive has no defaults bundle; left $defaults as it is"
@@ -176,4 +186,8 @@ case :$PATH: in
   *:"$bindir":*) ;;
   *) say "$bindir is not on your PATH; add it, e.g. export PATH=\"$bindir:\$PATH\"" ;;
 esac
-say "run \`quack setup\` to pick a model, then \`quack\`"
+if [ $plucked = 1 ]; then
+  say "no hosted services are set up (--plucked): add your server with \`quack setup\` or a providers.d file"
+else
+  say "run \`quack setup\` to pick a model, then \`quack\`"
+fi

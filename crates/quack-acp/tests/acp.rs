@@ -205,10 +205,14 @@ async fn a_prompt_streams_the_answer_and_ends_the_turn() {
         .iter()
         .find(|r| r.url.path().ends_with("/chat/completions"))
         .expect("a chat request");
-    assert!(
-        String::from_utf8_lossy(&chat.body).contains("\"hi\""),
-        "the prompt reached the model"
-    );
+    // The first user message starts with the profile's <context> block, then the prompt.
+    let body: Value = serde_json::from_slice(&chat.body).expect("json body");
+    let user = body["messages"]
+        .as_array()
+        .and_then(|m| m.iter().rev().find(|m| m["role"] == "user"))
+        .and_then(|m| m["content"].as_str())
+        .unwrap_or_default();
+    assert!(user.ends_with("hi"), "the prompt reached the model: {user}");
 
     let unknown = editor.call("session/fork", json!({})).await;
     assert_eq!(unknown["error"]["code"], -32601, "{unknown}");

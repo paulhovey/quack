@@ -19,5 +19,7 @@ Optional fields, all described in `../schemas/agent.json`:
 | `max_steps` | 50 | Model calls before it stops and reports |
 
 Shipped: `explore` (read-only search, on the `small` model when set) and `general` (any
-self-contained change). Disable one with a file holding `enabled = false` in your user
-config's `agents.d/`; with no agents at all, the `task` tool is not offered.
+self-contained change). Both are also compiled into the binary from these files, so they
+work without the bundle. A file with the same name in any layer replaces one; disable one
+with a file holding `enabled = false` in your user config's `agents.d/`. With no agents at
+all, the `task` tool is not offered.

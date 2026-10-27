@@ -12,14 +12,14 @@ Each release has two flavours of every package. They conflict, so a machine has 
 
 | | `quack` | `quack-plucked` |
 |---|---|---|
-| Contents | binary + defaults bundle (provider, profile, MCP and language server files) | binary only |
-| Use it when | people pick their own providers | you ship your own bundle, or none |
+| Contents | binary + defaults bundle (provider, profile, MCP and language server files) | the same, without the provider files for hosted services |
+| Use it when | people pick their own providers | you add your own provider |
 
 - **Archives**: `quack[-plucked]-<target>.tar.gz` (Linux, macOS) and `.zip` (Windows), with
   `install.sh` / `install.ps1`. `--archive FILE` installs from a downloaded file with no
   network, and `--prefix` picks the folder.
 - **Linux**: `quack[-plucked]_<version>_<amd64|arm64>.deb` and `.rpm`, which install
-  `/usr/bin/quack` and, for `quack`, `/usr/share/quack/defaults`. The binaries are static
+  `/usr/bin/quack` and `/usr/share/quack/defaults`. The binaries are static
   (musl) and depend on nothing.
 - **macOS and Linux with Homebrew**: each release carries `quack.rb` and `quack-plucked.rb`
   for a tap.
@@ -28,6 +28,13 @@ Each release has two flavours of every package. They conflict, so a machine has 
 - `SHA256SUMS` covers every file.
 
 An MSI for Windows is not built yet; use the zip and `install.ps1`, or your own packaging.
+
+`quack-plucked` is the full agent: the same binary (MCP, ACP, the keyring, every protocol),
+the model profiles, the `explore` and `general` sub-agents, language servers, hooks and
+MCP examples (off until enabled). It leaves out every provider file whose `base_url` is
+not on the machine (`scripts/copy-defaults.sh` decides), keeping the local server files
+for Ollama, vLLM and the others on 127.0.0.1. `install.sh --binary-only` (`-BinaryOnly`)
+updates only the binary and leaves an installed bundle alone.
 
 The binary finds its defaults bundle next to itself (`<exe>/../share/quack/defaults`,
 `<exe dir>/defaults`), in the system share folders, or where `QUACK_DEFAULTS_DIR` points.
@@ -90,8 +97,8 @@ The defaults bundle is plain files, so a company bundle is a folder you build an
 1. Start from `defaults/` in the source (or the bundle of a release archive).
 2. Delete the providers, MCP servers and language servers you don't want, and add your own
    (`providers.d/corp.toml` with `base_url` and `models` is enough).
-3. Ship it with `quack-plucked` at `<prefix>/share/quack/defaults`, or point
-   `QUACK_DEFAULTS_DIR` at it.
+3. Ship it at `<prefix>/share/quack/defaults` with the binary (installed with
+   `--binary-only`), or point `QUACK_DEFAULTS_DIR` at it.
 
 Startup works with any file removed, so a smaller bundle needs no other changes. Teams can
 also share skills, commands and server files as **bundles**: a folder with a `bundle.toml`

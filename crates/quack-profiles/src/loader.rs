@@ -10,7 +10,7 @@ use quack_config::{ItemState, Loaded, glob_match, load_dir_items};
 pub struct Profile {
     pub id: String,
     pub file: ProfileFile,
-    /// Profile directory; `None` for the compiled-in empty profile.
+    /// Profile directory; `None` for a compiled-in profile.
     pub dir: Option<PathBuf>,
     pub system_template: String,
     /// `context.md`: the per-session part of the prompt (workspace, date, instructions),
@@ -23,7 +23,29 @@ pub struct Profile {
     pub plan_prompt: Option<String>,
 }
 
+/// The defaults bundle's `generic` profile, compiled in so a binary without the bundle
+/// still has a prompt. A `generic` profile in any layer replaces it.
+const GENERIC_TOML: &str = include_str!("../../../defaults/profiles.d/generic/profile.toml");
+const GENERIC_SYSTEM: &str = include_str!("../../../defaults/profiles.d/generic/system.md");
+const GENERIC_CONTEXT: &str = include_str!("../../../defaults/profiles.d/generic/context.md");
+
 impl Profile {
+    /// The compiled-in `generic` profile: the same files the defaults bundle ships, read
+    /// the way `load_profiles` reads them from disk.
+    pub fn generic() -> Self {
+        let file: ProfileFile =
+            toml::from_str(GENERIC_TOML).expect("the bundled generic profile.toml parses");
+        Self {
+            id: "generic".into(),
+            file,
+            dir: None,
+            system_template: GENERIC_SYSTEM.to_owned(),
+            context_template: Some(GENERIC_CONTEXT.trim().to_owned()),
+            compact_prompt: None,
+            plan_prompt: None,
+        }
+    }
+
     /// The compiled-in fallback: no prompt beyond the instructions, internal tool names,
     /// no sampling overrides (docs/plan/03-model-profiles.md#selection).
     pub fn empty() -> Self {
@@ -49,11 +71,15 @@ impl Profile {
     }
 }
 
-/// Load all enabled profiles. Failures come back as one-line warnings.
+/// Load all enabled profiles, plus the compiled-in `generic` when no layer has a profile
+/// with that id (`enabled = false` there turns it off). Failures come back as one-line
+/// warnings.
 pub fn load_profiles(loaded: &Loaded) -> (Vec<Profile>, Vec<String>) {
     let mut profiles = Vec::new();
     let mut warnings = Vec::new();
-    for item in load_dir_items::<ProfileFile>(&loaded.item_layers(), "profiles.d", "profile.toml") {
+    let items = load_dir_items::<ProfileFile>(&loaded.item_layers(), "profiles.d", "profile.toml");
+    let has_generic = items.iter().any(|i| i.id == "generic");
+    for item in items {
         match item.state {
             ItemState::Loaded(mut file) => {
                 let dir = item.path.parent().map(PathBuf::from).unwrap_or_default();
@@ -105,6 +131,11 @@ pub fn load_profiles(loaded: &Loaded) -> (Vec<Profile>, Vec<String>) {
             ItemState::Failed(d) => warnings.push(d.one_line()),
         }
     }
+    if !has_generic {
+        // In id order, where the bundle's copy would load, so selection doesn't change.
+        let at = profiles.partition_point(|p| p.id.as_str() < "generic");
+        profiles.insert(at, Profile::generic());
+    }
     (profiles, warnings)
 }
 
@@ -150,6 +181,22 @@ mod tests {
         p.file.matching.model = globs.iter().map(|g| (*g).to_owned()).collect();
         p.file.matching.priority = priority;
         p
+    }
+
+    #[test]
+    fn compiled_in_generic_is_the_bundle_profile() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../defaults/profiles.d/generic");
+        let read = |name: &str| std::fs::read_to_string(dir.join(name)).expect("bundle file");
+        let p = Profile::generic();
+        assert_eq!(p.id, "generic");
+        assert_eq!(p.file.matching.model, ["*"]);
+        assert_eq!(p.system_template, read("system.md"));
+        assert_eq!(
+            p.context_template,
+            Some(read("context.md").trim().to_owned())
+        );
+        assert!(p.system_template.contains("{{ edit_tool }}"));
     }
 
     #[test]

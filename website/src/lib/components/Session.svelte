@@ -96,32 +96,32 @@
 		</PlateHeading>
 
 		<div class="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,2.2fr)] gap-8 items-start">
-			<div class="flex lg:flex-col gap-2 overflow-x-auto pb-1" role="tablist" aria-label="Example sessions">
+			<div class="flex flex-wrap lg:flex-col gap-2" role="tablist" aria-label="Example sessions">
 				{#each scenes as s}
 					<button
 						type="button"
 						role="tab"
 						aria-selected={current.id === s.id}
 						onclick={() => (current = s)}
-						class="shrink-0 text-left rounded-xl px-4 py-3 border-2 transition-colors {current.id === s.id
+						class="text-left rounded-xl px-3 py-2 lg:px-4 lg:py-3 border-2 transition-colors {current.id === s.id
 							? 'border-ink bg-sky-soft'
-							: 'border-transparent hover:border-rule'}"
+							: 'border-rule lg:border-transparent hover:border-rule'}"
 					>
-						<span class="block font-display font-bold text-lg">{s.label}</span>
+						<span class="block font-display font-bold lg:text-lg">{s.label}</span>
 						<span class="hidden lg:block mt-1 text-ink-2 leading-snug">{s.caption}</span>
 					</button>
 				{/each}
 			</div>
 
-			<figure>
+			<figure class="-mx-2 sm:mx-0">
 				<div class="term rounded-xl overflow-hidden border-2 border-ink shadow-[0_18px_40px_-18px_rgba(29,42,58,0.55)]">
 					<div class="flex justify-between px-3 py-1.5 text-term-dim text-[11px] sm:text-[13px]">
 						<span><span class="text-term-text">quack 0.1.0</span> · ~/src/calendar</span>
 						<span>⎇ main</span>
 					</div>
-					<div class="px-1 pt-2 pb-4 min-h-[23rem] overflow-x-auto" role="tabpanel">
+					<div class="screen px-1 pt-2 pb-4 min-h-[24.5em] overflow-x-auto" role="tabpanel">
 						{#each current.lines as line}
-							<div class="whitespace-pre leading-[1.55] text-[9.5px] min-[420px]:text-[11px] sm:text-[13px] lg:text-[14px]">{#each line as [cls, text]}<span class={cls}>{text}</span>{/each}&nbsp;</div>
+							<div class="whitespace-pre leading-[1.55]">{#each line as [cls, text]}<span class={cls}>{text}</span>{/each}&nbsp;</div>
 						{/each}
 					</div>
 					<div class="mx-2 mb-1 rounded-md border border-term-dim/50 px-2 py-1 text-[14px]"><span class="text-sky">›</span><span class="caret">▏</span></div>
@@ -141,6 +141,12 @@
 		color: var(--color-term-text);
 		font-family: var(--font-mono);
 		font-variant-ligatures: none;
+		container-type: inline-size;
+	}
+	/* Scale the text so the widest line (57 columns at 0.6em each) fits the terminal on a
+	   phone, as a screenshot would, instead of clipping the boxes' right edge. */
+	.screen {
+		font-size: min(14px, (100cqw - 0.5rem) / 34.4);
 	}
 	.term :global(.dim) { color: var(--color-term-dim); }
 	.term :global(.duck) { color: var(--color-duck); }

@@ -26,6 +26,7 @@ use crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
     EventStream,
 };
+use crossterm::terminal::SetTitle;
 use futures::StreamExt;
 use quack_config::Loaded;
 use quack_core::EngineHandle;
@@ -66,9 +67,14 @@ pub async fn run(
 ) -> io::Result<()> {
     let mut app = App::new(AppInfo::from_config(&config));
     let mut terminal = ratatui::init();
-    let _ = crossterm::execute!(io::stdout(), EnableBracketedPaste);
+    let _ = crossterm::execute!(io::stdout(), EnableBracketedPaste, PushTitle);
     let result = event_loop(&mut terminal, &mut app, &mut engine, trace.as_ref()).await;
-    let _ = crossterm::execute!(io::stdout(), DisableBracketedPaste, DisableMouseCapture);
+    let _ = crossterm::execute!(
+        io::stdout(),
+        DisableBracketedPaste,
+        DisableMouseCapture,
+        PopTitle
+    );
     ratatui::restore();
     engine.shutdown().await;
     result
@@ -83,6 +89,8 @@ async fn event_loop(
     let mut input = EventStream::new();
     // `ui.mouse`: capture the mouse for the wheel and input clicks; followed across `/reload`.
     let mut mouse = false;
+    // The window title last written; None while quack leaves the title alone.
+    let mut title: Option<String> = None;
     let mut highlighted = app.take_highlight_results();
     let mut tick = tokio::time::interval(FRAME);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -129,6 +137,15 @@ async fn event_loop(
                 crossterm::execute!(io::stdout(), DisableMouseCapture)?;
             }
         }
+        let want = app.window_title();
+        if want != title {
+            match &want {
+                Some(t) => crossterm::execute!(io::stdout(), SetTitle(t))?,
+                // Turned off: put the user's title back and save it again for exit.
+                None => crossterm::execute!(io::stdout(), PopTitle, PushTitle)?,
+            }
+            title = want;
+        }
         if let Some(text) = app.take_clipboard() {
             copy(terminal, &text)?;
         }
@@ -139,6 +156,35 @@ async fn event_loop(
         }
     }
     Ok(())
+}
+
+/// Save the terminal's window title on its title stack (xterm `CSI 22 ; 0 t`), so
+/// `PopTitle` can put back the user's own on exit. Terminals without the stack ignore it.
+struct PushTitle;
+
+impl crossterm::Command for PushTitle {
+    fn write_ansi(&self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
+        f.write_str("\x1b[22;0t")
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Restore the title `PushTitle` saved (xterm `CSI 23 ; 0 t`).
+struct PopTitle;
+
+impl crossterm::Command for PopTitle {
+    fn write_ansi(&self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
+        f.write_str("\x1b[23;0t")
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Put text on the clipboard through the terminal (OSC 52), which works over SSH and needs

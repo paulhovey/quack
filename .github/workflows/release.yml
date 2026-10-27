@@ -2,7 +2,7 @@ name: Release
 
 # Push a tag such as v0.2.0 to build every target and publish a GitHub release with:
 #   quack-<target>.{tar.gz,zip}          binary + defaults bundle (the normal install)
-#   quack-plucked-<target>.{tar.gz,zip}  binary only
+#   quack-plucked-<target>.{tar.gz,zip}  the same without hosted-service providers
 #   quack[-plucked]_<version>_<arch>.deb and .rpm (Linux)
 #   quack.cdx.json                       CycloneDX SBOM of the binary's dependencies
 #   quack.rb, quack-plucked.rb           Homebrew formulas for a tap

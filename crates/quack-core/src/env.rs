@@ -215,11 +215,32 @@ pub(crate) fn skills(config: &Loaded) -> skills::Found {
     skills::discover(&roots, &config.settings.skills.disabled)
 }
 
-/// `agents.d`: the enabled agents by id, and a warning for each file that failed.
+/// The defaults bundle's sub-agents, compiled in so the `task` tool works without the
+/// bundle. A file with the same id in any layer replaces one; `enabled = false` turns it off.
+const BUILTIN_AGENTS: [(&str, &str); 2] = [
+    (
+        "explore",
+        include_str!("../../../defaults/agents.d/explore.toml"),
+    ),
+    (
+        "general",
+        include_str!("../../../defaults/agents.d/general.toml"),
+    ),
+];
+
+/// `agents.d`, plus the built-in agents no layer replaces: the enabled agents by id, and a
+/// warning for each file that failed.
 pub(crate) fn agents(config: &Loaded) -> (Vec<(String, quack_config::AgentFile)>, Vec<String>) {
     let mut out = Vec::new();
     let mut warnings = Vec::new();
-    for item in quack_config::load_agents(config) {
+    let items = quack_config::load_agents(config);
+    for (id, text) in BUILTIN_AGENTS {
+        if items.iter().all(|i| i.id != id) {
+            let agent = toml::from_str(text).expect("the bundled agent files parse");
+            out.push((id.to_owned(), agent));
+        }
+    }
+    for item in items {
         match item.state {
             quack_config::ItemState::Loaded(a) => out.push((item.id, a)),
             quack_config::ItemState::Failed(d) => {
@@ -228,12 +249,23 @@ pub(crate) fn agents(config: &Loaded) -> (Vec<(String, quack_config::AgentFile)>
             quack_config::ItemState::Disabled(_) => {}
         }
     }
+    // In id order, as the bundle's files load, so the task tool's description is the same
+    // with or without the bundle.
+    out.sort_by(|a, b| a.0.cmp(&b.0));
     (out, warnings)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builtin_agents_parse() {
+        for (id, text) in BUILTIN_AGENTS {
+            let a: quack_config::AgentFile = toml::from_str(text).expect(id);
+            assert!(!a.description.is_empty(), "{id}");
+        }
+    }
 
     #[test]
     fn date_shape() {

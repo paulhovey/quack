@@ -4,16 +4,19 @@
 #   & ([scriptblock]::Create((irm .../install.ps1))) -Plucked
 #
 # By default this installs the binary and the defaults bundle (provider, model profile,
-# language server and MCP example files). -Plucked installs or updates only the binary and
-# leaves any defaults alone: for organisations that ship their own files.
+# language server and MCP example files). -Plucked installs the same bundle without the
+# provider files for outside services, for organisations that add their own provider.
+# -BinaryOnly updates the binary and leaves the installed defaults alone.
 #
 # A full install replaces the defaults folder, so files you deleted from it come back.
 # To turn a default off for good, override it in your own config instead (for example
-# `enabled = false` in %APPDATA%\quack\providers.d\<id>.toml), or update with -Plucked.
+# `enabled = false` in %APPDATA%\quack\providers.d\<id>.toml), or update with -BinaryOnly.
 [CmdletBinding()]
 param(
-    # Install or update only the binary; existing defaults are left as they are.
+    # Leave out the provider files for hosted services; everything else is installed.
     [switch]$Plucked,
+    # Install or update only the binary; existing defaults are left as they are.
+    [switch]$BinaryOnly,
     # Install folder; quack.exe and defaults\ go directly in it.
     [string]$Prefix = $(if ($env:QUACK_INSTALL_PREFIX) { $env:QUACK_INSTALL_PREFIX } else { Join-Path $env:LOCALAPPDATA 'Programs\quack' }),
     # A release tag such as v0.2.0; the latest release by default.
@@ -48,6 +51,19 @@ if ($Uninstall) {
     return
 }
 
+# The defaults bundle without the provider files whose base_url is not on this machine,
+# as scripts/copy-defaults.sh --plucked builds it for the release archives.
+function Copy-PluckedDefaults([string]$from, [string]$to) {
+    Copy-Item -Recurse $from $to
+    foreach ($f in Get-ChildItem (Join-Path $to 'providers.d') -Filter *.toml -ErrorAction SilentlyContinue) {
+        $m = Select-String -Path $f.FullName -Pattern '^base_url *= *"[a-z]*://([^/:"]*)' | Select-Object -First 1
+        $host_ = if ($m) { $m.Matches[0].Groups[1].Value } else { '' }
+        if (-not ($host_ -like '127.*' -or $host_ -eq 'localhost' -or $host_ -eq '[::1]')) {
+            Remove-Item -Force $f.FullName
+        }
+    }
+}
+
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ("quack-install-" + [guid]::NewGuid())
 New-Item -ItemType Directory $tmp | Out-Null
 try {
@@ -60,6 +76,10 @@ try {
         finally { Pop-Location }
         $newBin = Join-Path $FromSource 'target\release\quack.exe'
         $newDefaults = Join-Path $FromSource 'defaults'
+        if ($Plucked) {
+            Copy-PluckedDefaults $newDefaults (Join-Path $tmp 'defaults')
+            $newDefaults = Join-Path $tmp 'defaults'
+        }
     } else {
         if (-not $Archive) {
             $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
@@ -99,9 +119,9 @@ try {
     Say "installed $exe"
 
     # The defaults: replaced as a whole, so files removed upstream disappear too.
-    if ($Plucked) {
-        if (Test-Path $defaults) { Say "left the defaults in $defaults as they are (-Plucked)" }
-        else { Say 'no defaults installed (-Plucked): add providers with `quack setup` or your own files' }
+    if ($BinaryOnly) {
+        if (Test-Path $defaults) { Say "left the defaults in $defaults as they are (-BinaryOnly)" }
+        else { Say 'no defaults installed (-BinaryOnly): add providers with `quack setup` or your own files' }
     } elseif (-not $newDefaults) {
         Say "this archive has no defaults bundle; left $defaults as it is"
     } else {
@@ -117,7 +137,8 @@ try {
         Set-UserPath $Prefix $true
         Say "added $Prefix to your PATH; open a new terminal to use it"
     }
-    Say 'run `quack setup` to pick a model, then `quack`'
+    if ($Plucked) { Say 'no hosted services are set up (-Plucked): add your server with `quack setup` or a providers.d file' }
+    else { Say 'run `quack setup` to pick a model, then `quack`' }
 } finally {
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $tmp
 }

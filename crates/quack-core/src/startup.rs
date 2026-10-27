@@ -769,19 +769,16 @@ async fn build_setup(
     }
 
     rep.send(LoadState::Ready {
-        detail: match &profile.dir {
-            Some(_) => format!(
-                "{} · {} tools · {} mode",
-                profile.id,
-                surface.tools.len(),
-                settings.mode.label()
-            ),
-            None => format!(
-                "empty (no profiles installed) · {} tools · {} mode",
-                surface.tools.len(),
-                settings.mode.label()
-            ),
-        },
+        detail: format!(
+            "{} · {} tools · {} mode",
+            match (&profile.dir, profile.id.as_str()) {
+                (Some(_), id) => id.to_owned(),
+                (None, "empty") => "empty (no prompt)".to_owned(),
+                (None, id) => format!("{id} (built in)"),
+            },
+            surface.tools.len(),
+            settings.mode.label()
+        ),
     });
     let budget = model.context_window.map(|c| {
         let ratio = config.settings.context.budget_ratio.clamp(0.1, 1.0);

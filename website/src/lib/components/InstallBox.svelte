@@ -9,7 +9,7 @@
 		{ id: 'ps', label: 'Windows' },
 		{ id: 'src', label: 'From source' }
 	];
-	// The commands from the installers' own headers; plucked installs the binary alone.
+	// The commands from the installers' own headers; plucked leaves out the hosted services.
 	const command = (way: Way, plucked: boolean) =>
 		({
 			sh: plucked ? `curl -fsSL ${base}/install.sh | sh -s -- --plucked` : `curl -fsSL ${base}/install.sh | sh`,
@@ -90,7 +90,7 @@
 					role="tab"
 					aria-selected={way === w.id}
 					onclick={() => (way = w.id)}
-					class="px-3 py-1 rounded-full text-sm font-semibold transition-colors {way === w.id
+					class="px-2 min-[360px]:px-2.5 sm:px-3 py-1 rounded-full text-[13px] min-[360px]:text-sm font-semibold transition-colors {way === w.id
 						? 'bg-ink text-paper'
 						: 'text-ink-2 hover:bg-wash hover:text-ink'}"
 				>
@@ -113,7 +113,7 @@
 					class="absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-ink transition-transform {plucked ? 'translate-x-4' : ''}"
 				></span>
 			</span>
-			Plucked: binary only
+			Plucked: no hosted services
 		</button>
 	</div>
 	<div
@@ -128,12 +128,12 @@
 		<button
 			type="button"
 			onclick={copy}
-			class="shrink-0 flex items-center gap-1.5 px-4 bg-duck border-l-2 border-ink font-semibold text-on-tint hover:bg-[#ffe347] active:translate-y-px transition-colors"
+			class="shrink-0 flex items-center gap-1.5 px-3.5 sm:px-4 bg-duck border-l-2 border-ink font-semibold text-on-tint hover:bg-[#ffe347] active:translate-y-px transition-colors"
 		>
 			{#if copied}
-				<Check class="w-4 h-4" aria-hidden="true" /> Copied
+				<Check class="w-4 h-4" aria-hidden="true" /> <span class="max-sm:sr-only">Copied</span>
 			{:else}
-				<Copy class="w-4 h-4" aria-hidden="true" /> Copy
+				<Copy class="w-4 h-4" aria-hidden="true" /> <span class="max-sm:sr-only">Copy</span>
 			{/if}
 		</button>
 	</div>

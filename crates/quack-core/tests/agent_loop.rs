@@ -317,6 +317,13 @@ async fn new_list_resume_title_and_save_setting() {
             title: "alpha".into(),
         })
         .await;
+    // Clients hear about the change, for the terminal's window title.
+    loop {
+        if let Event::SessionTitle { title } = next(&mut engine.events).await {
+            assert_eq!(title.as_deref(), Some("alpha"));
+            break;
+        }
+    }
     engine.submit(Op::NewSession).await;
     turn(&mut engine, "second question").await;
 
@@ -488,7 +495,8 @@ async fn an_empty_reply_is_nudged_once() {
         .iter()
         .filter_map(|m| m["role"].as_str())
         .collect();
-    assert_eq!(roles, ["user", "user"]);
+    // The built-in generic profile supplies the system message.
+    assert_eq!(roles, ["system", "user", "user"]);
     engine.shutdown().await;
 }
 

@@ -161,7 +161,8 @@ The system prompt and context templates use `minijinja` and these variables:
 1. If the model entry has an explicit `profile = "<id>"`, that profile is used.
 2. Otherwise, with `profile = "auto"` (the default): take the highest-`priority` profile whose `[match].model` glob matches the model id or alias.
 3. Otherwise, use the profile named in `config.toml [model] fallback_profile`, which defaults to `generic`.
-4. If no profiles are installed at all, use the compiled-in **empty profile**. It has an empty system prompt (only the rendered `{{instructions}}`, if any), exposes the internal tools under their internal names with no added descriptions, uses `native` tool calling, and sets no sampling overrides. Like every profile it contains no endpoints or connections. It exists only so the binary works with zero files installed, and the status bar shows `profile: empty` as a hint to install one.
+4. If no layer has a `generic` profile, use the compiled-in one: the defaults bundle's own `profiles.d/generic/` files, built in with `include_str!` (2026-10-26), so a binary without the bundle (`quack-plucked`) still has a prompt. A `generic` folder in any layer replaces it.
+5. If `generic` is turned off (`enabled = false`), use the compiled-in **empty profile**. It has an empty system prompt (only the rendered `{{instructions}}`, if any), exposes the internal tools under their internal names with no added descriptions, uses `native` tool calling, and sets no sampling overrides. Like every profile it contains no endpoints or connections. It exists only so the binary works with zero files installed, and the status bar shows `profile: empty` as a hint to install one.
 
 `/profiles` shows the active profile and lets the user switch it for the session. `quack profile render <id> --model <m>` prints the full rendered prompt and tool schemas, for debugging and token accounting.
 
